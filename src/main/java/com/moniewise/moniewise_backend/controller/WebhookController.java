@@ -47,7 +47,7 @@ public class WebhookController {
                 Map<String, Object> data = (Map<String, Object>) payload.get("data");
                 BigDecimal amount = new BigDecimal(data.get("amount").toString()).divide(new BigDecimal("100"), 2, BigDecimal.ROUND_HALF_UP);
                 Long userId = Long.parseLong((String) data.get("metadata.userId"));
-                walletService.fundWallet(userId, amount);
+                walletService.fundWallet(userId, amount, null);
                 logger.info("Processed Paystack charge.success for user {}: ₦{}", userId, amount);
             }
             return ResponseEntity.ok().build();

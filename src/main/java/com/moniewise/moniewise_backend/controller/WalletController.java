@@ -43,7 +43,7 @@ public class WalletController {
         try {
             String email = authentication.getName();
             Long userId = userService.findByEmail(email).getId();
-            walletService.fundWallet(userId, request.getAmount());
+            walletService.fundWallet(userId, request.getAmount(), null);
             return ResponseEntity.ok(Map.of("message", "Wallet funded successfully"));
         } catch (Exception e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));

@@ -32,8 +32,18 @@ public class Budget {
     @Column(nullable = false)
     private String name;
 
+    @Column(name = "original_amount", nullable = false)
+    private BigDecimal originalAmount; // New: User-specified amount (e.g., ₦500,000)
+
+    @Column(name = "fee_amount", nullable = false)
+    private BigDecimal feeAmount; // New: Fee deducted (e.g., ₦100)
+
     @Column(name = "total_amount", nullable = false)
-    private BigDecimal totalAmount;
+    private BigDecimal totalAmount; // Post-fee amount (e.g., ₦499,900)
+
+
+//    @Column(name = "total_amount", nullable = false)
+//    private BigDecimal totalAmount;
 
     @Column(name = "allocated_amount", nullable = false)
     private BigDecimal allocatedAmount;

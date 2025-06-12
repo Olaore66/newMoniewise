@@ -19,6 +19,7 @@ import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 @Service
 public class WalletService {
@@ -150,17 +151,49 @@ public class WalletService {
         return walletRepository.save(wallet);
     }
 
+//    @Transactional
+//    public void fundWallet(Long userId, BigDecimal amount) {
+//        if (amount.compareTo(BigDecimal.ZERO) <= 0) {
+//            throw new IllegalArgumentException("Funding amount must be positive");
+//        }
+//
+//        Wallet wallet = walletRepository.findByUserId(userId)
+//                .orElseThrow(() -> new IllegalArgumentException("Wallet not found for user ID: " + userId));
+//        wallet.setBalance(wallet.getBalance().add(amount));
+//        walletRepository.save(wallet);
+//
+//        TransactionLog transactionLog = new TransactionLog();
+//        transactionLog.setUserId(userId);
+//        transactionLog.setBudgetId(null);
+//        transactionLog.setAmount(amount);
+//        transactionLog.setFee(BigDecimal.ZERO);
+//        transactionLog.setTransactionType("wallet_deposit");
+//        transactionLog.setCreatedAt(LocalDateTime.now());
+//        transactionLogRepository.save(transactionLog);
+//
+//        String message = String.format("Account funded with ₦%.2f!", amount);
+//        notificationService.sendNotification(userId.toString(), message);
+//
+//        logger.info("Funded wallet with ₦{} for user {}", amount, userId);
+//    }
+
+
+
     @Transactional
-    public void fundWallet(Long userId, BigDecimal amount) {
+    public void fundWallet(Long userId, BigDecimal amount, String notificationMessage) {
+        Optional<Wallet> walletOpt = walletRepository.findByUserId(userId);
+        if (walletOpt.isEmpty()) {
+            logger.error("Revenue wallet not found for user ID: {}. Fee of ₦{} not credited.", userId, amount);
+            return;
+        }
+
         if (amount.compareTo(BigDecimal.ZERO) <= 0) {
             throw new IllegalArgumentException("Funding amount must be positive");
         }
-
         Wallet wallet = walletRepository.findByUserId(userId)
                 .orElseThrow(() -> new IllegalArgumentException("Wallet not found for user ID: " + userId));
         wallet.setBalance(wallet.getBalance().add(amount));
         walletRepository.save(wallet);
-
         TransactionLog transactionLog = new TransactionLog();
         transactionLog.setUserId(userId);
         transactionLog.setBudgetId(null);
@@ -169,12 +202,14 @@ public class WalletService {
         transactionLog.setTransactionType("wallet_deposit");
         transactionLog.setCreatedAt(LocalDateTime.now());
         transactionLogRepository.save(transactionLog);
-
-        String message = String.format("Account funded with ₦%.2f!", amount);
+        String message = notificationMessage != null
+                ? notificationMessage
+                : String.format("Account funded with ₦%.2f!", amount);
         notificationService.sendNotification(userId.toString(), message);
-
         logger.info("Funded wallet with ₦{} for user {}", amount, userId);
     }
+
+
 
     // PaystackService (new)
     public Map<String, String> createDedicatedAccount(Long userId) {

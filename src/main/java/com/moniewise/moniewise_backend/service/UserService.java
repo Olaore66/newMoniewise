@@ -55,6 +55,11 @@ public class UserService implements UserDetailsService {
             throw new IllegalArgumentException("Email already exists: " + email);
         }
 
+        // Check for duplicate phone number
+        if (userRepository.findByPhone(phone).isPresent()) {
+            throw new IllegalArgumentException("An account with the phone number '" + phone + "' already exists.");
+        }
+
         User user = new User();
         user.setEmail(email);
         user.setPhone(phone);
@@ -63,6 +68,8 @@ public class UserService implements UserDetailsService {
         user.setProfileData(new HashMap<>());
         user.setVerified(false); // Default to unverified
         user.setCreatedAt(LocalDateTime.now());
+        user.setTncAccepted(false); // during creation
+
 
         User savedUser = userRepository.save(user);
         Wallet wallet = walletService.createWalletForUser(savedUser);
@@ -92,6 +99,11 @@ public class UserService implements UserDetailsService {
     public User verifySignup(Long userId, String otpCode) {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new IllegalArgumentException("User not found"));
+
+        // ✅ Check if T&C was accepted before proceeding
+        if (!Boolean.TRUE.equals(user.getTncAccepted())) {
+            throw new IllegalStateException("User must accept Terms and Conditions before verification");
+        }
 
         if (otpService.verifyOtp(userId, otpCode)) {
             user.setVerified(true); // Update the new column
@@ -142,6 +154,7 @@ public class UserService implements UserDetailsService {
     public User updateProfile(String email, ProfileRequest request) {
         User user = findByEmail(email);
         Map<String, Object> profileData = new HashMap<>();
+        profileData.put("name", request.getName());
         profileData.put("monthlyIncome", request.getMonthlyIncome());
         profileData.put("mainExpense", request.getMainExpense());
         profileData.put("savingsGoal", request.getSavingsGoal());
@@ -173,11 +186,22 @@ public class UserService implements UserDetailsService {
     }
 
     // UserService.java
-    public void acceptTnc(String email) {
+//    public void acceptTnc(String email, boolean accepted) {
+//        User user = findByEmail(email);
+//        Map<String, Object> profileData = user.getProfileData();
+//        profileData.put("acceptedTncVersion", "2.0"); // Hardcoded in your code
+//        user.setProfileData(profileData);
+//        // Update the actual column
+//        user.setTncAccepted(accepted);
+//        userRepository.save(user);
+//    }
+
+    public void acceptTnc(String email, boolean accepted) {
         User user = findByEmail(email);
         Map<String, Object> profileData = user.getProfileData();
-        profileData.put("acceptedTncVersion", "2.0"); // Hardcoded in your code
+        profileData.put("acceptedTncVersion", "1.0");
         user.setProfileData(profileData);
+        user.setTncAccepted(accepted);
         userRepository.save(user);
     }
 }

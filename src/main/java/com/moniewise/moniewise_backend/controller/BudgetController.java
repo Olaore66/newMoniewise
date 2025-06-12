@@ -6,19 +6,23 @@ import com.moniewise.moniewise_backend.dto.request.SpendEnvelopeRequest;
 import com.moniewise.moniewise_backend.dto.response.BudgetResponse;
 import com.moniewise.moniewise_backend.dto.response.EnvelopeResponse;
 
+import com.moniewise.moniewise_backend.entity.User;
 import com.moniewise.moniewise_backend.exception.TncAcceptanceRequiredException;
 import com.moniewise.moniewise_backend.repository.BudgetRepository;
 import com.moniewise.moniewise_backend.service.BudgetService;
 import com.moniewise.moniewise_backend.service.UserService;
+import lombok.Data;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
+import javax.validation.Valid;
 import java.time.LocalDate;
 import java.util.*;
-
 
 @RestController
 @RequestMapping("/budgets")
@@ -33,14 +37,62 @@ public class BudgetController {
     @Autowired
     private BudgetRepository budgetRepository;
 
-    @PostMapping
-    public ResponseEntity<?> createBudget(@RequestBody BudgetRequest request, Authentication authentication) {
+    private static final Logger logger = LoggerFactory.getLogger(BudgetController.class);
 
-            String email = authentication.getName();
+//    @PostMapping
+//    public ResponseEntity<?> createBudget(@RequestBody BudgetRequest request, Authentication authentication) {
+//
+//            String email = authentication.getName();
+//            BudgetResponse response = budgetService.createBudget(request, email);
+//            return new ResponseEntity<>(response, HttpStatus.CREATED);
+//
+//    }
+
+//    @PostMapping
+//    public ResponseEntity<?> createBudget(@RequestBody BudgetRequest request, Authentication authentication) {
+//        String email = authentication.getName();
+//        User user = userService.findByEmail(email); // Use this instead of login()
+//
+//        // ✅ Check if user accepted T&C
+//        if (!Boolean.TRUE.equals(user.getTncAccepted())) {
+//            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+//                    .body(Map.of("error", "Please accept the Terms and Conditions to continue"));
+//        }
+//
+//        // ✅ Proceed to create the budget
+//        BudgetResponse response = budgetService.createBudget(request, email);
+//        return new ResponseEntity<>(response, HttpStatus.CREATED);
+//    }
+
+    @PostMapping
+    public ResponseEntity<?> createBudget(@Valid @RequestBody BudgetRequest request, Authentication authentication) {
+        String email = authentication.getName();
+        logger.debug("Creating budget for user {} with request: {}", email, request);
+
+        User user = userService.findByEmail(email);
+        if (user == null) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(Map.of("error", "User not found"));
+        }
+
+        // Check if user accepted T&C
+        if (!Boolean.TRUE.equals(user.getTncAccepted())) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(Map.of("error", "Please accept the Terms and Conditions to continue"));
+        }
+
+        // Proceed to create the budget
+        try {
             BudgetResponse response = budgetService.createBudget(request, email);
             return new ResponseEntity<>(response, HttpStatus.CREATED);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        } catch (Exception e) {
+            logger.error("Error creating budget for user {}: {}", email, e.getMessage());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", "Failed to create budget"));
+        }
     }
-
 
     // New: List all Budgets for the user
     @GetMapping
@@ -118,7 +170,6 @@ public class BudgetController {
 
 
     // 12/04/2025 --->// New: Move money between Envelopes
-
     @PostMapping("/envelopes/{id}/move")
     public ResponseEntity<?> moveMoney(@PathVariable Long id, @RequestBody Map<String, Object> requestBody, Authentication authentication) {
         System.out.println("POST /envelopes/" + id + "/move called");
@@ -138,22 +189,85 @@ public class BudgetController {
     }
 
     // 12/04/2025 --->// New: Transfer to external bank
+//    @PostMapping("/envelopes/{id}/transfer-external")
+//    public ResponseEntity<?> transferToExternal(@PathVariable Long id, @RequestBody Map<String, Object> requestBody, Authentication authentication) {
+//        System.out.println("POST /envelopes/" + id + "/transfer-external called");
+//        try {
+//            String email = authentication.getName();
+//            String externalAccount = (String) requestBody.get("external_account");
+//            Double amount = Double.valueOf(requestBody.get("amount").toString());
+//            budgetService.transferToExternal(id, externalAccount, amount, email);
+//            return ResponseEntity.ok("Transfer to external account initiated successfully");
+//        } catch (IllegalArgumentException e) {
+//            return ResponseEntity.badRequest().body(e.getMessage());
+//        } catch (SecurityException e) {
+//            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(e.getMessage());
+//        } catch (Exception e) {
+//            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("Error initiating transfer: " + e.getMessage());
+//        }
+//    }
+
+
+    // 08/06/20225 -new fix for transfer to external
     @PostMapping("/envelopes/{id}/transfer-external")
-    public ResponseEntity<?> transferToExternal(@PathVariable Long id, @RequestBody Map<String, Object> requestBody, Authentication authentication) {
-        System.out.println("POST /envelopes/" + id + "/transfer-external called");
+    public ResponseEntity<?> transferToExternal(
+            @PathVariable Long id,
+            @RequestBody TransferExternalRequest request,
+            Authentication authentication) {
+        Logger logger = LoggerFactory.getLogger(BudgetController.class);
+        logger.info("POST /envelopes/{}/transfer-external called with payload: {}", id, request);
         try {
             String email = authentication.getName();
-            String externalAccount = (String) requestBody.get("external_account");
-            Double amount = Double.valueOf(requestBody.get("amount").toString());
-            budgetService.transferToExternal(id, externalAccount, amount, email);
+            validateTransferRequest(request);
+            budgetService.transferToExternal(id, request.getExternalAccount(), request.getAmount(), email);
             return ResponseEntity.ok("Transfer to external account initiated successfully");
         } catch (IllegalArgumentException e) {
+            logger.warn("Invalid transfer request for envelope {}: {}", id, e.getMessage());
             return ResponseEntity.badRequest().body(e.getMessage());
         } catch (SecurityException e) {
+            logger.warn("Unauthorized transfer attempt for envelope {}: {}", id, e.getMessage());
             return ResponseEntity.status(HttpStatus.FORBIDDEN).body(e.getMessage());
         } catch (Exception e) {
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("Error initiating transfer: " + e.getMessage());
+            logger.error("Error initiating transfer for envelope {}: {}", id, e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body("Error initiating transfer: " + (e.getMessage() != null ? e.getMessage() : "Unknown error"));
         }
+    }
+
+    private void validateTransferRequest(TransferExternalRequest request) {
+        if (request.getAmount() == null || request.getAmount() <= 0) {
+            throw new IllegalArgumentException("Amount must be positive");
+        }
+        if (request.getExternalAccount() == null) {
+            throw new IllegalArgumentException("External account details are required");
+        }
+        ExternalAccount account = request.getExternalAccount();
+        if (account.getAccountNumber() == null || account.getAccountNumber().isBlank()) {
+            throw new IllegalArgumentException("Account number is required");
+        }
+        if (account.getBankCode() == null || account.getBankCode().isBlank()) {
+            throw new IllegalArgumentException("Bank code is required");
+        }
+        if (account.getRecipientName() == null || account.getRecipientName().isBlank()) {
+            throw new IllegalArgumentException("Recipient name is required");
+        }
+        if (!account.getAccountNumber().matches("\\d{10}")) {
+            throw new IllegalArgumentException("Account number must be a 10-digit NUBAN");
+        }
+    }
+
+    @Data
+    public static class TransferExternalRequest {
+        private ExternalAccount externalAccount;
+        private Double amount;
+    }
+
+    @Data
+    public static class ExternalAccount {
+        private String accountNumber;
+        private String bankCode;
+        private String recipientName;
+        private String bankName; // Optional
     }
 
     // 12/04/2025 --->// New: Top-up Budget
@@ -203,8 +317,6 @@ public class BudgetController {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }
     }
-
-
 
     // 14/04/2025
     @PostMapping("/envelopes/spend")

@@ -1,9 +1,6 @@
 package com.moniewise.moniewise_backend.controller;
 
-import com.moniewise.moniewise_backend.dto.request.OtpGenerateRequest;
-import com.moniewise.moniewise_backend.dto.request.OtpRequest;
-import com.moniewise.moniewise_backend.dto.request.ProfileRequest;
-import com.moniewise.moniewise_backend.dto.request.UserDTO;
+import com.moniewise.moniewise_backend.dto.request.*;
 import com.moniewise.moniewise_backend.dto.response.OtpResponse;
 import com.moniewise.moniewise_backend.dto.response.OtpVerifyRequest;
 import com.moniewise.moniewise_backend.entity.User;
@@ -94,10 +91,15 @@ public class UserController {
 
 
     // UserController
+//    @PatchMapping("/tnc")
+//    public ResponseEntity<?> acceptTnc(Authentication authentication) {
+//        userService.acceptTnc(authentication.getName());
+//        return ResponseEntity.ok(Map.of("message", "TnC accepted"));
+//    }
     @PatchMapping("/tnc")
-    public ResponseEntity<?> acceptTnc(Authentication authentication) {
-        userService.acceptTnc(authentication.getName());
-        return ResponseEntity.ok(Map.of("message", "TnC accepted"));
+    public ResponseEntity<?> acceptTnc(Authentication authentication, @RequestBody TncRequest request) {
+        userService.acceptTnc(authentication.getName(), request.isAccepted());
+        return ResponseEntity.ok(Map.of("message", "TnC " + (request.isAccepted() ? "accepted" : "rejected")));
     }
 
 }

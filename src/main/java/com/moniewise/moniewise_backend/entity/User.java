@@ -51,6 +51,9 @@ public class User {
 //    @Column(name = "profile_data", columnDefinition = "JSONB")
 //    private Map<String, Object> profileData;
 
+    // newly added --->04/06/25
+    @Column(name = "tnc_accepted")
+    private Boolean tncAccepted;
 
     @Convert(disableConversion = true) // Disable auto-converter
     @Type(type = "jsonb")
@@ -75,5 +78,13 @@ public class User {
     // For JwtUtil compatibility (pass email as token subject)
     public String getUsername() {
         return email;
+    }
+
+    // Extract name from profile_data
+    public String getName() {
+        if (profileData != null && profileData.containsKey("name")) {
+            return (String) profileData.get("name");
+        }
+        return null;
     }
 }

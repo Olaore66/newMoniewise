@@ -16,6 +16,7 @@ import javax.validation.constraints.Past;
 @AllArgsConstructor
 // ProfileRequest (new DTO)
 public class ProfileRequest {
+    private String name;
     private BigDecimal monthlyIncome;
     private String mainExpense;
     private String savingsGoal;

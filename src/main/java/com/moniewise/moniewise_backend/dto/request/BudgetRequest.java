@@ -1,5 +1,6 @@
 package com.moniewise.moniewise_backend.dto.request;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.sun.istack.NotNull;
 import lombok.Getter;
 import lombok.Setter;
@@ -17,6 +18,7 @@ import java.util.List;
 @Setter
 @NoArgsConstructor
 @AllArgsConstructor
+@JsonIgnoreProperties(ignoreUnknown = true)
 public class BudgetRequest {
     private String name;
 
