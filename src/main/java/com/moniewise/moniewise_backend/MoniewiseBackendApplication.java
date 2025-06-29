@@ -20,8 +20,6 @@ public class MoniewiseBackendApplication extends SpringBootServletInitializer {
 
 	public static void main(String[] args) {
 		SpringApplication.run(MoniewiseBackendApplication.class, args);
-
-
 	}
 
 	@Bean
@@ -29,15 +27,12 @@ public class MoniewiseBackendApplication extends SpringBootServletInitializer {
 		return new WebMvcConfigurer() {
 			@Override
 			public void addCorsMappings(CorsRegistry registry) {
-				registry.addMapping("/api/**").allowedOrigins("*");
+				registry.addMapping("/**")  // Allow all endpoints
+						.allowedOrigins("http://localhost:5000")  // Flutter app
+						.allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
+						.allowedHeaders("*")
+						.allowCredentials(true);
 			}
 		};
 	}
 }
-
-//public class MoniewiseBackendApplication  {
-//
-//	public static void main(String[] args) {
-//		SpringApplication.run(MoniewiseBackendApplication.class, args);
-//	}
-//}

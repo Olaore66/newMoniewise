@@ -16,6 +16,7 @@ import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.security.oauth2.core.user.OAuth2User;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.HashMap;
 import java.util.Map;
 
 @RestController
@@ -28,22 +29,59 @@ public class AuthController {
     @Autowired
     private JwtUtil jwtUtil;
 
+//    @PostMapping("/signup")
+//    public ResponseEntity<?> signup(@RequestBody AuthRequest request) {
+//        try {
+//            Role role = request.getRole() != null ? Role.valueOf(request.getRole()) : Role.USER;
+//            SignupResponse user = userService.signup(request.getEmail(), request.getPhone(), request.getPassword(), role);
+//            return ResponseEntity.ok("User registered successfully \n" + user);
+//        } catch (Exception e) {
+//            return ResponseEntity.badRequest().body(e.getMessage());
+//        }
+//    }
+
     @PostMapping("/signup")
-    public ResponseEntity<?> signup(@RequestBody AuthRequest request) {
+    public ResponseEntity<Map<String, Object>> signup(@RequestBody AuthRequest request) {
         try {
             Role role = request.getRole() != null ? Role.valueOf(request.getRole()) : Role.USER;
-            SignupResponse user = userService.signup(request.getEmail(), request.getPhone(), request.getPassword(), role);
-            return ResponseEntity.ok("User registered successfully \n" + user);
+            SignupResponse signupResponse = userService.signup(
+                    request.getEmail(), request.getPhone(), request.getPassword(), role
+            );
+            Map<String, Object> response = new HashMap<>();
+            response.put("status", "success");
+            response.put("message", "User registered successfully. Please login.");
+            response.put("data", signupResponse);
+            return ResponseEntity.status(201).body(response);
         } catch (Exception e) {
-            return ResponseEntity.badRequest().body(e.getMessage());
+            Map<String, Object> error = new HashMap<>();
+            error.put("status", "error");
+            error.put("message", e.getMessage());
+            return ResponseEntity.badRequest().body(error);
         }
     }
+
+
+//    @PostMapping("/login")
+//    public ResponseEntity<?> login(@RequestBody AuthRequest request) {
+//        try {
+//            User user = userService.login(request.getEmailOrPhone(), request.getPassword());
+//
+//            UserDetails userDetails = userService.loadUserByUsername(user.getEmail());
+//            String token = jwtUtil.generateToken(userDetails);
+//            return ResponseEntity.ok(new AuthResponse(token));
+//        } catch (RuntimeException e) {
+//            if ("OTP verification required".equals(e.getMessage())) {
+//                return ResponseEntity.status(HttpStatus.FORBIDDEN)
+//                        .body(Map.of("error", "OTP verification required"));
+//            }
+//            return ResponseEntity.badRequest().body(e.getMessage());
+//        }
+//    }
 
     @PostMapping("/login")
     public ResponseEntity<?> login(@RequestBody AuthRequest request) {
         try {
             User user = userService.login(request.getEmailOrPhone(), request.getPassword());
-
             UserDetails userDetails = userService.loadUserByUsername(user.getEmail());
             String token = jwtUtil.generateToken(userDetails);
             return ResponseEntity.ok(new AuthResponse(token));
@@ -55,7 +93,7 @@ public class AuthController {
             return ResponseEntity.badRequest().body(e.getMessage());
         }
     }
-
+    
     @GetMapping("/oauth2/success")
     public ResponseEntity<?> oauth2Success(@AuthenticationPrincipal OAuth2User oauth2User) {
         try {
