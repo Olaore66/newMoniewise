@@ -2,9 +2,11 @@ package com.moniewise.moniewise_backend.service;
 
 import com.moniewise.moniewise_backend.dto.request.ProfileRequest;
 import com.moniewise.moniewise_backend.dto.response.SignupResponse;
+import com.moniewise.moniewise_backend.entity.PasswordResetToken;
 import com.moniewise.moniewise_backend.entity.User;
 import com.moniewise.moniewise_backend.entity.Wallet;
 import com.moniewise.moniewise_backend.enums.Role;
+import com.moniewise.moniewise_backend.repository.PasswordResetTokenRepository;
 import com.moniewise.moniewise_backend.repository.UserRepository;
 
 import com.moniewise.moniewise_backend.repository.WalletRepository;
@@ -20,10 +22,7 @@ import org.slf4j.LoggerFactory;
 import javax.transaction.Transactional;
 import java.time.Instant;
 import java.time.LocalDateTime;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 
 
 @Service
@@ -37,15 +36,18 @@ public class UserService implements UserDetailsService {
     private final WalletService walletService;
     private final OtpService otpService;
 
+    private final PasswordResetTokenRepository passwordResetTokenRepository;
+
     // Add to class dependencies
     private final NotificationService notificationService;
 
-    public UserService(UserRepository userRepository, PasswordEncoder passwordEncoder, WalletService walletService, WalletRepository walletRepository, WalletService walletService1, OtpService otpService, NotificationService notificationService) {
+    public UserService(UserRepository userRepository, PasswordEncoder passwordEncoder, WalletService walletService, WalletRepository walletRepository, WalletService walletService1, OtpService otpService, PasswordResetTokenRepository passwordResetTokenRepository, NotificationService notificationService) {
         this.userRepository = userRepository;
         this.passwordEncoder = passwordEncoder; // No link to SecurityConfig
         this.walletRepository = walletRepository;
         this.walletService = walletService1;
         this.otpService = otpService;
+        this.passwordResetTokenRepository = passwordResetTokenRepository;
         this.notificationService = notificationService;
     }
 
@@ -204,4 +206,41 @@ public class UserService implements UserDetailsService {
         user.setTncAccepted(accepted);
         userRepository.save(user);
     }
+
+    public void updateUserPassword(String token, String newPassword) {
+        // 1. Fetch token from DB
+        Optional<PasswordResetToken> tokenOpt = passwordResetTokenRepository.findByToken(token);
+
+        if (tokenOpt.isEmpty()) {
+            throw new IllegalArgumentException("Invalid token");
+        }
+
+        PasswordResetToken resetToken = tokenOpt.get();
+
+        // 2. Check if token is expired or used
+        if (resetToken.getExpiresAt().isBefore(LocalDateTime.now()) || resetToken.isUsed()) {
+            throw new IllegalArgumentException("Token has expired or already used");
+        }
+
+        // 3. Get user by email stored in the token
+        String email = resetToken.getEmail();
+//        Optional<User> userOpt = userRepository.findByEmail(email);
+        // Correct usage
+        Optional<User> userOpt = userRepository.findByEmail(resetToken.getEmail());
+
+
+        if (userOpt.isEmpty()) {
+            throw new IllegalArgumentException("User not found for token email");
+        }
+
+        // 4. Update user password
+        User user = userOpt.get();
+        user.setPassword(passwordEncoder.encode(newPassword));
+        userRepository.save(user);
+
+        // 5. Mark token as used
+        resetToken.setUsed(true);
+        passwordResetTokenRepository.save(resetToken);
+    }
+
 }

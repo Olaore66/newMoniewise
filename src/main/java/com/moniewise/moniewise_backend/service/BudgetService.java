@@ -47,16 +47,6 @@ public class BudgetService {
     private final NotificationService notificationService;
     private final WalletService walletService;
 
-//    public BudgetService(WalletService walletService, EnvelopeRepository envelopeRepository, BudgetRepository budgetRepository, RevenueLogRepository revenueLogRepository, UserService userService, TransactionLogRepository transactionLogRepository, NotificationService notificationService, WalletService walletService1) {
-//        this.envelopeRepository = envelopeRepository;
-//        this.budgetRepository = budgetRepository;
-//        this.revenueLogRepository = revenueLogRepository;
-//        this.userService = userService;
-//        this.transactionLogRepository = transactionLogRepository;
-//        this.notificationService = notificationService;
-//        this.walletService = walletService;
-//    }
-//
 
     @Value("${moniewise.revenue.wallet.user-id}")
     private Long revenueWalletUserId;

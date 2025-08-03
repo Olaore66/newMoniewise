@@ -4,9 +4,13 @@ import com.moniewise.moniewise_backend.dto.request.AuthRequest;
 import com.moniewise.moniewise_backend.dto.response.AuthResponse;
 import com.moniewise.moniewise_backend.dto.response.LogoutResponse;
 import com.moniewise.moniewise_backend.dto.response.SignupResponse;
+import com.moniewise.moniewise_backend.entity.PasswordResetToken;
 import com.moniewise.moniewise_backend.entity.User;
 import com.moniewise.moniewise_backend.enums.Role;
+import com.moniewise.moniewise_backend.repository.UserRepository;
 import com.moniewise.moniewise_backend.security.JwtUtil;
+import com.moniewise.moniewise_backend.service.EmailService;
+import com.moniewise.moniewise_backend.service.PasswordResetService;
 import com.moniewise.moniewise_backend.service.UserService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
@@ -16,8 +20,10 @@ import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.security.oauth2.core.user.OAuth2User;
 import org.springframework.web.bind.annotation.*;
 
+import javax.mail.MessagingException;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Optional;
 
 @RestController
 @RequestMapping("/auth")
@@ -29,16 +35,15 @@ public class AuthController {
     @Autowired
     private JwtUtil jwtUtil;
 
-//    @PostMapping("/signup")
-//    public ResponseEntity<?> signup(@RequestBody AuthRequest request) {
-//        try {
-//            Role role = request.getRole() != null ? Role.valueOf(request.getRole()) : Role.USER;
-//            SignupResponse user = userService.signup(request.getEmail(), request.getPhone(), request.getPassword(), role);
-//            return ResponseEntity.ok("User registered successfully \n" + user);
-//        } catch (Exception e) {
-//            return ResponseEntity.badRequest().body(e.getMessage());
-//        }
-//    }
+    @Autowired
+    private PasswordResetService resetService;
+
+    @Autowired
+    private EmailService emailService;
+
+    @Autowired
+    private UserRepository userRepository;
+
 
     @PostMapping("/signup")
     public ResponseEntity<Map<String, Object>> signup(@RequestBody AuthRequest request) {
@@ -65,7 +70,6 @@ public class AuthController {
 //    public ResponseEntity<?> login(@RequestBody AuthRequest request) {
 //        try {
 //            User user = userService.login(request.getEmailOrPhone(), request.getPassword());
-//
 //            UserDetails userDetails = userService.loadUserByUsername(user.getEmail());
 //            String token = jwtUtil.generateToken(userDetails);
 //            return ResponseEntity.ok(new AuthResponse(token));
@@ -84,16 +88,24 @@ public class AuthController {
             User user = userService.login(request.getEmailOrPhone(), request.getPassword());
             UserDetails userDetails = userService.loadUserByUsername(user.getEmail());
             String token = jwtUtil.generateToken(userDetails);
-            return ResponseEntity.ok(new AuthResponse(token));
+
+            boolean needsProfileUpdate = (user.getProfileData() == null);
+
+            // Return both token and profile completion flag
+            return ResponseEntity.ok(Map.of(
+                    "token", token,
+                    "needsProfileUpdate", needsProfileUpdate
+            ));
         } catch (RuntimeException e) {
             if ("OTP verification required".equals(e.getMessage())) {
                 return ResponseEntity.status(HttpStatus.FORBIDDEN)
                         .body(Map.of("error", "OTP verification required"));
             }
-            return ResponseEntity.badRequest().body(e.getMessage());
+
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }
     }
-    
+
     @GetMapping("/oauth2/success")
     public ResponseEntity<?> oauth2Success(@AuthenticationPrincipal OAuth2User oauth2User) {
         try {
@@ -147,4 +159,71 @@ public class AuthController {
         }
     }
 
+//    @PostMapping("/forgot-password")
+//    public  ResponseEntity<Map<String, String>> forgotPassword(@RequestBody Map<String, String> body) {
+//        String email = body.get("email");
+//        PasswordResetToken token = resetService.createResetToken(email);
+//        token.getToken(); //send via email
+//        Map<String, String> response = new HashMap<>();
+//        response.put("message", "Reset link sent");
+//        response.put("token", token.getToken());
+//        return ResponseEntity.ok(response);
+//    }
+
+    @PostMapping("/forgot-password")
+    public ResponseEntity<Map<String, String>> forgotPassword(@RequestBody Map<String, String> body) {
+        String email = body.get("email");
+
+
+        // ✅ Check if user exists here
+        Optional<User> userOpt = userRepository.findByEmail(email);
+        if (userOpt.isEmpty()) {
+            Map<String, String> error = new HashMap<>();
+            error.put("error", "No account found for this email.");
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error);
+        }
+
+        // Step 1: Generate the reset token
+        PasswordResetToken token = resetService.createResetToken(email);
+
+        // Step 2: Build the reset link//  please replace the user with the server link
+//        String resetLink = "http://10.40.246.184:9000/reset-password?token=" + token.getToken();
+        String resetLink = "moniewise://reset-password?token=" + token.getToken();
+
+
+        // Step 3: Send email
+        try {
+            emailService.sendPasswordResetEmail(email, email, resetLink); // You can replace second `email` with user full name if you have it
+        } catch (MessagingException e) {
+            Map<String, String> error = new HashMap<>();
+            error.put("error", "Failed to send reset email.");
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error);
+        }
+
+        // Step 4: Return JSON response
+        Map<String, String> response = new HashMap<>();
+        response.put("message", "Reset link sent to email.");
+        response.put("token", token.getToken()); // For dev/testing only. Remove in production.
+        return ResponseEntity.ok(response);
+    }
+
+
+    @PostMapping("/reset-password")
+    public ResponseEntity<String> resetPassword(@RequestBody Map<String, String> body) {
+        String token = body.get("token");
+        String newPassword = body.get("password");
+
+        if (!resetService.isValidToken(token)) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("Invalid or expired token");
+        }
+
+        // Assume updateUserPassword updates user’s password by email associated with token
+        PasswordResetToken reset = resetService.tokenRepository.findByToken(token).orElseThrow();
+//        userService.updateUserPassword(reset.getEmail(), newPassword);
+        userService.updateUserPassword(token, newPassword);
+
+        resetService.markTokenAsUsed(token);
+
+        return ResponseEntity.ok("Password reset successful");
+    }
 }

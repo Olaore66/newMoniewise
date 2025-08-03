@@ -168,7 +168,9 @@ public class SecurityConfig {
                         "/auth/oauth2/**",
                         "/tnc/**",
                         "/users/otp/generate",  // Add this
-                        "/users/otp/verify"     // Add this
+                        "/users/otp/verify",
+                        "/auth/forgot-password",
+                        "/auth/reset-password"// Add this
                 ).permitAll()
                 .antMatchers("/auth/logout", "/auth/refresh").authenticated()
 //                .antMatchers("/tnc/**").authenticated()
@@ -202,7 +204,8 @@ public class SecurityConfig {
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();
-        configuration.setAllowedOrigins(Arrays.asList("http://localhost:5000", "https://your-flutter-app.com")); // Adjust for Flutter
+        configuration.addAllowedOriginPattern("*"); // Spring Boot 2.4+
+//        configuration.setAllowedOrigins(Arrays.asList("http://localhost:5000", "https://your-flutter-app.com")); // Adjust for Flutter
         configuration.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "DELETE", "OPTIONS"));
         configuration.setAllowedHeaders(Arrays.asList("*"));
         configuration.setAllowCredentials(true);
@@ -210,6 +213,8 @@ public class SecurityConfig {
         source.registerCorsConfiguration("/**", configuration);
         return source;
     }
+
+
 
     @Bean
     public OidcUserService oidcUserService() {
