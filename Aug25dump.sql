@@ -289,6 +289,44 @@ ALTER SEQUENCE public.otps_id_seq OWNED BY public.otps.id;
 
 
 --
+-- Name: password_resets; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.password_resets (
+    id integer NOT NULL,
+    email character varying(255) NOT NULL,
+    token character varying(255) NOT NULL,
+    expires_at timestamp without time zone NOT NULL,
+    used boolean DEFAULT false,
+    created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP
+);
+
+
+ALTER TABLE public.password_resets OWNER TO postgres;
+
+--
+-- Name: password_resets_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
+--
+
+CREATE SEQUENCE public.password_resets_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER SEQUENCE public.password_resets_id_seq OWNER TO postgres;
+
+--
+-- Name: password_resets_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: postgres
+--
+
+ALTER SEQUENCE public.password_resets_id_seq OWNED BY public.password_resets.id;
+
+
+--
 -- Name: revenue_logs; Type: TABLE; Schema: public; Owner: postgres
 --
 
@@ -566,6 +604,13 @@ ALTER TABLE ONLY public.leaderboards ALTER COLUMN id SET DEFAULT nextval('public
 --
 
 ALTER TABLE ONLY public.otps ALTER COLUMN id SET DEFAULT nextval('public.otps_id_seq'::regclass);
+
+
+--
+-- Name: password_resets id; Type: DEFAULT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.password_resets ALTER COLUMN id SET DEFAULT nextval('public.password_resets_id_seq'::regclass);
 
 
 --
@@ -973,6 +1018,39 @@ COPY public.otps (id, user_id, otp_code, created_at, expires_at) FROM stdin;
 12	17	506972	2025-06-12 10:49:28.379528+00	2025-06-12 10:54:28.379528+00
 13	18	710078	2025-06-13 09:17:56.286167+00	2025-06-13 09:22:56.286167+00
 14	19	083736	2025-06-13 09:24:31.703486+00	2025-06-13 09:29:31.703486+00
+24	22	559239	2025-07-12 10:36:16.339074+00	2025-07-12 10:41:16.339074+00
+\.
+
+
+--
+-- Data for Name: password_resets; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY public.password_resets (id, email, token, expires_at, used, created_at) FROM stdin;
+1	test@moniewise.com	LrXFK2bAa4Zueuufe4FAsfa_FycKeH8r-SOTrRtdLD8	2025-07-13 07:50:06.877314	t	2025-07-13 07:40:06.877314
+2	test@moniewise.com	F8TIASB5gn54gI4aZlZNh1Q5BTzsMjTTLPQJN-_ypWY	2025-07-13 08:52:10.896689	f	2025-07-13 08:42:10.896689
+3	test@moniewise.com	7aiLX5R1KjO2s_QEIYVrcSnqQylD7GJTgXrIiYY96lM	2025-07-13 08:57:54.24702	f	2025-07-13 08:47:54.24702
+4	olaore4040@gmail.com	c1pfUMew5kDW0PSS5BGua2P8tut1iFHpGYFUp7AIZs8	2025-07-13 08:59:58.24387	f	2025-07-13 08:49:58.24387
+5	olaore4040@gmail.com	1dFUbi9iLqlmysIKKetjOF7R-isUDx8VgGESkBNRB5c	2025-07-13 09:04:36.38369	f	2025-07-13 08:54:36.38369
+6		wmUy9qCs4DRBPqEW6xqM4XXI6SZTbl7ZiKNRIrJd2Hg	2025-07-13 16:21:02.341663	f	2025-07-13 16:11:02.341663
+7	abrahamiborida@gmail.com	avAbiCge35Aq5_rEghK9qaVG4Knz0gR1VajP6M1Qzpw	2025-07-13 17:51:32.077094	f	2025-07-13 17:41:32.076082
+8	olaore4040@gmail.com	aCL3pbkqOObX2vGAQqhXEd7j2hW7KjRrnAZuYHotM7w	2025-07-13 17:58:02.188493	f	2025-07-13 17:48:02.188493
+9	abrahamiborida@gmail.com	dTbgc5wvpU1A2vLG1nm5j1ZYQH7nN_7dW4gq57ZXW8E	2025-07-19 16:11:22.209528	f	2025-07-19 16:01:22.205071
+10	abrahamiborida@gmail.com	fmkYLmCkzwCYqPhQqrYfNmHiGiERn91yyA5qNsuGNfY	2025-07-19 16:29:30.625363	f	2025-07-19 16:19:30.625363
+11	tester05@gmail.com	lUbZVXV1JeTdpgxDN3yOIBpQGNYU1uqF555VZW7YdHM	2025-07-19 17:16:37.180679	f	2025-07-19 17:06:37.180679
+12	abrahamiborida@gmail.com	_neZ0blGLQIwXX1HsmapIOlkzCgLmNY409GnEBRtFHM	2025-07-19 23:24:20.927751	f	2025-07-19 23:14:20.927751
+13	abrahamiborida@gmail.com	fYS4oY8TOMbqprmnl1OjbKLWnXa7WaMRrnpnamJnhck	2025-07-20 00:38:12.885632	f	2025-07-20 00:28:12.885632
+14	abrahamiborida@gmail.com	Pclv4gkF3cs66pyJS2QVCxINwrlcAp9VOsAPjoTvonI	2025-07-20 00:46:55.007141	f	2025-07-20 00:36:55.007141
+15	abrahamiborida@gmail.com	6FKOkZn5Tkv-mBhH5VbPtgdZPn0kYiqnn1e45PU6PjM	2025-07-20 00:52:52.705146	f	2025-07-20 00:42:52.705146
+16	abrahamiborida@gmail.com	0XUsW4QgXkBr2fbIFRqP_73aszRgc5RFh88WvwNZgj4	2025-07-20 00:53:24.4347	f	2025-07-20 00:43:24.4347
+17	abrahamiborida@gmail.com	ZuLtuLOheLKhplqqyFDwYHbmScjuE7q590rcjgrCMYQ	2025-07-20 00:59:14.09533	f	2025-07-20 00:49:14.09533
+18	abrahamiborida@gmail.com	cbqy9BWvV7oGBFWF1V1KHl7xiQ3yLyFdAPDy09MHck4	2025-07-20 08:13:02.711179	f	2025-07-20 08:03:02.711179
+19	abrahamiborida@gmail.com	rJJrNeEQSudaJR1k-9jXd7IDsp177svIbm-8u0wuL4U	2025-07-20 09:29:45.64844	t	2025-07-20 09:19:45.64844
+20	olaore66@gmail.com	Lt8NmYFR4pqHb_vrr4fyRWW_MSpJGwWIkt_aZ93VVFk	2025-07-20 09:37:03.811755	t	2025-07-20 09:27:03.811755
+21	abrahamiborida@gmail.com	AazJpAn4_YH31oRzchETO88itFlqDtJQY9iJyD4rrjw	2025-07-20 16:20:47.536942	f	2025-07-20 16:10:47.536942
+22	abrahamiborida@gmail.com	2PQyaZ_mNempyV6lSJwmussrZhKA3RiSoH9L1lGXQRo	2025-07-20 16:25:57.10913	f	2025-07-20 16:15:57.10913
+23	abrahamiborida@gmail.com	IorNiQPjnhVWL3HWlarM603vzRKsevKdOgkp6pjJUng	2025-07-20 16:44:27.48227	f	2025-07-20 16:34:27.48227
+24	abrahamiborida@gmail.com	HCYb2Ksij6MzgOdCMVHgBedDrPzV-jFkUz5EG8sCALg	2025-07-20 17:03:56.215316	t	2025-07-20 16:53:56.215316
 \.
 
 
@@ -1227,13 +1305,16 @@ COPY public.users (id, bvn, created_at, email, last_login, password, phone, role
 6	\N	2025-04-16 20:42:53.944+00	osazuwaidubor0@gmail.com	\N	$2a$10$FqlX9TyBI.YVy1dPK2vowOjmpFmoZyLZt7ewvAidW36B0FcOExqtK	09088869876	USER	\N	f	f	\N
 7	\N	2025-04-17 03:37:19.258+00	abraham@gmail.com	\N	$2a$10$e/8fe3mljNXKa.b8f.rwiuqraFZ8b58U0E.hOkeUgUYCVXj2r7Cxq	08129489558	ADMIN	\N	f	f	\N
 11	\N	2025-04-18 16:40:14.514+00	test@moniewise.com	2025-04-19 16:26:15.989789+00	$2a$10$aUJFgME.v6RtunOtU1T.Tuw3LdQZGgyyrGzHUTGqNn2HH48xDbinG	+2341234567890	ADMIN	{"dob": "Software Developer", "occupation": "Software Developer", "mainExpense": "Self growth", "savingsGoal": "Save live abroad", "monthlyIncome": 5000000}	f	f	\N
-5	\N	2025-04-16 06:31:16.128+00	abrahamiborida@gmail.com	2025-06-06 02:28:52.272613+00	$2a$10$kKmYAHHhIGEoti47XFIl9eTA.p9JeN46ItH36BTbmif72LQSHJ8FW	08129489559	ADMIN	{"dob": "Software Engineer", "occupation": "Software Engineer", "mainExpense": "Self growth", "savingsGoal": "Save live abroad", "monthlyIncome": 2000000}	f	t	\N
-12	\N	2025-04-19 17:05:38.766+00	test2@moniewise.com	2025-06-08 12:49:21.576902+00	$2a$10$naBc9kzOlGX6/A2CS1DCiudLcEW.emfAHNkOvoFoncrAn13twQgXK	+23458473638839	ADMIN	{"dob": [1990, 1, 1], "name": "Abraham Iborida", "occupation": "Software Engineer", "mainExpense": "Self growth", "savingsGoal": "Save live abroad", "monthlyIncome": 2000000, "acceptedTncVersion": "1.0"}	t	t	\N
+5	\N	2025-04-16 06:31:16.128+00	abrahamiborida@gmail.com	2025-07-20 15:56:27.681522+00	$2a$10$bDZTQw9GJVhZM4CEHQ0Sfeu5onB1drcajClSqa/3MiQIzKx9APInG	08129489559	ADMIN	{"dob": "Software Engineer", "occupation": "Software Engineer", "mainExpense": "Self growth", "savingsGoal": "Save live abroad", "monthlyIncome": 2000000}	f	t	\N
+12	\N	2025-04-19 17:05:38.766+00	test2@moniewise.com	2025-07-05 05:28:01.770278+00	$2a$10$naBc9kzOlGX6/A2CS1DCiudLcEW.emfAHNkOvoFoncrAn13twQgXK	+23458473638839	ADMIN	{"dob": [1990, 1, 1], "name": "Abraham Iborida", "occupation": "Software Engineer", "mainExpense": "Self growth", "savingsGoal": "Save live abroad", "monthlyIncome": 2000000, "acceptedTncVersion": "1.0"}	t	t	\N
 15	\N	2025-06-11 00:02:46.074+00	fluttermoniewise@test.com	\N	$2a$10$zCTaB.AupNssQii5VlOgBuXY6xDHWIrvyQ637LQJRJQqfUV3RWMeW	09088820193	USER	{}	f	f	\N
 16	\N	2025-06-12 10:48:47.151+00	testui@moniewise.com	\N	$2a$10$2UcGLG5aRuexf9w9ui216OsjTGV4Io1rqjMsqhDQsNMCMkgWtaq12	09012345678	USER	{}	f	f	\N
 17	\N	2025-06-12 10:49:28.368+00	testui2@moniewise.com	\N	$2a$10$rPOVm6FQnLsj7Etgbwg6hOdCq5MHo2Gt2Z4BztamgJY2wHnOQh55W	09012345679	USER	{}	f	f	\N
 18	\N	2025-06-13 09:17:56.133+00	tester03@gmail.com	\N	$2a$10$fPODcnc1ZRDDWBRBwzzDTuPvpzAoSuF0IwpbpHw9ASYkYx45rDUqi	08129489551	ADMIN	{}	f	f	\N
 19	\N	2025-06-13 09:24:31.689+00	testui4@moniewise.com	\N	$2a$10$MsT1/mQb3eVtH2EO2B2QbubOQfBzgnmxlwJ/BiU0.sBbMfAJG4QS2	09012234434	USER	{}	f	f	\N
+20	\N	2025-07-05 06:09:47.201+00	tester04@gmail.com	2025-07-05 10:29:20.53602+00	$2a$10$8v21rwqILWw8iCTGTuZVrei8W.3s1Cj82YNBpruLNW49ye.FyNJO6	08129489553	ADMIN	{}	f	t	\N
+22	\N	2025-07-12 10:36:16.151+00	test@moniewise	\N	$2a$10$QH4p8qNYgQr/tWs.TZZCQ.T3IVnIrkQVdw8.KFYRAuQMoW9eCHpOm	08601245389	USER	{}	f	f	\N
+21	\N	2025-07-05 10:20:10.379+00	tester05@gmail.com	2025-07-19 14:47:56.68442+00	$2a$10$caTfqNcqlNBNbg/JIn67I.bnZKruC.1lhPBbNkAEP4G22zTcW0UTW	08129489523	ADMIN	{}	f	t	\N
 \.
 
 
@@ -1256,6 +1337,9 @@ COPY public.wallets (id, balance, currency, status, updated_at, user_id, account
 16	0.00	NGN	ACTIVE	2025-06-12 10:49:28.374+00	17	TEST-17-68520	Virtual Titan Bank	\N
 17	0.00	NGN	ACTIVE	2025-06-13 09:17:56.249+00	18	TEST-18-63644	Virtual Titan Bank	\N
 18	0.00	NGN	ACTIVE	2025-06-13 09:24:31.695+00	19	TEST-19-98522	MonieWise Test Bank	\N
+19	0.00	NGN	ACTIVE	2025-07-05 06:09:47.505+00	20	TEST-20-98052	Stub Access Bank	\N
+20	0.00	NGN	ACTIVE	2025-07-05 10:20:10.422+00	21	TEST-21-32689	Stub Access Bank	\N
+21	0.00	NGN	ACTIVE	2025-07-12 10:36:16.284+00	22	TEST-22-73572	Stub Access Bank	\N
 \.
 
 
@@ -1305,7 +1389,14 @@ SELECT pg_catalog.setval('public.leaderboards_id_seq', 1, false);
 -- Name: otps_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
 --
 
-SELECT pg_catalog.setval('public.otps_id_seq', 14, true);
+SELECT pg_catalog.setval('public.otps_id_seq', 24, true);
+
+
+--
+-- Name: password_resets_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
+--
+
+SELECT pg_catalog.setval('public.password_resets_id_seq', 24, true);
 
 
 --
@@ -1340,14 +1431,14 @@ SELECT pg_catalog.setval('public.user_goals_id_seq', 1, false);
 -- Name: users_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
 --
 
-SELECT pg_catalog.setval('public.users_id_seq', 19, true);
+SELECT pg_catalog.setval('public.users_id_seq', 22, true);
 
 
 --
 -- Name: wallets_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
 --
 
-SELECT pg_catalog.setval('public.wallets_id_seq', 18, true);
+SELECT pg_catalog.setval('public.wallets_id_seq', 21, true);
 
 
 --
@@ -1404,6 +1495,14 @@ ALTER TABLE ONLY public.leaderboards
 
 ALTER TABLE ONLY public.otps
     ADD CONSTRAINT otps_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: password_resets password_resets_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.password_resets
+    ADD CONSTRAINT password_resets_pkey PRIMARY KEY (id);
 
 
 --
