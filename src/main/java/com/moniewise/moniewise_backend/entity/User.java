@@ -35,9 +35,6 @@ public class User {
     @Column(name = "is_verified", nullable = false)
     private boolean isVerified = false; // Default to false
 
-//    @OneToOne(mappedBy = "user", cascade = CascadeType.ALL)
-//    private Wallet wallet;
-
     @JsonIgnore  // Add this annotation
     @OneToOne(mappedBy = "user", cascade = CascadeType.ALL)
     private Wallet wallet;
@@ -47,9 +44,6 @@ public class User {
 
     @Column
     private String password; // NULL for OAuth users
-
-//    @Column(name = "profile_data", columnDefinition = "JSONB")
-//    private Map<String, Object> profileData;
 
     // newly added --->04/06/25
     @Column(name = "tnc_accepted")
