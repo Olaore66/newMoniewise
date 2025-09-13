@@ -83,7 +83,8 @@ public class UserController {
         try {
             String email = authentication.getName();
             User updatedUser = userService.updateProfile(email, request);
-            return ResponseEntity.ok(Map.of("message", "Profile updated" + updatedUser) );
+            return ResponseEntity.ok(Map.of("message", "Profile updated successfully"));
+
         } catch (Exception e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }

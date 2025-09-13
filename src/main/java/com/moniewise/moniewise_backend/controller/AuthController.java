@@ -1,5 +1,10 @@
 package com.moniewise.moniewise_backend.controller;
 
+import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.exc.StreamReadException;
+import com.fasterxml.jackson.databind.DatabindException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.moniewise.moniewise_backend.dto.request.AuthRequest;
 import com.moniewise.moniewise_backend.dto.response.AuthResponse;
 import com.moniewise.moniewise_backend.dto.response.LogoutResponse;
@@ -21,6 +26,7 @@ import org.springframework.security.oauth2.core.user.OAuth2User;
 import org.springframework.web.bind.annotation.*;
 
 import javax.mail.MessagingException;
+import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
@@ -81,7 +87,6 @@ public class AuthController {
 //            return ResponseEntity.badRequest().body(e.getMessage());
 //        }
 //    }
-
     @PostMapping("/login")
     public ResponseEntity<?> login(@RequestBody AuthRequest request) {
         try {
@@ -89,7 +94,13 @@ public class AuthController {
             UserDetails userDetails = userService.loadUserByUsername(user.getEmail());
             String token = jwtUtil.generateToken(userDetails);
 
-            boolean needsProfileUpdate = (user.getProfileData() == null);
+//            boolean needsProfileUpdate = (user.getProfileData() == null);
+            boolean needsProfileUpdate = true;
+
+            if (user.getProfileData() != null && !user.getProfileData().isEmpty()) {
+                needsProfileUpdate = user.getProfileData().values().stream()
+                        .allMatch(value -> value == null || value.toString().isBlank());
+            }
 
             // Return both token and profile completion flag
             return ResponseEntity.ok(Map.of(
@@ -134,7 +145,6 @@ public class AuthController {
             return ResponseEntity.badRequest().body(e.getMessage());
         }
     }
-
 
     @PostMapping("/refresh")
     public ResponseEntity<?> refreshToken(@RequestHeader("Authorization") String authHeader) {
