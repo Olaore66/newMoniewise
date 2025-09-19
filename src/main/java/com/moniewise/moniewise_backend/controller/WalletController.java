@@ -1,15 +1,14 @@
 package com.moniewise.moniewise_backend.controller;
 
 import com.moniewise.moniewise_backend.dto.request.FundWalletRequest;
+import com.moniewise.moniewise_backend.dto.response.WalletResponse;
 import com.moniewise.moniewise_backend.entity.User;
+import com.moniewise.moniewise_backend.entity.Wallet;
 import com.moniewise.moniewise_backend.service.UserService;
 import com.moniewise.moniewise_backend.service.WalletService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
 
 import java.math.BigDecimal;
 import java.util.Map;
@@ -48,6 +47,21 @@ public class WalletController {
         } catch (Exception e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }
+    }
+
+    @GetMapping("/{userId}")
+    public ResponseEntity<?> getWallet(@PathVariable Long userId) {
+        Wallet wallet = walletService.findById(userId).getWallet();
+        // ⬆️ we should add a helper in WalletService (findByUserId) instead of chaining
+
+        return ResponseEntity.ok(new WalletResponse(
+                wallet.getBalance(),
+                wallet.getCurrency(),
+                wallet.getAccountNumber(),
+                wallet.getBankName(),
+                wallet.getStatus().name(),
+                wallet.getUpdatedAt()
+        ));
     }
 
 }
