@@ -20,4 +20,6 @@ public interface BudgetRepository extends JpaRepository<Budget, Long> {
     List<Long> findAllIds();
 
     List<Budget> findByStatusAndEndDateLessThanEqual(BudgetStatus status, LocalDate endDate);
+
+    Optional<Budget> findByUserEmailAndStatus(String email, BudgetStatus status);
 }

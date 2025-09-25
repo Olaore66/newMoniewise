@@ -10,6 +10,7 @@ import com.moniewise.moniewise_backend.entity.User;
 import com.moniewise.moniewise_backend.exception.TncAcceptanceRequiredException;
 import com.moniewise.moniewise_backend.repository.BudgetRepository;
 import com.moniewise.moniewise_backend.service.BudgetService;
+import com.moniewise.moniewise_backend.service.EnvelopeService;
 import com.moniewise.moniewise_backend.service.UserService;
 import lombok.Data;
 import org.slf4j.Logger;
@@ -36,6 +37,9 @@ public class BudgetController {
 
     @Autowired
     private BudgetRepository budgetRepository;
+
+    @Autowired
+    private  EnvelopeService envelopeService;
 
     private static final Logger logger = LoggerFactory.getLogger(BudgetController.class);
 
@@ -170,91 +174,6 @@ public class BudgetController {
 
 
     // 12/04/2025 --->// New: Move money between Envelopes
-    @PostMapping("/envelopes/{id}/move")
-    public ResponseEntity<?> moveMoney(@PathVariable Long id, @RequestBody Map<String, Object> requestBody, Authentication authentication) {
-        System.out.println("POST /envelopes/" + id + "/move called");
-        try {
-            String email = authentication.getName();
-            Long targetId = Long.valueOf(requestBody.get("target_envelope_id").toString());
-            Double amount = Double.valueOf(requestBody.get("amount").toString());
-            budgetService.moveMoney(id, targetId, amount, email);
-            return ResponseEntity.ok("Money moved successfully");
-        } catch (IllegalArgumentException e) {
-            return ResponseEntity.badRequest().body(e.getMessage());
-        } catch (SecurityException e) {
-            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(e.getMessage());
-        } catch (Exception e) {
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("Error moving money: " + e.getMessage());
-        }
-    }
-
-    // 12/04/2025 --->// New: Transfer to external bank
-//    @PostMapping("/envelopes/{id}/transfer-external")
-//    public ResponseEntity<?> transferToExternal(@PathVariable Long id, @RequestBody Map<String, Object> requestBody, Authentication authentication) {
-//        System.out.println("POST /envelopes/" + id + "/transfer-external called");
-//        try {
-//            String email = authentication.getName();
-//            String externalAccount = (String) requestBody.get("external_account");
-//            Double amount = Double.valueOf(requestBody.get("amount").toString());
-//            budgetService.transferToExternal(id, externalAccount, amount, email);
-//            return ResponseEntity.ok("Transfer to external account initiated successfully");
-//        } catch (IllegalArgumentException e) {
-//            return ResponseEntity.badRequest().body(e.getMessage());
-//        } catch (SecurityException e) {
-//            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(e.getMessage());
-//        } catch (Exception e) {
-//            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("Error initiating transfer: " + e.getMessage());
-//        }
-//    }
-
-
-    // 08/06/20225 -new fix for transfer to external
-    @PostMapping("/envelopes/{id}/transfer-external")
-    public ResponseEntity<?> transferToExternal(
-            @PathVariable Long id,
-            @RequestBody TransferExternalRequest request,
-            Authentication authentication) {
-        Logger logger = LoggerFactory.getLogger(BudgetController.class);
-        logger.info("POST /envelopes/{}/transfer-external called with payload: {}", id, request);
-        try {
-            String email = authentication.getName();
-            validateTransferRequest(request);
-            budgetService.transferToExternal(id, request.getExternalAccount(), request.getAmount(), email);
-            return ResponseEntity.ok("Transfer to external account initiated successfully");
-        } catch (IllegalArgumentException e) {
-            logger.warn("Invalid transfer request for envelope {}: {}", id, e.getMessage());
-            return ResponseEntity.badRequest().body(e.getMessage());
-        } catch (SecurityException e) {
-            logger.warn("Unauthorized transfer attempt for envelope {}: {}", id, e.getMessage());
-            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(e.getMessage());
-        } catch (Exception e) {
-            logger.error("Error initiating transfer for envelope {}: {}", id, e.getMessage(), e);
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body("Error initiating transfer: " + (e.getMessage() != null ? e.getMessage() : "Unknown error"));
-        }
-    }
-
-    private void validateTransferRequest(TransferExternalRequest request) {
-        if (request.getAmount() == null || request.getAmount() <= 0) {
-            throw new IllegalArgumentException("Amount must be positive");
-        }
-        if (request.getExternalAccount() == null) {
-            throw new IllegalArgumentException("External account details are required");
-        }
-        ExternalAccount account = request.getExternalAccount();
-        if (account.getAccountNumber() == null || account.getAccountNumber().isBlank()) {
-            throw new IllegalArgumentException("Account number is required");
-        }
-        if (account.getBankCode() == null || account.getBankCode().isBlank()) {
-            throw new IllegalArgumentException("Bank code is required");
-        }
-        if (account.getRecipientName() == null || account.getRecipientName().isBlank()) {
-            throw new IllegalArgumentException("Recipient name is required");
-        }
-        if (!account.getAccountNumber().matches("\\d{10}")) {
-            throw new IllegalArgumentException("Account number must be a 10-digit NUBAN");
-        }
-    }
 
     @Data
     public static class TransferExternalRequest {

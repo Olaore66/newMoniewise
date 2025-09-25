@@ -177,6 +177,7 @@ public class SecurityConfig {
                 .antMatchers("/users/**").authenticated()
 //                .antMatchers("/users/otp/generate", "/users/otp/verify").authenticated()
                 .antMatchers("/budgets/**").authenticated()
+                .antMatchers("/envelopes/**").authenticated()
                 .antMatchers("/wallets/**").authenticated()
                 .antMatchers(HttpMethod.PATCH, "/users/tnc").authenticated() // Explicitly secure TNC
                 .antMatchers("/webhooks/paystack").permitAll() // Open for Paystack
