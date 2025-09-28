@@ -46,4 +46,5 @@ public class EnvelopeResponse {
     private BigDecimal remainingAmount;
     private Map<String, Object> conditions;
     private LocalDateTime createdAt;
+    private LocalDateTime lastDisbursedAt;
 }

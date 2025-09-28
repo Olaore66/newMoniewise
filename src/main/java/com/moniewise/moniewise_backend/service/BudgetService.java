@@ -1,7 +1,6 @@
 package com.moniewise.moniewise_backend.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.moniewise.moniewise_backend.controller.BudgetController;
 import com.moniewise.moniewise_backend.dto.request.BudgetRequest;
 import com.moniewise.moniewise_backend.dto.request.EnvelopeRequest;
 import com.moniewise.moniewise_backend.dto.request.SpendEnvelopeRequest;
@@ -9,17 +8,12 @@ import com.moniewise.moniewise_backend.dto.response.BudgetResponse;
 import com.moniewise.moniewise_backend.dto.response.EnvelopeResponse;
 import com.moniewise.moniewise_backend.entity.*;
 import com.moniewise.moniewise_backend.enums.BudgetStatus;
-import com.moniewise.moniewise_backend.repository.BudgetRepository;
-import com.moniewise.moniewise_backend.repository.EnvelopeRepository;
-import com.moniewise.moniewise_backend.repository.RevenueLogRepository;
-import com.moniewise.moniewise_backend.repository.TransactionLogRepository;
+import com.moniewise.moniewise_backend.repository.*;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.http.HttpStatus;
-import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.core.userdetails.UserDetails;
@@ -31,6 +25,8 @@ import javax.annotation.PostConstruct;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.*;
+import java.time.format.DateTimeParseException;
+import java.time.format.TextStyle;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.stream.Collectors;
@@ -47,6 +43,8 @@ public class BudgetService {
     private final NotificationService notificationService;
     private final WalletService walletService;
 
+    private final ScheduledTaskRepository scheduledTaskRepository;
+
 
     @Value("${moniewise.revenue.wallet.user-id}")
     private Long revenueWalletUserId;
@@ -58,7 +56,7 @@ public class BudgetService {
             UserService userService,
             TransactionLogRepository transactionLogRepository,
             NotificationService notificationService,
-            WalletService walletService) {
+            WalletService walletService, ScheduledTaskRepository scheduledTaskRepository) {
         this.envelopeRepository = envelopeRepository;
         this.budgetRepository = budgetRepository;
         this.revenueLogRepository = revenueLogRepository;
@@ -66,6 +64,7 @@ public class BudgetService {
         this.transactionLogRepository = transactionLogRepository;
         this.notificationService = notificationService;
         this.walletService = walletService; // Assign walletService1 as in original
+        this.scheduledTaskRepository = scheduledTaskRepository;
     }
 
     // Helper method to fetch current date/time from Postgres
@@ -89,6 +88,280 @@ public class BudgetService {
         return jdbcTemplate.queryForObject(sql, LocalDateTime.class);
     }
 
+//    @Transactional
+//    public BudgetResponse createBudget(BudgetRequest request, String email) {
+//        User user = userService.findByEmail(email);
+//        logger.debug("Starting budget creation for {}", email);
+//        logger.debug("User found: {}", user.getId());
+//
+//        // Fetch current date/time from Postgres
+//        LocalDateTime now = fetchCurrentDateTimeFromDatabase();
+//
+//        // Validate dates
+//        if (request.getStartDate().isAfter(request.getEndDate())) {
+//            throw new IllegalArgumentException("Start date must be before end date");
+//        }
+//
+//        long durationDays = ChronoUnit.DAYS.between(
+//                request.getStartDate(),
+//                request.getEndDate()
+//        );
+//
+//        // Validate duration
+//        if (durationDays <= 0 || durationDays > 90) {
+//            notificationService.sendNotification(user.getId().toString(),
+//                    "Budget creation failed: Duration cannot exceed 90 days.");
+//            throw new IllegalArgumentException("Budget duration must be between 1 and 90 days");
+//        }
+//
+//        // Calculate fee and budget amounts
+//        int feeIntervals = (int) Math.ceil((double) durationDays / 30);
+//        BigDecimal fee = new BigDecimal("100").multiply(BigDecimal.valueOf(feeIntervals)); // ₦100
+//        BigDecimal originalAmount = request.getTotalAmount(); // e.g., ₦250,000
+//        BigDecimal actualBudgetAmount = originalAmount.subtract(fee); // e.g., ₦249,900
+//
+//        // Validate envelope percentages
+//        BigDecimal totalPercentage = request.getEnvelopes().stream()
+//                .map(EnvelopeRequest::getPercentage)
+//                .reduce(BigDecimal.ZERO, BigDecimal::add); // e.g., 95%
+//        if (totalPercentage.compareTo(new BigDecimal("50")) < 0) {
+//            throw new IllegalArgumentException("Envelope percentages must sum to at least 50%");
+//        }
+//        if (totalPercentage.compareTo(new BigDecimal("100")) > 0) {
+//            throw new IllegalArgumentException("Envelope percentages cannot exceed 100%");
+//        }
+//
+//        // Calculate allocation sum
+//        BigDecimal allocationSum = request.getEnvelopes().stream()
+//                .map(envelope -> actualBudgetAmount.multiply(envelope.getPercentage())
+//                        .divide(new BigDecimal("100"), 2, RoundingMode.HALF_UP))
+//                .reduce(BigDecimal.ZERO, BigDecimal::add); // e.g., ₦237,405
+//
+//        // Validate allocation
+//        BigDecimal minimumAllocation = actualBudgetAmount.multiply(new BigDecimal("50"))
+//                .divide(new BigDecimal("100"), 2, RoundingMode.HALF_UP); // e.g., ₦124,950
+//        if (allocationSum.compareTo(minimumAllocation) < 0) {
+//            throw new IllegalStateException(
+//                    "Envelope allocations (₦" + allocationSum + ") must be at least 50% of budget total (₦" + minimumAllocation + ")"
+//            );
+//        }
+//        BigDecimal tolerance = new BigDecimal("0.01");
+//        if (allocationSum.compareTo(actualBudgetAmount) > 0 &&
+//                allocationSum.subtract(actualBudgetAmount).abs().compareTo(tolerance) > 0) {
+//            throw new IllegalStateException(
+//                    "Envelope allocations (₦" + allocationSum + ") cannot exceed budget total (₦" + actualBudgetAmount + ")"
+//            );
+//        }
+//
+//        // Check wallet balance for allocation sum
+//        BigDecimal walletBalance = walletService.checkBalance(user.getId());
+//        if (walletBalance.compareTo(allocationSum) < 0) {
+//            String message = String.format(
+//                    "Transaction failed: Your wallet has insufficient funds. At least ₦%.2f is required for allocation, but your current balance is ₦%.2f. Please fund your wallet.",
+//                    allocationSum, walletBalance
+//            );
+//            notificationService.sendNotification(user.getId().toString(), message);
+//            throw new IllegalArgumentException(message);
+//        }
+//
+//        // Validate envelope conditions
+//        Set<String> conditionTypes = new HashSet<>();
+//
+//        for (EnvelopeRequest envelopeRequest : request.getEnvelopes()) {
+//            BigDecimal percentage = envelopeRequest.getPercentage();
+//
+//           // allocated amount for this envelope
+//            BigDecimal allocatedAmount = actualBudgetAmount
+//                    .multiply(percentage)
+//                    .divide(new BigDecimal("100"), 2, RoundingMode.HALF_UP);
+//
+//            Map<String, Object> conditions = envelopeRequest.getConditions();
+//
+//            if (conditions != null) {
+//                Object typeObj = conditions.get("type");
+//                if (typeObj != null) {
+//                    String type = typeObj.toString().toLowerCase(); // normalize
+//                    conditionTypes.add(type);
+//                }
+//
+//
+//
+//                if (conditions != null && conditions.containsKey("limit")) {
+//                    Object limitObj = conditions.get("limit");
+//
+//                    if (!(limitObj instanceof Number)) {
+//                        throw new IllegalArgumentException(
+//                                String.format("Envelope '%s' has an invalid limit type: %s",
+//                                        envelopeRequest.getName(), limitObj));
+//                    }
+//
+//                    BigDecimal limit = new BigDecimal(((Number) limitObj).doubleValue());
+//
+//                    if (limit.compareTo(BigDecimal.ZERO) <= 0) {
+//                        throw new IllegalArgumentException(
+//                                String.format("Envelope '%s' requires a positive limit", envelopeRequest.getName()));
+//                    }
+//
+//                    // 🔹 NEW CHECK: make sure limit ≤ allocated amount
+//                    if (limit.compareTo(allocatedAmount) > 0) {
+//                        throw new IllegalArgumentException(
+//                                String.format("Envelope '%s' has a limit (₦%.2f) greater than its allocated budget (₦%.2f)",
+//                                        envelopeRequest.getName(), limit, allocatedAmount));
+//                    }
+//                }
+//            }
+//        }
+//
+//        BudgetStatus status = request.getStatus();
+//
+//        if (conditionTypes.size() <= 1 && status == BudgetStatus.ACTIVE) {
+//
+//
+//            notificationService.sendNotification(user.getId().toString(),
+//                    "Budget creation failed: Add a different condition (e.g., Daily, Weekly, or Strict).");
+//            throw new IllegalArgumentException("Add a different condition (e.g., Daily, Weekly, or Strict)");
+//        }
+//
+//        // ✅ Require at least 2 distinct condition types if budget is ACTIVE
+//        if (status == BudgetStatus.ACTIVE && conditionTypes.size() < 2) {
+//            notificationService.sendNotification(
+//                    user.getId().toString(),
+//                    "Budget creation failed: Please use at least 2 different condition types (e.g., Daily, Weekly, Strict)."
+//            );
+//            throw new IllegalArgumentException(
+//                    "Budget creation failed: Please use at least 2 different condition types (e.g., Daily, Weekly, Strict)."
+//            );
+//        }
+//
+//        // Create budget entity
+//        Budget budget = new Budget();
+//        budget.setUser(user);
+//        budget.setName(request.getName());
+//        budget.setOriginalAmount(originalAmount); // ₦250,000
+//        budget.setFeeAmount(fee); // e.g., ₦200 for 31 days
+//        budget.setTotalAmount(actualBudgetAmount); // ₦249,900
+//        budget.setAllocatedAmount(allocationSum); // ₦237,405
+//        budget.setStartDate(request.getStartDate());
+//        budget.setEndDate(request.getEndDate());
+//        budget.setDurationDays((int) durationDays);
+//        budget.setStatus(status);
+//        budget.setCreatedAt(now); // Use DB date
+//        budget.setLastTopupTime(null);
+//
+//        // Create envelopes
+//        List<Envelope> envelopes = new ArrayList<>();
+//        for (EnvelopeRequest envelopeRequest : request.getEnvelopes()) {
+//            Envelope envelope = new Envelope();
+//            envelope.setBudget(budget);
+//            envelope.setName(envelopeRequest.getName());
+//            BigDecimal percentage = envelopeRequest.getPercentage();
+//            BigDecimal amount = actualBudgetAmount
+//                    .multiply(percentage)
+//                    .divide(new BigDecimal("100"), 2, RoundingMode.HALF_UP);
+//            envelope.setAmount(amount);
+//            envelope.setRemainingAmount(amount);
+//            envelope.setConditions(envelopeRequest.getConditions());
+//            envelope.setCreatedAt(now); // Use DB date
+//            envelopes.add(envelope);
+//        }
+//        Envelope savedEnvelope = envelopeRepository.save(envelopes);
+//        scheduleDynamicTasks(savedEnvelope);
+//
+//        budget.setEnvelopes(envelopes);
+//
+//        // Deduct allocation from user wallet
+//        walletService.deductBalance(user.getId(), allocationSum);
+//
+//        // Transfer fee to revenue wallet
+//        walletService.fundWallet(revenueWalletUserId, fee,
+//                String.format("₦%.2f received as budget creation fee.", fee));
+//
+//        // Refund unallocated amount
+//        BigDecimal unallocatedAmount = actualBudgetAmount.subtract(allocationSum); // ₦12,495
+//        if (unallocatedAmount.compareTo(BigDecimal.ZERO) > 0) {
+//            walletService.fundWallet(user.getId(), unallocatedAmount,
+//                    String.format("₦%.2f refunded to wallet from unallocated budget funds.", unallocatedAmount));
+//            TransactionLog refundLog = new TransactionLog();
+//            refundLog.setUserId(user.getId());
+//            refundLog.setBudgetId(null);
+//            refundLog.setAmount(unallocatedAmount);
+//            refundLog.setTransactionType("budget_unallocated_refunded");
+//            refundLog.setCreatedAt(now); // Use DB date
+//            transactionLogRepository.save(refundLog);
+//        }
+//
+//        // Save budget
+//        try {
+//            Budget savedBudget = budgetRepository.save(budget);
+//            logger.debug("Budget saved with ID: {}", savedBudget.getId());
+//
+//            // Log transactions
+//            TransactionLog budgetLog = new TransactionLog();
+//            budgetLog.setUserId(user.getId());
+//            budgetLog.setBudgetId(savedBudget.getId());
+//            budgetLog.setAmount(allocationSum);
+//            budgetLog.setTransactionType("budget_allocation");
+//            budgetLog.setCreatedAt(now); // Use DB date
+//            transactionLogRepository.save(budgetLog);
+//
+//            TransactionLog feeLog = new TransactionLog();
+//            feeLog.setUserId(user.getId());
+//            feeLog.setBudgetId(savedBudget.getId());
+//            feeLog.setAmount(fee);
+//            feeLog.setTransactionType("budget_creation_fee");
+//            feeLog.setCreatedAt(now); // Use DB date
+//            transactionLogRepository.save(feeLog);
+//
+//            RevenueLog revenueLog = new RevenueLog();
+//            revenueLog.setUserId(revenueWalletUserId);
+//            revenueLog.setType("budget_creation");
+//            revenueLog.setAmount(fee);
+//            revenueLog.setDescription("Budget fee for " + durationDays + " days");
+//            revenueLog.setCreatedAt(now); // Use DB date
+//            revenueLogRepository.save(revenueLog);
+//
+//            // Send notification
+//            String message = String.format(
+//                    "Budget '%s' created! ₦%.2f allocated (₦%.2f fee applied, ₦%.2f refunded to wallet).",
+//                    savedBudget.getName(), allocationSum, fee, unallocatedAmount
+//            );
+//            notificationService.sendNotification(user.getId().toString(), message);
+//
+//            // Return response
+//            return new BudgetResponse(
+//                    savedBudget.getId(),
+//                    savedBudget.getName(),
+//                    savedBudget.getTotalAmount(),
+//                    savedBudget.getAllocatedAmount(),
+//                    savedBudget.getDurationDays(),
+//                    savedBudget.getStartDate(),
+//                    savedBudget.getEndDate(),
+//                    savedBudget.getStatus(),
+//                    savedBudget.getCreatedAt(),
+//                    user.getId(),
+//                    savedBudget.getLastTopupTime(),
+//                    savedBudget.getEnvelopes().stream()
+//                            .map(e -> new EnvelopeResponse(
+//                                    e.getId(),
+//                                    savedBudget.getId(),
+//                                    e.getName(),
+//                                    e.getAmount(),
+//                                    e.getRemainingAmount(),
+//                                    e.getConditions(),
+//                                    e.getCreatedAt(),
+//                                    e.getLastDisbursedAt()
+//                            ))
+//                            .collect(Collectors.toList()),
+//                    savedBudget.getOriginalAmount(),
+//                    savedBudget.getFeeAmount()
+//            );
+//        } catch (Exception e) {
+//            logger.error("Failed to save budget", e);
+//            throw e;
+//        }
+//    }
+
+
     @Transactional
     public BudgetResponse createBudget(BudgetRequest request, String email) {
         User user = userService.findByEmail(email);
@@ -103,10 +376,7 @@ public class BudgetService {
             throw new IllegalArgumentException("Start date must be before end date");
         }
 
-        long durationDays = ChronoUnit.DAYS.between(
-                request.getStartDate(),
-                request.getEndDate()
-        );
+        long durationDays = ChronoUnit.DAYS.between(request.getStartDate(), request.getEndDate()) + 1;
 
         // Validate duration
         if (durationDays <= 0 || durationDays > 90) {
@@ -117,14 +387,14 @@ public class BudgetService {
 
         // Calculate fee and budget amounts
         int feeIntervals = (int) Math.ceil((double) durationDays / 30);
-        BigDecimal fee = new BigDecimal("100").multiply(BigDecimal.valueOf(feeIntervals)); // ₦100
-        BigDecimal originalAmount = request.getTotalAmount(); // e.g., ₦250,000
-        BigDecimal actualBudgetAmount = originalAmount.subtract(fee); // e.g., ₦249,900
+        BigDecimal fee = new BigDecimal("100").multiply(BigDecimal.valueOf(feeIntervals));
+        BigDecimal originalAmount = request.getTotalAmount();
+        BigDecimal actualBudgetAmount = originalAmount.subtract(fee);
 
         // Validate envelope percentages
         BigDecimal totalPercentage = request.getEnvelopes().stream()
                 .map(EnvelopeRequest::getPercentage)
-                .reduce(BigDecimal.ZERO, BigDecimal::add); // e.g., 95%
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
         if (totalPercentage.compareTo(new BigDecimal("50")) < 0) {
             throw new IllegalArgumentException("Envelope percentages must sum to at least 50%");
         }
@@ -136,11 +406,11 @@ public class BudgetService {
         BigDecimal allocationSum = request.getEnvelopes().stream()
                 .map(envelope -> actualBudgetAmount.multiply(envelope.getPercentage())
                         .divide(new BigDecimal("100"), 2, RoundingMode.HALF_UP))
-                .reduce(BigDecimal.ZERO, BigDecimal::add); // e.g., ₦237,405
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
 
         // Validate allocation
         BigDecimal minimumAllocation = actualBudgetAmount.multiply(new BigDecimal("50"))
-                .divide(new BigDecimal("100"), 2, RoundingMode.HALF_UP); // e.g., ₦124,950
+                .divide(new BigDecimal("100"), 2, RoundingMode.HALF_UP);
         if (allocationSum.compareTo(minimumAllocation) < 0) {
             throw new IllegalStateException(
                     "Envelope allocations (₦" + allocationSum + ") must be at least 50% of budget total (₦" + minimumAllocation + ")"
@@ -167,63 +437,63 @@ public class BudgetService {
 
         // Validate envelope conditions
         Set<String> conditionTypes = new HashSet<>();
-
         for (EnvelopeRequest envelopeRequest : request.getEnvelopes()) {
             BigDecimal percentage = envelopeRequest.getPercentage();
-
-           // allocated amount for this envelope
             BigDecimal allocatedAmount = actualBudgetAmount
                     .multiply(percentage)
                     .divide(new BigDecimal("100"), 2, RoundingMode.HALF_UP);
-
             Map<String, Object> conditions = envelopeRequest.getConditions();
 
             if (conditions != null) {
                 Object typeObj = conditions.get("type");
                 if (typeObj != null) {
-                    String type = typeObj.toString().toLowerCase(); // normalize
+                    String type = typeObj.toString().toLowerCase();
                     conditionTypes.add(type);
-                }
 
-
-
-                if (conditions != null && conditions.containsKey("limit")) {
-                    Object limitObj = conditions.get("limit");
-
-                    if (!(limitObj instanceof Number)) {
-                        throw new IllegalArgumentException(
-                                String.format("Envelope '%s' has an invalid limit type: %s",
-                                        envelopeRequest.getName(), limitObj));
+                    // Validate dynamic envelope conditions
+                    if ("dynamic".equals(type)) {
+                        if (!conditions.containsKey("days") || !conditions.containsKey("disbursementTime")) {
+                            throw new IllegalArgumentException(
+                                    String.format("Dynamic envelope '%s' must have 'days' and 'disbursementTime'", envelopeRequest.getName()));
+                        }
+                        @SuppressWarnings("unchecked")
+                        List<String> days = (List<String>) conditions.get("days");
+                        String disbursementTime = (String) conditions.get("disbursementTime");
+                        if (days == null || days.isEmpty()) {
+                            throw new IllegalArgumentException(
+                                    String.format("Dynamic envelope '%s' must have non-empty 'days'", envelopeRequest.getName()));
+                        }
+                        try {
+                            LocalTime.parse(disbursementTime);
+                        } catch (DateTimeParseException e) {
+                            throw new IllegalArgumentException(
+                                    String.format("Dynamic envelope '%s' has invalid disbursementTime: %s", envelopeRequest.getName(), disbursementTime));
+                        }
                     }
 
-                    BigDecimal limit = new BigDecimal(((Number) limitObj).doubleValue());
-
-                    if (limit.compareTo(BigDecimal.ZERO) <= 0) {
-                        throw new IllegalArgumentException(
-                                String.format("Envelope '%s' requires a positive limit", envelopeRequest.getName()));
-                    }
-
-                    // 🔹 NEW CHECK: make sure limit ≤ allocated amount
-                    if (limit.compareTo(allocatedAmount) > 0) {
-                        throw new IllegalArgumentException(
-                                String.format("Envelope '%s' has a limit (₦%.2f) greater than its allocated budget (₦%.2f)",
-                                        envelopeRequest.getName(), limit, allocatedAmount));
+                    if (conditions.containsKey("limit")) {
+                        Object limitObj = conditions.get("limit");
+                        if (!(limitObj instanceof Number)) {
+                            throw new IllegalArgumentException(
+                                    String.format("Envelope '%s' has an invalid limit type: %s", envelopeRequest.getName(), limitObj));
+                        }
+                        BigDecimal limit = new BigDecimal(((Number) limitObj).doubleValue());
+                        if (limit.compareTo(BigDecimal.ZERO) <= 0) {
+                            throw new IllegalArgumentException(
+                                    String.format("Envelope '%s' requires a positive limit", envelopeRequest.getName()));
+                        }
+                        if (limit.compareTo(allocatedAmount) > 0) {
+                            throw new IllegalArgumentException(
+                                    String.format("Envelope '%s' has a limit (₦%.2f) greater than its allocated budget (₦%.2f)",
+                                            envelopeRequest.getName(), limit, allocatedAmount));
+                        }
                     }
                 }
             }
         }
 
+        // Require at least 2 distinct condition types if budget is ACTIVE
         BudgetStatus status = request.getStatus();
-
-        if (conditionTypes.size() <= 1 && status == BudgetStatus.ACTIVE) {
-
-
-            notificationService.sendNotification(user.getId().toString(),
-                    "Budget creation failed: Add a different condition (e.g., Daily, Weekly, or Strict).");
-            throw new IllegalArgumentException("Add a different condition (e.g., Daily, Weekly, or Strict)");
-        }
-
-        // ✅ Require at least 2 distinct condition types if budget is ACTIVE
         if (status == BudgetStatus.ACTIVE && conditionTypes.size() < 2) {
             notificationService.sendNotification(
                     user.getId().toString(),
@@ -234,26 +504,27 @@ public class BudgetService {
             );
         }
 
-        // Create budget entity
+        // Create and save budget entity
         Budget budget = new Budget();
         budget.setUser(user);
         budget.setName(request.getName());
-        budget.setOriginalAmount(originalAmount); // ₦250,000
-        budget.setFeeAmount(fee); // e.g., ₦200 for 31 days
-        budget.setTotalAmount(actualBudgetAmount); // ₦249,900
-        budget.setAllocatedAmount(allocationSum); // ₦237,405
+        budget.setOriginalAmount(originalAmount);
+        budget.setFeeAmount(fee);
+        budget.setTotalAmount(actualBudgetAmount);
+        budget.setAllocatedAmount(allocationSum);
         budget.setStartDate(request.getStartDate());
         budget.setEndDate(request.getEndDate());
         budget.setDurationDays((int) durationDays);
         budget.setStatus(status);
-        budget.setCreatedAt(now); // Use DB date
+        budget.setCreatedAt(now);
         budget.setLastTopupTime(null);
+        Budget savedBudget = budgetRepository.save(budget);
 
-        // Create envelopes
+        // Create and save envelopes
         List<Envelope> envelopes = new ArrayList<>();
         for (EnvelopeRequest envelopeRequest : request.getEnvelopes()) {
             Envelope envelope = new Envelope();
-            envelope.setBudget(budget);
+            envelope.setBudget(savedBudget);
             envelope.setName(envelopeRequest.getName());
             BigDecimal percentage = envelopeRequest.getPercentage();
             BigDecimal amount = actualBudgetAmount
@@ -262,10 +533,15 @@ public class BudgetService {
             envelope.setAmount(amount);
             envelope.setRemainingAmount(amount);
             envelope.setConditions(envelopeRequest.getConditions());
-            envelope.setCreatedAt(now); // Use DB date
+            envelope.setCreatedAt(now);
             envelopes.add(envelope);
         }
-        budget.setEnvelopes(envelopes);
+        List<Envelope> savedEnvelopes = envelopeRepository.saveAll(envelopes);
+        for (Envelope envelope : savedEnvelopes) {
+            scheduleDynamicTasks(envelope); // Schedule tasks for dynamic envelopes
+        }
+        savedBudget.setEnvelopes(savedEnvelopes);
+        budgetRepository.save(savedBudget); // Update budget with envelopes
 
         // Deduct allocation from user wallet
         walletService.deductBalance(user.getId(), allocationSum);
@@ -275,87 +551,80 @@ public class BudgetService {
                 String.format("₦%.2f received as budget creation fee.", fee));
 
         // Refund unallocated amount
-        BigDecimal unallocatedAmount = actualBudgetAmount.subtract(allocationSum); // ₦12,495
+        BigDecimal unallocatedAmount = actualBudgetAmount.subtract(allocationSum);
         if (unallocatedAmount.compareTo(BigDecimal.ZERO) > 0) {
             walletService.fundWallet(user.getId(), unallocatedAmount,
                     String.format("₦%.2f refunded to wallet from unallocated budget funds.", unallocatedAmount));
             TransactionLog refundLog = new TransactionLog();
             refundLog.setUserId(user.getId());
-            refundLog.setBudgetId(null);
+            refundLog.setBudgetId(savedBudget.getId());
             refundLog.setAmount(unallocatedAmount);
             refundLog.setTransactionType("budget_unallocated_refunded");
-            refundLog.setCreatedAt(now); // Use DB date
+            refundLog.setCreatedAt(now);
             transactionLogRepository.save(refundLog);
         }
 
-        // Save budget
-        try {
-            Budget savedBudget = budgetRepository.save(budget);
-            logger.debug("Budget saved with ID: {}", savedBudget.getId());
+        // Log transactions
+        TransactionLog budgetLog = new TransactionLog();
+        budgetLog.setUserId(user.getId());
+        budgetLog.setBudgetId(savedBudget.getId());
+        budgetLog.setAmount(allocationSum);
+        budgetLog.setTransactionType("budget_allocation");
+        budgetLog.setCreatedAt(now);
+        transactionLogRepository.save(budgetLog);
 
-            // Log transactions
-            TransactionLog budgetLog = new TransactionLog();
-            budgetLog.setUserId(user.getId());
-            budgetLog.setBudgetId(savedBudget.getId());
-            budgetLog.setAmount(allocationSum);
-            budgetLog.setTransactionType("budget_allocation");
-            budgetLog.setCreatedAt(now); // Use DB date
-            transactionLogRepository.save(budgetLog);
+        TransactionLog feeLog = new TransactionLog();
+        feeLog.setUserId(user.getId());
+        feeLog.setBudgetId(savedBudget.getId());
+        feeLog.setAmount(fee);
+        feeLog.setTransactionType("budget_creation_fee");
+        feeLog.setCreatedAt(now);
+        transactionLogRepository.save(feeLog);
 
-            TransactionLog feeLog = new TransactionLog();
-            feeLog.setUserId(user.getId());
-            feeLog.setBudgetId(savedBudget.getId());
-            feeLog.setAmount(fee);
-            feeLog.setTransactionType("budget_creation_fee");
-            feeLog.setCreatedAt(now); // Use DB date
-            transactionLogRepository.save(feeLog);
+        RevenueLog revenueLog = new RevenueLog();
+        revenueLog.setUserId(revenueWalletUserId);
+        revenueLog.setType("budget_creation");
+        revenueLog.setAmount(fee);
+        revenueLog.setDescription("Budget fee for " + durationDays + " days");
+        revenueLog.setCreatedAt(now);
+        revenueLogRepository.save(revenueLog);
 
-            RevenueLog revenueLog = new RevenueLog();
-            revenueLog.setUserId(revenueWalletUserId);
-            revenueLog.setType("budget_creation");
-            revenueLog.setAmount(fee);
-            revenueLog.setDescription("Budget fee for " + durationDays + " days");
-            revenueLog.setCreatedAt(now); // Use DB date
-            revenueLogRepository.save(revenueLog);
+        // Send notification
+        String message = String.format(
+                "Budget '%s' created! ₦%.2f allocated (₦%.2f fee applied, ₦%.2f refunded to wallet).",
+                savedBudget.getName(), allocationSum, fee, unallocatedAmount
+        );
+        notificationService.sendNotification(user.getId().toString(), message);
 
-            // Send notification
-            String message = String.format(
-                    "Budget '%s' created! ₦%.2f allocated (₦%.2f fee applied, ₦%.2f refunded to wallet).",
-                    savedBudget.getName(), allocationSum, fee, unallocatedAmount
-            );
-            notificationService.sendNotification(user.getId().toString(), message);
-
-            // Return response
-            return new BudgetResponse(
-                    savedBudget.getId(),
-                    savedBudget.getName(),
-                    savedBudget.getTotalAmount(),
-                    savedBudget.getAllocatedAmount(),
-                    savedBudget.getDurationDays(),
-                    savedBudget.getStartDate(),
-                    savedBudget.getEndDate(),
-                    savedBudget.getStatus(),
-                    savedBudget.getCreatedAt(),
-                    user.getId(),
-                    savedBudget.getLastTopupTime(),
-                    savedBudget.getEnvelopes().stream()
-                            .map(e -> new EnvelopeResponse(
-                                    e.getId(),
-                                    savedBudget.getId(),
-                                    e.getName(),
-                                    e.getAmount(),
-                                    e.getRemainingAmount(),
-                                    e.getConditions(),
-                                    e.getCreatedAt()
-                            ))
-                            .collect(Collectors.toList()),
-                    savedBudget.getOriginalAmount(),
-                    savedBudget.getFeeAmount()
-            );
-        } catch (Exception e) {
-            logger.error("Failed to save budget", e);
-            throw e;
-        }
+        // Return response
+        return new BudgetResponse(
+                savedBudget.getId(),
+                savedBudget.getName(),
+                savedBudget.getTotalAmount(),
+                savedBudget.getAllocatedAmount(),
+                savedBudget.getAllocatedAmount(), // Use allocatedAmount as remaining for new budget
+                savedBudget.getDurationDays(),
+                savedBudget.getStartDate(),
+                savedBudget.getEndDate(),
+                savedBudget.getStatus(),
+                savedBudget.getCreatedAt(),
+                user.getId(),
+                savedBudget.getLastTopupTime(),
+                savedBudget.getEnvelopes().stream()
+                        .map(e -> new EnvelopeResponse(
+                                e.getId(),
+                                savedBudget.getId(),
+                                e.getName(),
+                                e.getAmount(),
+                                e.getRemainingAmount(),
+                                e.getConditions(),
+                                e.getCreatedAt(),
+                                e.getLastDisbursedAt()
+                        ))
+                        .collect(Collectors.toList()),
+                savedBudget.getOriginalAmount(),
+                savedBudget.getFeeAmount()
+        );
     }
 
     // New: Get a single Budget by ID
@@ -431,7 +700,8 @@ public class BudgetService {
                         envelope.getAmount(),
                         envelope.getRemainingAmount(),
                         envelope.getConditions(),
-                        envelope.getCreatedAt()
+                        envelope.getCreatedAt(),
+                        envelope.getLastDisbursedAt()
                 ))
                 .collect(Collectors.toList());
     }
@@ -711,7 +981,8 @@ public class BudgetService {
                                     e.getAmount(), // Fixed: Initial amount
                                     e.getRemainingAmount(),
                                     e.getConditions(),
-                                    e.getCreatedAt()
+                                    e.getCreatedAt(),
+                                    e.getLastDisbursedAt()
                             ))
                             .collect(Collectors.toList())
             );
@@ -735,8 +1006,152 @@ public class BudgetService {
         logger.info("Mock: Credited revenue account with ₦{} for {}", amount, description);
     }
 
+//    @Transactional
+//    public EnvelopeResponse spendEnvelope(SpendEnvelopeRequest request, String email) {
+//        User user = userService.findByEmail(email);
+//        Envelope envelope = envelopeRepository.findById(request.getEnvelopeId())
+//                .orElseThrow(() -> new IllegalArgumentException("Envelope not found: " + request.getEnvelopeId()));
+//        Budget budget = budgetRepository.findById(envelope.getBudget().getId())
+//                .orElseThrow(() -> new IllegalArgumentException("Budget not found"));
+//
+//        // Verify ownership
+//        if (!budget.getUser().getId().equals(user.getId())) {
+//            throw new IllegalArgumentException("Unauthorized access to envelope");
+//        }
+//
+//        BigDecimal amount = request.getAmount();
+//        if (amount.compareTo(BigDecimal.ZERO) <= 0) {
+//            throw new IllegalArgumentException("Spend amount must be positive");
+//        }
+//
+//        BigDecimal fee = BigDecimal.ZERO;
+//        Map<String, Object> conditions = envelope.getConditions();
+//        String conditionType = (String) conditions.get("type");
+//
+//        // Validate conditions
+//        LocalDateTime now = LocalDateTime.now();
+//        switch (conditionType) {
+//            case "emergency":
+//                Boolean used = (Boolean) conditions.getOrDefault("used", false);
+//                if (used) {
+//                    notificationService.sendNotification(user.getId().toString(), "Emergency funds already used!");
+//                    throw new IllegalArgumentException("Emergency funds can only be used once");
+//                }
+//                if (envelope.getRemainingAmount().compareTo(amount) < 0) {
+//                    String message = String.format("Insufficient emergency funds: ₦%.2f needed, ₦%.2f available", amount, envelope.getRemainingAmount());
+//                    notificationService.sendNotification(user.getId().toString(), message);
+//                    throw new IllegalArgumentException(message);
+//                }
+//                fee = amount.multiply(new BigDecimal("0.05")); // 5% fee
+//                conditions.put("used", true);
+//                break;
+//
+//            case "daily":
+//                BigDecimal dailyLimit = new BigDecimal(conditions.get("limit").toString());
+//                LocalDateTime lastAccessed = envelope.getLastAccessed() != null ? envelope.getLastAccessed() : LocalDateTime.ofEpochSecond(0, 0, ZoneOffset.UTC);
+//                if (lastAccessed.toLocalDate().equals(now.toLocalDate())) {
+//                    notificationService.sendNotification(user.getId().toString(), "Daily limit already used today!");
+//                    throw new IllegalArgumentException("Daily limit already used today");
+//                }
+//                if (amount.compareTo(dailyLimit) > 0) {
+//                    String message = String.format("Amount exceeds daily limit: ₦%.2f requested, ₦%.2f allowed", amount, dailyLimit);
+//                    notificationService.sendNotification(user.getId().toString(), message);
+//                    throw new IllegalArgumentException(message);
+//                }
+//                if (envelope.getRemainingAmount().compareTo(amount) < 0) {
+//                    String message = String.format("Insufficient funds: ₦%.2f needed, ₦%.2f available", amount, envelope.getRemainingAmount());
+//                    notificationService.sendNotification(user.getId().toString(), message);
+//                    throw new IllegalArgumentException(message);
+//                }
+//                break;
+//
+//            case "weekly":
+//                BigDecimal weeklyLimit = new BigDecimal(conditions.get("limit").toString());
+//                LocalDateTime weekStart = now.minusDays(now.getDayOfWeek().getValue() - 1);
+//                if (envelope.getLastAccessed() != null && envelope.getLastAccessed().isAfter(weekStart)) {
+//                    notificationService.sendNotification(user.getId().toString(), "Weekly limit already used this week!");
+//                    throw new IllegalArgumentException("Weekly limit already used this week");
+//                }
+//                if (amount.compareTo(weeklyLimit) > 0) {
+//                    String message = String.format("Amount exceeds weekly limit: ₦%.2f requested, ₦%.2f allowed", amount, weeklyLimit);
+//                    notificationService.sendNotification(user.getId().toString(), message);
+//                    throw new IllegalArgumentException(message);
+//                }
+//                if (envelope.getRemainingAmount().compareTo(amount) < 0) {
+//                    String message = String.format("Insufficient funds: ₦%.2f needed, ₦%.2f available", amount, envelope.getRemainingAmount());
+//                    notificationService.sendNotification(user.getId().toString(), message);
+//                    throw new IllegalArgumentException(message);
+//                }
+//                break;
+//
+//            default:
+//                throw new IllegalArgumentException("Spending not supported for condition: " + conditionType);
+//        }
+//
+//        // Deduct amount + fee
+//        BigDecimal totalDeduction = amount.add(fee);
+//        if (envelope.getRemainingAmount().compareTo(totalDeduction) < 0) {
+//            String message = String.format("Insufficient funds including fee: ₦%.2f needed, ₦%.2f available", totalDeduction, envelope.getRemainingAmount());
+//            notificationService.sendNotification(user.getId().toString(), message);
+//            throw new IllegalArgumentException(message);
+//        }
+//
+//        envelope.setRemainingAmount(envelope.getRemainingAmount().subtract(totalDeduction));
+//        envelope.setLastAccessed(now);
+//        envelope.setConditions(conditions); // Update emergency.used
+//        envelopeRepository.save(envelope);
+//
+//        // Log spend
+//        TransactionLog spendLog = new TransactionLog();
+//        spendLog.setUserId(user.getId());
+//        spendLog.setBudgetId(budget.getId());
+//        spendLog.setSourceEnvelopeId(envelope.getId());
+//        spendLog.setAmount(amount);
+//        spendLog.setFee(fee);
+//        spendLog.setTransactionType("envelope_spend");
+//        spendLog.setCreatedAt(now);
+//        transactionLogRepository.save(spendLog);
+//
+//        // Log fee (if any)
+//        if (fee.compareTo(BigDecimal.ZERO) > 0) {
+//            TransactionLog feeLog = new TransactionLog();
+//            feeLog.setUserId(user.getId());
+//            feeLog.setBudgetId(budget.getId());
+//            feeLog.setSourceEnvelopeId(envelope.getId());
+//            feeLog.setAmount(fee);
+//            feeLog.setFee(BigDecimal.ZERO);
+//            feeLog.setTransactionType("spend_fee");
+//            feeLog.setCreatedAt(now);
+//            transactionLogRepository.save(feeLog);
+//
+//            RevenueLog revenueLog = new RevenueLog();
+//            revenueLog.setUserId(user.getId());
+//            revenueLog.setType("spend_fee");
+//            revenueLog.setAmount(fee);
+//            revenueLog.setDescription("Emergency withdrawal fee for envelope " + envelope.getName());
+//            revenueLog.setCreatedAt(now);
+//            revenueLogRepository.save(revenueLog);
+//        }
+//
+//        // Notify
+//        String message = String.format("₦%.2f withdrawn from %s envelope! %s", amount, envelope.getName(),
+//                fee.compareTo(BigDecimal.ZERO) > 0 ? String.format("₦%.2f fee applied.", fee) : "");
+//        notificationService.sendNotification(user.getId().toString(), message);
+//
+//        return new EnvelopeResponse(
+//                envelope.getId(),
+//                budget.getId(),
+//                envelope.getName(),
+//                envelope.getRemainingAmount(),
+//                envelope.getRemainingAmount(),
+//                envelope.getConditions(),
+//                envelope.getCreatedAt(),
+//                envelope.getLastDisbursedAt()
+//        );
+//    }
+
     @Transactional
-    public EnvelopeResponse spendEnvelope(SpendEnvelopeRequest request, String email) {
+    public Map<String, Object> spendEnvelope(SpendEnvelopeRequest request, String email) {
         User user = userService.findByEmail(email);
         Envelope envelope = envelopeRepository.findById(request.getEnvelopeId())
                 .orElseThrow(() -> new IllegalArgumentException("Envelope not found: " + request.getEnvelopeId()));
@@ -867,17 +1282,18 @@ public class BudgetService {
                 fee.compareTo(BigDecimal.ZERO) > 0 ? String.format("₦%.2f fee applied.", fee) : "");
         notificationService.sendNotification(user.getId().toString(), message);
 
-        return new EnvelopeResponse(
-                envelope.getId(),
-                budget.getId(),
-                envelope.getName(),
-                envelope.getRemainingAmount(),
-                envelope.getRemainingAmount(),
-                envelope.getConditions(),
-                envelope.getCreatedAt()
-        );
+        // Return Map for consistency with BudgetController
+        Map<String, Object> response = new HashMap<>();
+        response.put("id", envelope.getId());
+        response.put("budgetId", budget.getId());
+        response.put("name", envelope.getName());
+        response.put("amount", envelope.getAmount());
+        response.put("remainingAmount", envelope.getRemainingAmount());
+        response.put("conditions", envelope.getConditions());
+        response.put("createdAt", envelope.getCreatedAt());
+        response.put("lastDisbursedAt", envelope.getLastDisbursedAt());
+        return response;
     }
-
     private BudgetResponse mapToResponse(Budget budget) {
         BudgetResponse response = new BudgetResponse(
                 budget.getId(),
@@ -902,7 +1318,8 @@ public class BudgetService {
                         envelope.getAmount(),
                         envelope.getRemainingAmount(),
                         envelope.getConditions(),
-                        envelope.getCreatedAt()
+                        envelope.getCreatedAt(),
+                        envelope.getLastDisbursedAt()
                 ))
                 .collect(Collectors.toList());
         response.setEnvelopes(envelopeResponses);
@@ -954,7 +1371,41 @@ public class BudgetService {
                 envelope.getRemainingAmount(),
                 envelope.getRemainingAmount(),
                 envelope.getConditions(),
-                envelope.getCreatedAt()
+                envelope.getCreatedAt(),
+                envelope.getLastDisbursedAt()
         );
     }
+
+    private void scheduleDynamicTasks(Envelope envelope) {
+        Map<String, Object> conditions = envelope.getConditions();
+        if (conditions != null && "dynamic".equals(conditions.get("type"))) {
+            @SuppressWarnings("unchecked")
+            List<String> days = (List<String>) conditions.get("days");
+            String disbursementTime = (String) conditions.get("disbursementTime");
+            if (days == null || days.isEmpty() || disbursementTime == null) {
+                logger.warn("Invalid conditions for dynamic envelope {}: missing or empty days or disbursementTime", envelope.getId());
+                return;
+            }
+            LocalTime time;
+            try {
+                time = LocalTime.parse(disbursementTime);
+            } catch (DateTimeParseException e) {
+                logger.error("Invalid disbursementTime format for envelope {}: {}", envelope.getId(), disbursementTime);
+                return;
+            }
+            LocalDateTime now = LocalDateTime.now();
+            for (int i = 0; i < 8; i++) {
+                LocalDateTime next = now.plusDays(i);
+                if (days.contains(next.getDayOfWeek().getDisplayName(TextStyle.FULL, Locale.US))) {
+                    ScheduledTask task = new ScheduledTask();
+                    task.setEnvelopeId(envelope.getId());
+                    task.setTaskType("DISBURSEMENT");
+                    task.setTriggerTime(next.toLocalDate().atTime(time));
+                    task.setCreatedAt(now);
+                    scheduledTaskRepository.save(task);
+                }
+            }
+        }
+    }
+
 }

@@ -7,10 +7,7 @@ import com.moniewise.moniewise_backend.dto.response.EnvelopeResponse;
 import com.moniewise.moniewise_backend.entity.*;
 import com.moniewise.moniewise_backend.enums.BudgetStatus;
 import com.moniewise.moniewise_backend.exception.EntityNotFoundException;
-import com.moniewise.moniewise_backend.repository.BudgetRepository;
-import com.moniewise.moniewise_backend.repository.EnvelopeRepository;
-import com.moniewise.moniewise_backend.repository.RevenueLogRepository;
-import com.moniewise.moniewise_backend.repository.TransactionLogRepository;
+import com.moniewise.moniewise_backend.repository.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -42,6 +39,8 @@ public class EnvelopeService {
     private final NotificationService notificationService;
     private final WalletService walletService;
 
+    private final ScheduledTaskRepository scheduledTaskRepository;
+
 
     @Value("${moniewise.revenue.wallet.user-id}")
     private Long revenueWalletUserId;
@@ -53,7 +52,7 @@ public class EnvelopeService {
             UserService userService,
             TransactionLogRepository transactionLogRepository,
             NotificationService notificationService,
-            WalletService walletService) {
+            WalletService walletService, ScheduledTaskRepository scheduledTaskRepository) {
         this.envelopeRepository = envelopeRepository;
         this.budgetRepository = budgetRepository;
         this.revenueLogRepository = revenueLogRepository;
@@ -61,6 +60,7 @@ public class EnvelopeService {
         this.transactionLogRepository = transactionLogRepository;
         this.notificationService = notificationService;
         this.walletService = walletService; // Assign walletService1 as in original
+        this.scheduledTaskRepository = scheduledTaskRepository;
     }
 
     @Autowired
@@ -641,25 +641,47 @@ public class EnvelopeService {
 
 
     // Create envelope
+    @Transactional
     public EnvelopeResponse createEnvelope(EnvelopeRequest request, String email) {
         Budget budget = budgetRepository.findByUserEmailAndStatus(email, BudgetStatus.DRAFT)
                 .orElseThrow(() -> new IllegalArgumentException("No draft budget found for user"));
 
-        // Calculate amount based on percentage
         BigDecimal amount = budget.getTotalAmount()
                 .multiply(request.getPercentage())
-                .divide(BigDecimal.valueOf(100));
+                .divide(BigDecimal.valueOf(100), 2, RoundingMode.HALF_UP);
 
-        Envelope envelope = new Envelope(
-                budget,
-                request.getName(),
-                amount,
-                request.getConditions()
-        );
+        Envelope envelope = new Envelope(budget, request.getName(), amount, request.getConditions());
+        envelope.setRemainingAmount(amount);
+        envelope.setCreatedAt(fetchCurrentDateTimeFromDatabase());
 
         envelopeRepository.save(envelope);
+
+        Map<String, Object> conditions = request.getConditions();
+        if (conditions != null && "dynamic".equals(conditions.get("type"))) {
+            String startDate = (String) conditions.get("startDate");
+            int intervalDays = Integer.parseInt(conditions.get("intervalDays").toString());
+            String disbursementTime = (String) conditions.get("disbursementTime");
+
+            LocalDate dynamicStart = LocalDate.parse(startDate);
+            LocalTime time = LocalTime.parse(disbursementTime);
+            LocalDateTime now = fetchCurrentDateTimeFromDatabase();
+
+            for (int i = 0; i < 30; i++) {
+                LocalDateTime triggerTime = dynamicStart.atTime(time).plusDays(i * intervalDays);
+                if (triggerTime.isAfter(now)) {
+                    ScheduledTask task = new ScheduledTask();
+                    task.setEnvelopeId(envelope.getId());
+                    task.setTaskType("disbursement");
+                    task.setTriggerTime(triggerTime);
+                    task.setCreatedAt(now);
+                    scheduledTaskRepository.save(task);
+                }
+            }
+        }
+
         return toResponse(envelope);
     }
+
 
     // Get envelope
     public EnvelopeResponse getEnvelopeById(Long envelopeId, String email) {
@@ -701,7 +723,8 @@ public class EnvelopeService {
                 envelope.getAmount(),
                 envelope.getRemainingAmount(),
                 envelope.getConditions(),
-                envelope.getCreatedAt()
+                envelope.getCreatedAt(),
+                envelope.getLastDisbursedAt()
         );
     }
 

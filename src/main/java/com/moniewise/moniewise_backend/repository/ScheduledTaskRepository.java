@@ -1,0 +1,24 @@
+package com.moniewise.moniewise_backend.repository;
+
+import com.moniewise.moniewise_backend.entity.ScheduledTask;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.stereotype.Repository;
+
+import java.time.LocalDateTime;
+import java.util.List;
+@Repository
+public interface ScheduledTaskRepository extends JpaRepository<ScheduledTask, Long> {
+    @Query("SELECT st FROM ScheduledTask st WHERE st.triggerTime <= :now")
+    List<ScheduledTask> findTasksDueBy(LocalDateTime now);
+
+    void deleteByEnvelopeId(Long envelopeId);
+
+    @Query("DELETE FROM ScheduledTask st WHERE st.triggerTime < :threshold")
+    void deleteByTriggerTimeBefore(LocalDateTime threshold);
+
+
+
+    // New method to fix the error
+    List<ScheduledTask> findByEnvelopeId(Long envelopeId);
+}

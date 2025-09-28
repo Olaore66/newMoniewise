@@ -41,10 +41,6 @@ public class Budget {
     @Column(name = "total_amount", nullable = false)
     private BigDecimal totalAmount; // Post-fee amount (e.g., ₦499,900)
 
-
-//    @Column(name = "total_amount", nullable = false)
-//    private BigDecimal totalAmount;
-
     @Column(name = "allocated_amount", nullable = false)
     private BigDecimal allocatedAmount;
 

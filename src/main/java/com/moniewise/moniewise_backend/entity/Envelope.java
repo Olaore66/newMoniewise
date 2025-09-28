@@ -55,6 +55,12 @@ public class Envelope {
     @Column(name = "last_accessed")
     private LocalDateTime lastAccessed;
 
+    @Column(name = "last_disbursed_at")
+    private LocalDateTime lastDisbursedAt;
+
+    public LocalDateTime getLastDisbursedAt() { return lastDisbursedAt; }
+    public void setLastDisbursedAt(LocalDateTime lastDisbursedAt) { this.lastDisbursedAt = lastDisbursedAt; }
+
 //    @OneToMany(mappedBy = "envelope", cascade = CascadeType.ALL, orphanRemoval = true)
 //    private List<TransactionLog> transactionLogs = new ArrayList<>();
 

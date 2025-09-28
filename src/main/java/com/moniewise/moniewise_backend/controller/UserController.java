@@ -90,13 +90,6 @@ public class UserController {
         }
     }
 
-
-    // UserController
-//    @PatchMapping("/tnc")
-//    public ResponseEntity<?> acceptTnc(Authentication authentication) {
-//        userService.acceptTnc(authentication.getName());
-//        return ResponseEntity.ok(Map.of("message", "TnC accepted"));
-//    }
     @PatchMapping("/tnc")
     public ResponseEntity<?> acceptTnc(Authentication authentication, @RequestBody TncRequest request) {
         userService.acceptTnc(authentication.getName(), request.isAccepted());

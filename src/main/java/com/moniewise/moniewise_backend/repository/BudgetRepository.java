@@ -19,6 +19,8 @@ public interface BudgetRepository extends JpaRepository<Budget, Long> {
     @Query("SELECT b.id FROM Budget b")
     List<Long> findAllIds();
 
+    List<Budget> findByStatusAndEndDate(BudgetStatus status, LocalDate endDate);
+
     List<Budget> findByStatusAndEndDateLessThanEqual(BudgetStatus status, LocalDate endDate);
 
     Optional<Budget> findByUserEmailAndStatus(String email, BudgetStatus status);
