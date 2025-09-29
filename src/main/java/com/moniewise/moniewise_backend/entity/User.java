@@ -42,6 +42,9 @@ public class User {
     @Column(unique = true)
     private String phone;
 
+    @Column(name = "fcm_token")
+    private String fcmToken; // Added for FCM push notifications
+
     @Column
     private String password; // NULL for OAuth users
 

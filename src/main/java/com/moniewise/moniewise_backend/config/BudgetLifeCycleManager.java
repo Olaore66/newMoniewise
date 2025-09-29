@@ -6,10 +6,7 @@ import com.moniewise.moniewise_backend.entity.ScheduledTask;
 import com.moniewise.moniewise_backend.entity.TransactionLog;
 import com.moniewise.moniewise_backend.entity.User;
 import com.moniewise.moniewise_backend.enums.BudgetStatus;
-import com.moniewise.moniewise_backend.repository.BudgetRepository;
-import com.moniewise.moniewise_backend.repository.EnvelopeRepository;
-import com.moniewise.moniewise_backend.repository.ScheduledTaskRepository;
-import com.moniewise.moniewise_backend.repository.TransactionLogRepository;
+import com.moniewise.moniewise_backend.repository.*;
 import com.moniewise.moniewise_backend.service.NotificationService;
 import com.moniewise.moniewise_backend.service.WalletService;
 import org.slf4j.Logger;
@@ -30,7 +27,6 @@ import java.time.LocalTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeParseException;
 import java.time.format.TextStyle;
-import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -52,6 +48,7 @@ public class BudgetLifeCycleManager {
     private final NotificationService notificationService;
     private final TransactionTemplate transactionTemplate;
     private final JdbcTemplate jdbcTemplate;
+    private final NotificationRepository notificationRepository;
 
     public BudgetLifeCycleManager(
             BudgetRepository budgetRepository,
@@ -61,7 +58,8 @@ public class BudgetLifeCycleManager {
             WalletService walletService,
             NotificationService notificationService,
             TransactionTemplate transactionTemplate,
-            JdbcTemplate jdbcTemplate) {
+            JdbcTemplate jdbcTemplate,
+            NotificationRepository notificationRepository) {
         this.budgetRepository = budgetRepository;
         this.envelopeRepository = envelopeRepository;
         this.scheduledTaskRepository = scheduledTaskRepository;
@@ -70,6 +68,7 @@ public class BudgetLifeCycleManager {
         this.notificationService = notificationService;
         this.transactionTemplate = transactionTemplate;
         this.jdbcTemplate = jdbcTemplate;
+        this.notificationRepository = notificationRepository;
     }
 
     @PostConstruct
@@ -146,7 +145,7 @@ public class BudgetLifeCycleManager {
         List<Budget> budgetsNearingEnd = budgetRepository.findByStatusAndEndDate(BudgetStatus.ACTIVE, threeDaysFromNow);
         for (Budget budget : budgetsNearingEnd) {
             String message = String.format("Budget '%s' will end in 3 days on %s.", budget.getName(), budget.getEndDate());
-            notificationService.sendNotification(budget.getUser().getId().toString(), message);
+            notificationService.sendNotification(budget.getUser().getId().toString(), message, "BUDGET_END");
             logger.debug("Sent 3-day end notification for budget {} to user {}", budget.getId(), budget.getUser().getId());
         }
 
@@ -245,7 +244,7 @@ public class BudgetLifeCycleManager {
                     if ("PRE_DISBURSEMENT_NOTIFICATION".equals(task.getTaskType())) {
                         String message = String.format("Your '%s' envelope disbursement of ₦%s is 15 minutes away!",
                                 envelope.getName(), envelope.getConditions().get("limit"));
-                        notificationService.sendNotification(userId, message);
+                        notificationService.sendNotification(userId, message, "PRE_DISBURSEMENT");
                         logger.debug("Sent 15-minute pre-disbursement notification for envelope {}: {}", envelope.getId(), message);
                         taskIdsToDelete.add(task.getId());
                     } else if ("DISBURSEMENT".equals(task.getTaskType())) {
@@ -318,7 +317,8 @@ public class BudgetLifeCycleManager {
 
         logger.info("Budget {} completed for user {}. Refunded ₦{}", budget.getId(), user.getId(), unusedAmount);
         notificationService.sendNotification(user.getId().toString(),
-                String.format("Budget '%s' has ended. ₦%s returned to your wallet.", budget.getName(), unusedAmount));
+                String.format("Budget '%s' has ended. ₦%s returned to your wallet.", budget.getName(), unusedAmount),
+                "BUDGET_COMPLETED");
     }
 
     /**
@@ -358,6 +358,8 @@ public class BudgetLifeCycleManager {
 
             case "dynamic":
                 // Handled by processScheduledTasks; no action needed here
+                disburseEnvelope(envelope, now, envelopesToUpdate, logsToSave);
+                message = String.format("Your '%s' envelope disbursement of ₦%s is ready!", envelope.getName(), conditions.get("limit"));
                 break;
 
             case "safe_lock":
@@ -397,7 +399,7 @@ public class BudgetLifeCycleManager {
         if (message != null) {
             envelope.setLastAccessed(now);
             envelopesToUpdate.add(envelope);
-            notificationService.sendNotification(userId, message);
+            notificationService.sendNotification(userId, message, "DISBURSEMENT");
             logger.debug("Sent disbursement notification for envelope {}: {}", envelope.getId(), message);
         }
     }
@@ -454,5 +456,12 @@ public class BudgetLifeCycleManager {
     public void cleanOldTasks() {
         LocalDateTime threshold = LocalDateTime.now().minusDays(30);
         scheduledTaskRepository.deleteByTriggerTimeBefore(threshold);
+    }
+
+    @Scheduled(cron = "0 0 3 * * ?")
+    public void cleanOldNotifications() {
+        LocalDateTime threshold = LocalDateTime.now().minusDays(30);
+        notificationRepository.deleteByCreatedAtBefore(threshold);
+        logger.info("Cleaned notifications older than {}", threshold);
     }
 }

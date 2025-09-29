@@ -175,6 +175,8 @@ public class SecurityConfig {
                 .antMatchers("/auth/logout", "/auth/refresh").authenticated()
 //                .antMatchers("/tnc/**").authenticated()
                 .antMatchers("/users/**").authenticated()
+                .antMatchers("/notifications/**").authenticated()
+
 //                .antMatchers("/users/otp/generate", "/users/otp/verify").authenticated()
                 .antMatchers("/budgets/**").authenticated()
                 .antMatchers("/envelopes/**").authenticated()
