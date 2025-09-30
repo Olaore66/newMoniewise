@@ -1,15 +1,15 @@
 package com.moniewise.moniewise_backend.config;
 
-import com.google.auth.oauth2.GoogleCredentials;
 import com.google.firebase.FirebaseApp;
 import com.google.firebase.FirebaseOptions;
 import com.google.firebase.messaging.FirebaseMessaging;
+import com.google.auth.oauth2.GoogleCredentials;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Conditional;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Condition;
 import org.springframework.context.annotation.ConditionContext;
 import org.springframework.core.type.AnnotatedTypeMetadata;
@@ -24,9 +24,13 @@ public class FirebaseConfig {
     @Value("${spring.profiles.active:stub}")
     private String activeProfile;
 
+    @Value("${firebase.enabled:false}")
+    private boolean firebaseEnabled;
+
     @Bean
+    @Conditional(FirebaseEnabledCondition.class)
     public FirebaseApp initializeFirebase() {
-        if ("stub".equals(activeProfile) || "dev".equals(activeProfile)) {
+        if (!firebaseEnabled || "stub".equals(activeProfile) || "dev".equals(activeProfile)) {
             logger.info("[STUB] FirebaseApp not initialized in {} mode", activeProfile);
             return null;
         }
@@ -45,7 +49,7 @@ public class FirebaseConfig {
     }
 
     @Bean
-    @Conditional(FirebaseNotStubCondition.class)
+    @Conditional(FirebaseEnabledCondition.class)
     public FirebaseMessaging firebaseMessaging(FirebaseApp firebaseApp) {
         if (firebaseApp == null) {
             logger.info("[STUB] FirebaseMessaging not initialized due to null FirebaseApp");
@@ -54,11 +58,12 @@ public class FirebaseConfig {
         return FirebaseMessaging.getInstance(firebaseApp);
     }
 
-    static class FirebaseNotStubCondition implements Condition {
+    static class FirebaseEnabledCondition implements Condition {
         @Override
         public boolean matches(ConditionContext context, AnnotatedTypeMetadata metadata) {
             String activeProfile = context.getEnvironment().getProperty("spring.profiles.active", "stub");
-            return !"stub".equals(activeProfile) && !"dev".equals(activeProfile);
+            String firebaseEnabled = context.getEnvironment().getProperty("firebase.enabled", "false");
+            return "true".equals(firebaseEnabled) && !"stub".equals(activeProfile) && !"dev".equals(activeProfile);
         }
     }
 }

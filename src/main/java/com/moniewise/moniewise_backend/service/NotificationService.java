@@ -26,10 +26,10 @@ import java.time.LocalDateTime;
 
 @Service
 public class NotificationService {
-    private final FirebaseMessaging firebaseMessaging; // Nullable in stub mode
+    private final FirebaseMessaging firebaseMessaging;
     private final UserRepository userRepository;
     private final NotificationRepository notificationRepository;
-    private final JavaMailSender mailSender; // Nullable in stub mode
+    private final JavaMailSender mailSender;
     private final Logger logger = LoggerFactory.getLogger(NotificationService.class);
 
     @Value("${spring.profiles.active:stub}")
@@ -62,7 +62,6 @@ public class NotificationService {
 
     @PostConstruct
     public void initTwilio() {
-        // Ensure properties are not null before checking
         if (twilioAccountSid == null || twilioAuthToken == null ||
                 "stub".equals(activeProfile) ||
                 twilioAccountSid.equals("YOUR_TWILIO_ACCOUNT_SID") ||
