@@ -2,6 +2,7 @@ package com.moniewise.moniewise_backend.controller;
 
 import com.moniewise.moniewise_backend.entity.Notification;
 import com.moniewise.moniewise_backend.repository.NotificationRepository;
+import com.moniewise.moniewise_backend.repository.UserRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -16,22 +17,24 @@ import java.util.Optional;
 public class NotificationController {
 
     private final NotificationRepository notificationRepository;
+    private final UserRepository userRepository;
 
     @Autowired
-    public NotificationController(NotificationRepository notificationRepository) {
+    public NotificationController(NotificationRepository notificationRepository, UserRepository userRepository) {
         this.notificationRepository = notificationRepository;
+        this.userRepository = userRepository;
     }
 
     @GetMapping
     public ResponseEntity<List<Notification>> getNotifications(@AuthenticationPrincipal UserDetails userDetails) {
-        Long userId = Long.valueOf(userDetails.getUsername());
+        Long userId = getUserIdFromUserDetails(userDetails);
         List<Notification> notifications = notificationRepository.findByUserIdOrderByCreatedAtDesc(userId);
         return ResponseEntity.ok(notifications);
     }
 
     @GetMapping("/unread")
     public ResponseEntity<List<Notification>> getUnreadNotifications(@AuthenticationPrincipal UserDetails userDetails) {
-        Long userId = Long.valueOf(userDetails.getUsername());
+        Long userId = getUserIdFromUserDetails(userDetails);
         List<Notification> unreadNotifications = notificationRepository.findByUserIdAndIsReadFalseOrderByCreatedAtDesc(userId);
         return ResponseEntity.ok(unreadNotifications);
     }
@@ -40,7 +43,7 @@ public class NotificationController {
     public ResponseEntity<List<Notification>> getNotificationsByType(
             @AuthenticationPrincipal UserDetails userDetails,
             @PathVariable String type) {
-        Long userId = Long.valueOf(userDetails.getUsername());
+        Long userId = getUserIdFromUserDetails(userDetails);
         List<Notification> notifications = notificationRepository.findByUserIdAndTypeOrderByCreatedAtDesc(userId, type);
         return ResponseEntity.ok(notifications);
     }
@@ -49,7 +52,7 @@ public class NotificationController {
     public ResponseEntity<Notification> markNotificationAsRead(
             @AuthenticationPrincipal UserDetails userDetails,
             @PathVariable Long id) {
-        Long userId = Long.valueOf(userDetails.getUsername());
+        Long userId = getUserIdFromUserDetails(userDetails);
         Optional<Notification> notificationOpt = notificationRepository.findByIdAndUserId(id, userId);
         if (notificationOpt.isEmpty()) {
             return ResponseEntity.notFound().build();
@@ -62,10 +65,17 @@ public class NotificationController {
 
     @PutMapping("/read-all")
     public ResponseEntity<Void> markAllNotificationsAsRead(@AuthenticationPrincipal UserDetails userDetails) {
-        Long userId = Long.valueOf(userDetails.getUsername());
+        Long userId = getUserIdFromUserDetails(userDetails);
         List<Notification> unreadNotifications = notificationRepository.findByUserIdAndIsReadFalseOrderByCreatedAtDesc(userId);
         unreadNotifications.forEach(notification -> notification.setRead(true));
         notificationRepository.saveAll(unreadNotifications);
         return ResponseEntity.ok().build();
+    }
+
+    private Long getUserIdFromUserDetails(UserDetails userDetails) {
+        String username = userDetails.getUsername();
+        return userRepository.findByEmail(username)
+                .map(user -> user.getId())
+                .orElseThrow(() -> new IllegalArgumentException("User not found for email: " + username));
     }
 }

@@ -21,4 +21,13 @@ public interface ScheduledTaskRepository extends JpaRepository<ScheduledTask, Lo
 
     // New method to fix the error
     List<ScheduledTask> findByEnvelopeId(Long envelopeId);
+
+    @Query("SELECT st FROM ScheduledTask st " +
+            "WHERE st.envelopeId = :envelopeId " +
+            "AND st.taskType = 'DISBURSEMENT' " +
+            "AND st.triggerTime > :now " +
+            "ORDER BY st.triggerTime ASC")
+    List<ScheduledTask> findNextDisbursementTask(Long envelopeId, LocalDateTime now);
+
+
 }

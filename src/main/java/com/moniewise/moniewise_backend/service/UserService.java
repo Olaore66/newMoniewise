@@ -187,16 +187,7 @@ public class UserService implements UserDetailsService {
         );
     }
 
-    // UserService.java
-//    public void acceptTnc(String email, boolean accepted) {
-//        User user = findByEmail(email);
-//        Map<String, Object> profileData = user.getProfileData();
-//        profileData.put("acceptedTncVersion", "2.0"); // Hardcoded in your code
-//        user.setProfileData(profileData);
-//        // Update the actual column
-//        user.setTncAccepted(accepted);
-//        userRepository.save(user);
-//    }
+
 
     public void acceptTnc(String email, boolean accepted) {
         User user = findByEmail(email);

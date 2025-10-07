@@ -1,5 +1,7 @@
 package com.moniewise.moniewise_backend.entity;
 
+import com.moniewise.moniewise_backend.enums.NotificationType;
+
 import javax.persistence.*;
 import java.time.LocalDateTime;
 
@@ -17,8 +19,12 @@ public class Notification {
     private LocalDateTime createdAt;
     @Column(name = "is_read", nullable = false)
     private boolean isRead = false;
-    @Column(name = "type")
-    private String type;
+
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false)
+    private NotificationType type;
+//    @Column(name = "type")
+//    private String type;
 
     // Getters and setters
     public Long getId() { return id; }
@@ -31,6 +37,10 @@ public class Notification {
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
     public boolean isRead() { return isRead; }
     public void setRead(boolean isRead) { this.isRead = isRead; }
-    public String getType() { return type; }
-    public void setType(String type) { this.type = type; }
+
+    public void setType(NotificationType type) {
+        this.type = type;
+    }
+//    public String getType() { return type; }
+//    public void setType(String type) { this.type = type; }
 }

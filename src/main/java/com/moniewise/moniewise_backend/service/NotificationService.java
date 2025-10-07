@@ -5,6 +5,7 @@ import com.google.firebase.messaging.Message;
 import com.moniewise.moniewise_backend.entity.Notification;
 import com.moniewise.moniewise_backend.entity.User;
 import com.moniewise.moniewise_backend.entity.Wallet;
+import com.moniewise.moniewise_backend.enums.NotificationType;
 import com.moniewise.moniewise_backend.repository.NotificationRepository;
 import com.moniewise.moniewise_backend.repository.UserRepository;
 import org.slf4j.Logger;
@@ -74,10 +75,10 @@ public class NotificationService {
     }
 
     public void sendNotification(String userId, String message) {
-        sendNotification(userId, message, "GENERAL");
+        sendNotification(userId, message, NotificationType.GENERAL);
     }
 
-    public void sendNotification(String userId, String message, String type) {
+    public void sendNotification(String userId, String message, NotificationType type) {
         try {
             Notification notification = new Notification();
             notification.setUserId(Long.valueOf(userId));
@@ -100,7 +101,7 @@ public class NotificationService {
                                 .setTitle("Moniewise")
                                 .setBody(message)
                                 .build())
-                        .putData("type", type)
+                        .putData("type", type.toString())
                         .build();
                 String response = firebaseMessaging.send(fcmMessage);
                 logger.info("Sent FCM notification to user {}: {}", userId, response);
@@ -178,6 +179,6 @@ public class NotificationService {
         }
         String message = String.format("Welcome to Moniewise! Your wallet (Acc/%s, Bank/%s) is ready.",
                 wallet.getAccountNumber(), wallet.getBankName());
-        sendNotification(user.getId().toString(), message, "WELCOME");
+        sendNotification(user.getId().toString(), message, NotificationType.WELCOME);
     }
 }

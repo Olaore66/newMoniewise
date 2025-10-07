@@ -58,6 +58,23 @@ public class Envelope {
     @Column(name = "last_disbursed_at")
     private LocalDateTime lastDisbursedAt;
 
+    @Column(name = "next_disbursement_at")
+    private LocalDateTime nextDisbursementAt;
+
+    @Column(name = "matured_at")
+    private LocalDateTime maturedAt;
+
+    @Column(name = "has_matured")
+    private Boolean hasMatured;
+
+    // 🆕 New fields for lifecycle tracking
+//    private LocalDateTime nextDisbursementAt;   // Calculated by BLCM
+//    private LocalDateTime maturedAt;             // When it becomes available
+//    private boolean hasMatured;
+    public LocalDateTime getNextDisbursementAt() { return nextDisbursementAt; }
+    public void setNextDisbursementAt(LocalDateTime nextDisbursementAt) { this.nextDisbursementAt = nextDisbursementAt; }
+
+
     public LocalDateTime getLastDisbursedAt() { return lastDisbursedAt; }
     public void setLastDisbursedAt(LocalDateTime lastDisbursedAt) { this.lastDisbursedAt = lastDisbursedAt; }
 
