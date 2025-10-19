@@ -9,6 +9,7 @@ import com.moniewise.moniewise_backend.dto.response.BudgetResponse;
 import com.moniewise.moniewise_backend.dto.response.EnvelopeResponse;
 import com.moniewise.moniewise_backend.entity.*;
 import com.moniewise.moniewise_backend.enums.BudgetStatus;
+import com.moniewise.moniewise_backend.enums.NotificationType;
 import com.moniewise.moniewise_backend.repository.*;
 
 import org.slf4j.Logger;
@@ -112,7 +113,7 @@ public class BudgetService {
         // Validate duration
         if (durationDays <= 0 || durationDays > 90) {
             notificationService.sendNotification(user.getId().toString(),
-                    "Budget creation failed: Duration cannot exceed 90 days.");
+                    "Budget creation failed: Duration cannot exceed 90 days.", NotificationType.BUDGET_CREATION);
             throw new IllegalArgumentException("Budget duration must be between 1 and 90 days");
         }
 
@@ -162,7 +163,7 @@ public class BudgetService {
                     "Transaction failed: Your wallet has insufficient funds. At least ₦%.2f is required for allocation, but your current balance is ₦%.2f. Please fund your wallet.",
                     allocationSum, walletBalance
             );
-            notificationService.sendNotification(user.getId().toString(), message);
+            notificationService.sendNotification(user.getId().toString(), message, NotificationType.BUDGET_CREATION);
             throw new IllegalArgumentException(message);
         }
 
@@ -245,7 +246,7 @@ public class BudgetService {
                 "Budget '%s' created! ₦%.2f allocated (₦%.2f fee applied, ₦%.2f refunded to wallet).",
                 savedBudget.getName(), allocationSum, fee, unallocatedAmount
         );
-        notificationService.sendNotification(user.getId().toString(), message);
+        notificationService.sendNotification(user.getId().toString(), message, NotificationType.BUDGET_CREATION);
 
         return new BudgetResponse(
                 savedBudget.getId(),
@@ -668,12 +669,12 @@ public class BudgetService {
             case "emergency":
                 Boolean used = (Boolean) conditions.getOrDefault("used", false);
                 if (used) {
-                    notificationService.sendNotification(user.getId().toString(), "Emergency funds already used!");
+                    notificationService.sendNotification(user.getId().toString(), "Emergency funds already used!", NotificationType.GENERAL);
                     throw new IllegalArgumentException("Emergency funds can only be used once");
                 }
                 if (envelope.getRemainingAmount().compareTo(amount) < 0) {
                     String message = String.format("Insufficient emergency funds: ₦%.2f needed, ₦%.2f available", amount, envelope.getRemainingAmount());
-                    notificationService.sendNotification(user.getId().toString(), message);
+                    notificationService.sendNotification(user.getId().toString(), message, NotificationType.INSUFFICIENT_BALANCE);
                     throw new IllegalArgumentException(message);
                 }
                 fee = amount.multiply(new BigDecimal("0.05")); // 5% fee
@@ -684,17 +685,17 @@ public class BudgetService {
                 BigDecimal dailyLimit = new BigDecimal(conditions.get("limit").toString());
                 LocalDateTime lastAccessed = envelope.getLastAccessed() != null ? envelope.getLastAccessed() : LocalDateTime.ofEpochSecond(0, 0, ZoneOffset.UTC);
                 if (lastAccessed.toLocalDate().equals(now.toLocalDate())) {
-                    notificationService.sendNotification(user.getId().toString(), "Daily limit already used today!");
+                    notificationService.sendNotification(user.getId().toString(), "Daily limit already used today!", NotificationType.GENERAL);
                     throw new IllegalArgumentException("Daily limit already used today");
                 }
                 if (amount.compareTo(dailyLimit) > 0) {
                     String message = String.format("Amount exceeds daily limit: ₦%.2f requested, ₦%.2f allowed", amount, dailyLimit);
-                    notificationService.sendNotification(user.getId().toString(), message);
+                    notificationService.sendNotification(user.getId().toString(), message, NotificationType.GENERAL);
                     throw new IllegalArgumentException(message);
                 }
                 if (envelope.getRemainingAmount().compareTo(amount) < 0) {
                     String message = String.format("Insufficient funds: ₦%.2f needed, ₦%.2f available", amount, envelope.getRemainingAmount());
-                    notificationService.sendNotification(user.getId().toString(), message);
+                    notificationService.sendNotification(user.getId().toString(), message, NotificationType.INSUFFICIENT_BALANCE);
                     throw new IllegalArgumentException(message);
                 }
                 break;
@@ -703,17 +704,17 @@ public class BudgetService {
                 BigDecimal weeklyLimit = new BigDecimal(conditions.get("limit").toString());
                 LocalDateTime weekStart = now.minusDays(now.getDayOfWeek().getValue() - 1);
                 if (envelope.getLastAccessed() != null && envelope.getLastAccessed().isAfter(weekStart)) {
-                    notificationService.sendNotification(user.getId().toString(), "Weekly limit already used this week!");
+                    notificationService.sendNotification(user.getId().toString(), "Weekly limit already used this week!", NotificationType.GENERAL);
                     throw new IllegalArgumentException("Weekly limit already used this week");
                 }
                 if (amount.compareTo(weeklyLimit) > 0) {
                     String message = String.format("Amount exceeds weekly limit: ₦%.2f requested, ₦%.2f allowed", amount, weeklyLimit);
-                    notificationService.sendNotification(user.getId().toString(), message);
+                    notificationService.sendNotification(user.getId().toString(), message, NotificationType.GENERAL);
                     throw new IllegalArgumentException(message);
                 }
                 if (envelope.getRemainingAmount().compareTo(amount) < 0) {
                     String message = String.format("Insufficient funds: ₦%.2f needed, ₦%.2f available", amount, envelope.getRemainingAmount());
-                    notificationService.sendNotification(user.getId().toString(), message);
+                    notificationService.sendNotification(user.getId().toString(), message, NotificationType.GENERAL);
                     throw new IllegalArgumentException(message);
                 }
                 break;
@@ -726,7 +727,7 @@ public class BudgetService {
         BigDecimal totalDeduction = amount.add(fee);
         if (envelope.getRemainingAmount().compareTo(totalDeduction) < 0) {
             String message = String.format("Insufficient funds including fee: ₦%.2f needed, ₦%.2f available", totalDeduction, envelope.getRemainingAmount());
-            notificationService.sendNotification(user.getId().toString(), message);
+            notificationService.sendNotification(user.getId().toString(), message, NotificationType.GENERAL);
             throw new IllegalArgumentException(message);
         }
 
@@ -770,7 +771,7 @@ public class BudgetService {
         // Notify
         String message = String.format("₦%.2f withdrawn from %s envelope! %s", amount, envelope.getName(),
                 fee.compareTo(BigDecimal.ZERO) > 0 ? String.format("₦%.2f fee applied.", fee) : "");
-        notificationService.sendNotification(user.getId().toString(), message);
+        notificationService.sendNotification(user.getId().toString(), message, NotificationType.GENERAL);
 
         // Return Map for consistency with BudgetController
         Map<String, Object> response = new HashMap<>();

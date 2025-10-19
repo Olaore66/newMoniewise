@@ -44,6 +44,9 @@ public class Budget {
     @Column(name = "allocated_amount", nullable = false)
     private BigDecimal allocatedAmount;
 
+    @Column(name = "remaining_amount", nullable = false)
+    private BigDecimal remainingAmount;
+
     @Column(name = "duration_days", nullable = false)
     private Integer durationDays;
 

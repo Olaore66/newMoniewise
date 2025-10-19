@@ -74,11 +74,7 @@ public class NotificationService {
         }
     }
 
-    public void sendNotification(String userId, String message) {
-        sendNotification(userId, message, NotificationType.GENERAL);
-    }
-
-    public void sendNotification(String userId, String message, NotificationType type) {
+    public void sendNotification(String userId, String message, NotificationType type, Long budgetId, Long envelopeId, String actionType, String redirectUrl) {
         try {
             Notification notification = new Notification();
             notification.setUserId(Long.valueOf(userId));
@@ -86,6 +82,10 @@ public class NotificationService {
             notification.setType(type);
             notification.setCreatedAt(LocalDateTime.now());
             notification.setRead(false);
+            notification.setBudgetId(budgetId);
+            notification.setEnvelopeId(envelopeId);
+            notification.setActionType(actionType);
+            notification.setRedirectUrl(redirectUrl);
             notificationRepository.save(notification);
             logger.info("Saved notification for user {}: type={}, message={}", userId, type, message);
 
@@ -102,16 +102,23 @@ public class NotificationService {
                                 .setBody(message)
                                 .build())
                         .putData("type", type.toString())
+                        .putData("budgetId", budgetId != null ? budgetId.toString() : "")
+                        .putData("envelopeId", envelopeId != null ? envelopeId.toString() : "")
+                        .putData("actionType", actionType != null ? actionType : "")
+                        .putData("redirectUrl", redirectUrl != null ? redirectUrl : "")
                         .build();
                 String response = firebaseMessaging.send(fcmMessage);
                 logger.info("Sent FCM notification to user {}: {}", userId, response);
             } else {
-                logger.info("[STUB] FCM notification for user {}: type={}, message={}",
-                        userId, type, message);
+                logger.info("[STUB] FCM notification for user {}: type={}, message={}", userId, type, message);
             }
         } catch (Exception e) {
             logger.error("Failed to send notification to user {}: {}", userId, e.getMessage());
         }
+    }
+
+    public void sendNotification(String userId, String message, NotificationType type) {
+        sendNotification(userId, message, type, null, null, null, null);
     }
 
     public void sendWelcomeEmail(String email, String accountNumber, String bankName, BigDecimal balance) {

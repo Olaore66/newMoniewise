@@ -3,6 +3,7 @@ package com.moniewise.moniewise_backend.service;
 import com.moniewise.moniewise_backend.entity.TransactionLog;
 import com.moniewise.moniewise_backend.entity.User;
 import com.moniewise.moniewise_backend.entity.Wallet;
+import com.moniewise.moniewise_backend.enums.NotificationType;
 import com.moniewise.moniewise_backend.enums.WalletStatus;
 import com.moniewise.moniewise_backend.repository.TransactionLogRepository;
 import com.moniewise.moniewise_backend.repository.UserRepository;
@@ -77,7 +78,7 @@ public class WalletService {
         if (wallet.getBalance().compareTo(amount) < 0) {
             String message = String.format("Insufficient wallet balance: ₦%.2f needed, ₦%.2f available",
                     amount, wallet.getBalance());
-            notificationService.sendNotification(userId.toString(), message);
+            notificationService.sendNotification(userId.toString(), message, NotificationType.INSUFFICIENT_BALANCE);
             throw new IllegalArgumentException(message);
         }
 
@@ -94,7 +95,7 @@ public class WalletService {
         transactionLogRepository.save(transactionLog);
 
         String message = String.format("₦%.2f deducted from wallet for budget creation.", amount);
-        notificationService.sendNotification(userId.toString(), message);
+        notificationService.sendNotification(userId.toString(), message, NotificationType.BUDGET_CREATION_FEE);
 
         logger.info("Deducted ₦{} from wallet for user {}", amount, userId);
     }
@@ -205,7 +206,7 @@ public class WalletService {
         String message = notificationMessage != null
                 ? notificationMessage
                 : String.format("Account funded with ₦%.2f!", amount);
-        notificationService.sendNotification(userId.toString(), message);
+        notificationService.sendNotification(userId.toString(), message, NotificationType.WALLET_FUNDED);
         logger.info("Funded wallet with ₦{} for user {}", amount, userId);
     }
 

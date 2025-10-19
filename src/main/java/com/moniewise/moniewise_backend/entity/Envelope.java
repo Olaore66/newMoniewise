@@ -3,10 +3,12 @@ package com.moniewise.moniewise_backend.entity;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import com.vladmihalcea.hibernate.type.json.JsonBinaryType;
-import lombok.Getter;
-import lombok.Setter;
+
 
 import lombok.AllArgsConstructor;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import lombok.Setter;
 import org.hibernate.annotations.Type;
 import org.hibernate.annotations.TypeDef;
 
@@ -21,8 +23,11 @@ import java.util.Map;
 @Entity
 @Getter
 @Setter
-//@NoArgsConstructor
 @AllArgsConstructor
+
+
+//@NoArgsConstructor
+
 
 @TypeDef(name = "jsonb", typeClass = JsonBinaryType.class)
 @Table(name = "envelopes")
@@ -67,6 +72,9 @@ public class Envelope {
     @Column(name = "has_matured")
     private Boolean hasMatured;
 
+    @Column(name = "total_remaining_amount", nullable = false)
+    private BigDecimal totalRemainingAmount; // Tracks total unspent balance
+
     // 🆕 New fields for lifecycle tracking
 //    private LocalDateTime nextDisbursementAt;   // Calculated by BLCM
 //    private LocalDateTime maturedAt;             // When it becomes available
@@ -85,12 +93,25 @@ public class Envelope {
 
     // Constructors
     public Envelope() {}
+    // Update constructor
     public Envelope(Budget budget, String name, BigDecimal amount, Map<String, Object> conditions) {
         this.budget = budget;
         this.name = name;
         this.amount = amount;
-        this.remainingAmount = amount;
-        this.conditions = conditions; // ✅ Directly assign the Map
+        this.totalRemainingAmount = amount;
+        this.remainingAmount = getPeriodLimit(conditions); // Initialize to period limit
+        this.conditions = conditions;
+    }
+
+    // Helper to get period limit
+    private BigDecimal getPeriodLimit(Map<String, Object> conditions) {
+        if (conditions != null && conditions.containsKey("limit")) {
+            Object limitObj = conditions.get("limit");
+            if (limitObj instanceof Number) {
+                return new BigDecimal(((Number) limitObj).doubleValue());
+            }
+        }
+        return BigDecimal.ZERO;
     }
 
     // Getters and Setters
