@@ -52,7 +52,7 @@ public class User {
     @Column(name = "tnc_accepted")
     private Boolean tncAccepted;
 
-    @Convert(disableConversion = true) // Disable auto-converter
+//    @Convert(disableConversion = true) // Disable auto-converter
     @Type(type = "jsonb")
     @Column(columnDefinition = "jsonb")
     private Map<String, Object> profileData;
