@@ -1,11 +1,7 @@
 package com.moniewise.moniewise_backend.entity;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-
 import com.vladmihalcea.hibernate.type.json.JsonBinaryType;
-
-
-import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
@@ -14,21 +10,13 @@ import org.hibernate.annotations.TypeDef;
 
 import javax.persistence.*;
 import java.math.BigDecimal;
-
 import java.time.LocalDateTime;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Map;
 
 @Entity
 @Getter
 @Setter
-@AllArgsConstructor
-
-
-//@NoArgsConstructor
-
-
+@NoArgsConstructor
 @TypeDef(name = "jsonb", typeClass = JsonBinaryType.class)
 @Table(name = "envelopes")
 public class Envelope {
@@ -47,15 +35,17 @@ public class Envelope {
     private BigDecimal amount;
 
     @Column(name = "remaining_amount", nullable = false)
-    private BigDecimal remainingAmount;
+    private BigDecimal remainingAmount; // Tracks current period's remaining limit
 
-    @Convert(disableConversion = true) // Disable auto-converter
+    @Column(name = "total_remaining_amount", nullable = false)
+    private BigDecimal totalRemainingAmount; // Tracks total unspent balance
+
     @Type(type = "jsonb")
     @Column(columnDefinition = "jsonb")
     private Map<String, Object> conditions;
 
     @Column(name = "created_at")
-    private LocalDateTime createdAt = LocalDateTime.now();
+    private LocalDateTime createdAt;
 
     @Column(name = "last_accessed")
     private LocalDateTime lastAccessed;
@@ -72,69 +62,23 @@ public class Envelope {
     @Column(name = "has_matured")
     private Boolean hasMatured;
 
-    @Column(name = "total_remaining_amount", nullable = false)
-    private BigDecimal totalRemainingAmount; // Tracks total unspent balance
-
-    // 🆕 New fields for lifecycle tracking
-//    private LocalDateTime nextDisbursementAt;   // Calculated by BLCM
-//    private LocalDateTime maturedAt;             // When it becomes available
-//    private boolean hasMatured;
-    public LocalDateTime getNextDisbursementAt() { return nextDisbursementAt; }
-    public void setNextDisbursementAt(LocalDateTime nextDisbursementAt) { this.nextDisbursementAt = nextDisbursementAt; }
-
-
-    public LocalDateTime getLastDisbursedAt() { return lastDisbursedAt; }
-    public void setLastDisbursedAt(LocalDateTime lastDisbursedAt) { this.lastDisbursedAt = lastDisbursedAt; }
-
-//    @OneToMany(mappedBy = "envelope", cascade = CascadeType.ALL, orphanRemoval = true)
-//    private List<TransactionLog> transactionLogs = new ArrayList<>();
-
     private static final ObjectMapper mapper = new ObjectMapper();
 
-    // Constructors
-    public Envelope() {}
-    // Update constructor
     public Envelope(Budget budget, String name, BigDecimal amount, Map<String, Object> conditions) {
         this.budget = budget;
         this.name = name;
         this.amount = amount;
         this.totalRemainingAmount = amount;
-        this.remainingAmount = getPeriodLimit(conditions); // Initialize to period limit
+        this.remainingAmount = getPeriodLimit(conditions);
         this.conditions = conditions;
+        this.createdAt = LocalDateTime.now();
+        this.hasMatured = false;
     }
 
-    // Helper to get period limit
     private BigDecimal getPeriodLimit(Map<String, Object> conditions) {
-        if (conditions != null && conditions.containsKey("limit")) {
-            Object limitObj = conditions.get("limit");
-            if (limitObj instanceof Number) {
-                return new BigDecimal(((Number) limitObj).doubleValue());
-            }
+        if (conditions != null && conditions.containsKey("limit") && conditions.get("limit") instanceof Number) {
+            return new BigDecimal(((Number) conditions.get("limit")).doubleValue());
         }
         return BigDecimal.ZERO;
     }
-
-    // Getters and Setters
-    public Long getId() { return id; }
-    public void setId(Long id) { this.id = id; }
-    public Budget getBudget() { return budget; }
-    public void setBudget(Budget budget) { this.budget = budget; }
-    public String getName() { return name; }
-    public void setName(String name) { this.name = name; }
-    public BigDecimal getAmount() { return amount; }
-    public void setAmount(BigDecimal amount) { this.amount = amount; }
-    public BigDecimal getRemainingAmount() { return remainingAmount; }
-    public void setRemainingAmount(BigDecimal remainingAmount) { this.remainingAmount = remainingAmount; }
-
-    public Map<String, Object> getConditions() {
-        return conditions;
-    }
-
-    public void setConditions(Map<String, Object> conditions) {
-        this.conditions = conditions;
-    }
-
-    public LocalDateTime getCreatedAt() { return createdAt; }
-    public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
-
 }

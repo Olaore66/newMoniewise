@@ -5,6 +5,7 @@ import com.moniewise.moniewise_backend.enums.BudgetStatus;
 import com.moniewise.moniewise_backend.enums.NotificationType;
 import com.moniewise.moniewise_backend.enums.TransactionType;
 import com.moniewise.moniewise_backend.repository.*;
+import com.moniewise.moniewise_backend.service.EnvelopeService;
 import com.moniewise.moniewise_backend.service.NotificationService;
 import com.moniewise.moniewise_backend.service.WalletService;
 import org.slf4j.Logger;
@@ -24,6 +25,7 @@ import java.time.format.DateTimeParseException;
 import java.time.format.TextStyle;
 import java.time.temporal.TemporalAdjusters;
 import java.util.*;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 @Service
@@ -43,7 +45,7 @@ public class BudgetLifeCycleManager {
     private final JdbcTemplate jdbcTemplate;
     private final NotificationRepository notificationRepository;
     private final PendingDisbursementRepository pendingDisbursementRepository;
-
+    private final EnvelopeService envelopeService;
 
     private final long GRACE_PERIOD_MINUTES = 10; // can be dynamic per envelope
 
@@ -57,8 +59,9 @@ public class BudgetLifeCycleManager {
             TransactionTemplate transactionTemplate,
             JdbcTemplate jdbcTemplate,
             NotificationRepository notificationRepository,
-            PendingDisbursementRepository pendingDisbursementRepository
-          ) {
+            PendingDisbursementRepository pendingDisbursementRepository,
+            EnvelopeService envelopeService
+    ) {
         this.budgetRepository = budgetRepository;
         this.envelopeRepository = envelopeRepository;
         this.scheduledTaskRepository = scheduledTaskRepository;
@@ -69,6 +72,7 @@ public class BudgetLifeCycleManager {
         this.jdbcTemplate = jdbcTemplate;
         this.notificationRepository = notificationRepository;
         this.pendingDisbursementRepository = pendingDisbursementRepository;
+        this.envelopeService = envelopeService;
     }
 
     @PostConstruct
@@ -77,8 +81,14 @@ public class BudgetLifeCycleManager {
     }
 
     private LocalDateTime fetchCurrentDateTimeFromDatabase() {
-        String sql = "SELECT CURRENT_TIMESTAMP AT TIME ZONE 'Africa/Lagos'";
-        return jdbcTemplate.queryForObject(sql, LocalDateTime.class);
+        // FIX: Added try-catch for robust error handling
+        try {
+            String sql = "SELECT CURRENT_TIMESTAMP AT TIME ZONE 'Africa/Lagos'";
+            return jdbcTemplate.queryForObject(sql, LocalDateTime.class);
+        } catch (Exception e) {
+            logger.error("Failed to fetch timestamp from database, using system time: {}", e.getMessage());
+            return LocalDateTime.now(ZoneId.of("Africa/Lagos"));
+        }
     }
 
     public void scheduleDynamicTasks(Envelope envelope) {
@@ -113,19 +123,37 @@ public class BudgetLifeCycleManager {
                     logger.warn("Invalid conditions for dynamic envelope {}: missing or empty days", envelope.getId());
                     return;
                 }
+                // FIX: Validate days against DayOfWeek
+                try {
+                    days.forEach(day -> DayOfWeek.valueOf(day.toUpperCase()));
+                } catch (IllegalArgumentException e) {
+                    logger.error("Invalid day in conditions for envelope {}: {}", envelope.getId(), days, e);
+                    return;
+                }
 
+                // FIX: Use batch save for tasks
+                List<ScheduledTask> tasksToSave = new ArrayList<>();
                 LocalDateTime current = now.isBefore(budgetStart) ? budgetStart : now;
                 while (current.isBefore(budgetEnd)) {
                     String currentDay = current.getDayOfWeek().getDisplayName(TextStyle.FULL, Locale.ENGLISH);
                     if (days.contains(currentDay)) {
                         LocalDateTime triggerTime = current.with(time);
                         if (triggerTime.isAfter(now) && triggerTime.isBefore(budgetEnd)) {
+                            // FIX: Schedule LIMIT_RESET task
+                            ScheduledTask resetTask = new ScheduledTask();
+                            resetTask.setEnvelopeId(envelope.getId());
+                            resetTask.setTaskType("LIMIT_RESET");
+                            resetTask.setTriggerTime(triggerTime);
+                            resetTask.setCreatedAt(now);
+                            tasksToSave.add(resetTask);
+                            logger.info("Scheduled LIMIT_RESET task for envelope {} at {}", envelope.getId(), triggerTime);
+
                             ScheduledTask task = new ScheduledTask();
                             task.setEnvelopeId(envelope.getId());
                             task.setTaskType("DISBURSEMENT");
                             task.setTriggerTime(triggerTime);
                             task.setCreatedAt(now);
-                            scheduledTaskRepository.save(task);
+                            tasksToSave.add(task);
                             logger.info("Scheduled DISBURSEMENT task for envelope {} at {}", envelope.getId(), triggerTime);
 
                             ScheduledTask preTask15 = new ScheduledTask();
@@ -133,7 +161,7 @@ public class BudgetLifeCycleManager {
                             preTask15.setTaskType("PRE_DISBURSEMENT_NOTIFICATION_15MIN");
                             preTask15.setTriggerTime(triggerTime.minusMinutes(15));
                             preTask15.setCreatedAt(now);
-                            scheduledTaskRepository.save(preTask15);
+                            tasksToSave.add(preTask15);
                             logger.info("Scheduled PRE_DISBURSEMENT_NOTIFICATION_15MIN task for envelope {} at {}",
                                     envelope.getId(), triggerTime.minusMinutes(15));
 
@@ -142,12 +170,16 @@ public class BudgetLifeCycleManager {
                             preTask5.setTaskType("PRE_DISBURSEMENT_NOTIFICATION_5MIN");
                             preTask5.setTriggerTime(triggerTime.minusMinutes(5));
                             preTask5.setCreatedAt(now);
-                            scheduledTaskRepository.save(preTask5);
+                            tasksToSave.add(preTask5);
                             logger.info("Scheduled PRE_DISBURSEMENT_NOTIFICATION_5MIN task for envelope {} at {}",
                                     envelope.getId(), triggerTime.minusMinutes(5));
                         }
                     }
                     current = current.plusDays(1);
+                }
+                // FIX: Batch save tasks
+                if (!tasksToSave.isEmpty()) {
+                    scheduledTaskRepository.saveAll(tasksToSave);
                 }
             }
         } else if ("daily".equals(type)) {
@@ -169,6 +201,8 @@ public class BudgetLifeCycleManager {
                 current = current.plusDays(1);
             }
 
+            // FIX: Batch save tasks
+            List<ScheduledTask> tasksToSave = new ArrayList<>();
             while (current.isBefore(budgetEnd)) {
                 if (current.isAfter(now) && current.isBefore(budgetEnd)) {
                     ScheduledTask task = new ScheduledTask();
@@ -176,16 +210,15 @@ public class BudgetLifeCycleManager {
                     task.setTaskType("DISBURSEMENT");
                     task.setTriggerTime(current);
                     task.setCreatedAt(now);
-                    scheduledTaskRepository.save(task);
-                    logger.info("Scheduled DISBURSEMENT task for daily envelope {} at {}",
-                            envelope.getId(), current);
+                    tasksToSave.add(task);
+                    logger.info("Scheduled DISBURSEMENT task for daily envelope {} at {}", envelope.getId(), current);
 
                     ScheduledTask preTask15 = new ScheduledTask();
                     preTask15.setEnvelopeId(envelope.getId());
                     preTask15.setTaskType("PRE_DISBURSEMENT_NOTIFICATION_15MIN");
                     preTask15.setTriggerTime(current.minusMinutes(15));
                     preTask15.setCreatedAt(now);
-                    scheduledTaskRepository.save(preTask15);
+                    tasksToSave.add(preTask15);
                     logger.info("Scheduled PRE_DISBURSEMENT_NOTIFICATION_15MIN task for daily envelope {} at {}",
                             envelope.getId(), current.minusMinutes(15));
 
@@ -194,32 +227,36 @@ public class BudgetLifeCycleManager {
                     preTask5.setTaskType("PRE_DISBURSEMENT_NOTIFICATION_5MIN");
                     preTask5.setTriggerTime(current.minusMinutes(5));
                     preTask5.setCreatedAt(now);
-                    scheduledTaskRepository.save(preTask5);
+                    tasksToSave.add(preTask5);
                     logger.info("Scheduled PRE_DISBURSEMENT_NOTIFICATION_5MIN task for daily envelope {} at {}",
                             envelope.getId(), current.minusMinutes(5));
                 }
                 current = current.plusDays(1);
+            }
+            if (!tasksToSave.isEmpty()) {
+                scheduledTaskRepository.saveAll(tasksToSave);
             }
         } else if ("weekly".equals(type)) {
             LocalDateTime triggerTime = now.toLocalDate()
                     .with(TemporalAdjusters.next(DayOfWeek.MONDAY))
                     .atStartOfDay();
             if (triggerTime.isBefore(envelope.getBudget().getEndDate().atTime(23, 59, 59))) {
+                // FIX: Batch save tasks
+                List<ScheduledTask> tasksToSave = new ArrayList<>();
                 ScheduledTask task = new ScheduledTask();
                 task.setEnvelopeId(envelope.getId());
                 task.setTaskType("DISBURSEMENT");
                 task.setTriggerTime(triggerTime);
                 task.setCreatedAt(now);
-                scheduledTaskRepository.save(task);
-                logger.info("Scheduled DISBURSEMENT task for weekly envelope {} at {}",
-                        envelope.getId(), triggerTime);
+                tasksToSave.add(task);
+                logger.info("Scheduled DISBURSEMENT task for weekly envelope {} at {}", envelope.getId(), triggerTime);
 
                 ScheduledTask preTask15 = new ScheduledTask();
                 preTask15.setEnvelopeId(envelope.getId());
                 preTask15.setTaskType("PRE_DISBURSEMENT_NOTIFICATION_15MIN");
                 preTask15.setTriggerTime(triggerTime.minusMinutes(15));
                 preTask15.setCreatedAt(now);
-                scheduledTaskRepository.save(preTask15);
+                tasksToSave.add(preTask15);
                 logger.info("Scheduled PRE_DISBURSEMENT_NOTIFICATION_15MIN task for weekly envelope {} at {}",
                         envelope.getId(), triggerTime.minusMinutes(15));
 
@@ -228,9 +265,10 @@ public class BudgetLifeCycleManager {
                 preTask5.setTaskType("PRE_DISBURSEMENT_NOTIFICATION_5MIN");
                 preTask5.setTriggerTime(triggerTime.minusMinutes(5));
                 preTask5.setCreatedAt(now);
-                scheduledTaskRepository.save(preTask5);
+                tasksToSave.add(preTask5);
                 logger.info("Scheduled PRE_DISBURSEMENT_NOTIFICATION_5MIN task for weekly envelope {} at {}",
                         envelope.getId(), triggerTime.minusMinutes(5));
+                scheduledTaskRepository.saveAll(tasksToSave);
             }
         }
 
@@ -238,11 +276,13 @@ public class BudgetLifeCycleManager {
         envelope.setNextDisbursementAt(calculateNextDisbursementTime(envelope));
         envelopeRepository.save(envelope);
     }
+
     @Transactional(timeout = 120)
-    @Scheduled(cron = "0 */5 * * * ?")
+    @Scheduled(cron = "0 */5 * * * ?", zone = "Africa/Lagos") // FIX: Added zone for consistency
     public void processBudgets() {
         long startTime = System.nanoTime();
-        LocalDate today = LocalDate.now();
+        // FIX: Use Africa/Lagos for LocalDate
+        LocalDate today = LocalDate.now(ZoneId.of("Africa/Lagos"));
         LocalDate threeDaysFromNow = today.plusDays(3);
         LocalDateTime now = fetchCurrentDateTimeFromDatabase();
         logger.debug("Starting budget lifecycle processing at {}", now);
@@ -251,7 +291,15 @@ public class BudgetLifeCycleManager {
         List<Budget> budgetsNearingEnd = budgetRepository.findByStatusAndEndDate(BudgetStatus.ACTIVE, threeDaysFromNow);
         for (Budget budget : budgetsNearingEnd) {
             String message = String.format("Budget '%s' will end in 3 days on %s.", budget.getName(), budget.getEndDate());
-            notificationService.sendNotification(budget.getUser().getId().toString(), message, NotificationType.BUDGET_END);
+            notificationService.sendNotification(
+                    budget.getUser().getId().toString(),
+                    message,
+                    NotificationType.BUDGET_END,
+                    budget.getId(),
+                    null,
+                    "VIEW_BUDGET",
+                    String.format("/budgets/%d", budget.getId())
+            );
             logger.debug("Sent 3-day end notification for budget {} to user {}", budget.getId(), budget.getUser().getId());
         }
 
@@ -274,20 +322,18 @@ public class BudgetLifeCycleManager {
         }
 
         // Step 3: Process non-time-critical envelopes (daily, weekly, safe/strict lock)
-        try (Stream<Envelope> envelopeStream = envelopeRepository.findAllByStream()) {
+        // FIX: Optimize query to filter envelopes
+        try (Stream<Envelope> envelopeStream = envelopeRepository.findByBudgetStatusAndTypeNot(BudgetStatus.ACTIVE, "dynamic")) {
             envelopeStream.forEach(envelope -> {
-                Map<String, Object> conditions = envelope.getConditions();
-                if (conditions != null && conditions.containsKey("type") && !"dynamic".equals(conditions.get("type"))) {
-                    transactionTemplate.execute(status -> {
-                        try {
-                            processEnvelopeDisbursement(envelope, today, envelopesToUpdate, logsToSave);
-                            return null;
-                        } catch (Exception e) {
-                            logger.error("Failed to process envelope {}: {}", envelope.getId(), e.getMessage());
-                            throw new RuntimeException("Envelope disbursement processing failed", e);
-                        }
-                    });
-                }
+                transactionTemplate.execute(status -> {
+                    try {
+                        processEnvelopeDisbursement(envelope, today, envelopesToUpdate, logsToSave);
+                        return null;
+                    } catch (Exception e) {
+                        logger.error("Failed to process envelope {}: {}", envelope.getId(), e.getMessage());
+                        throw new RuntimeException("Envelope disbursement processing failed", e);
+                    }
+                });
             });
         }
 
@@ -317,7 +363,7 @@ public class BudgetLifeCycleManager {
     }
 
     @Transactional(timeout = 120)
-    @Scheduled(cron = "0 * * * * ?")
+    @Scheduled(cron = "0 * * * * ?", zone = "Africa/Lagos") // FIX: Added zone for consistency
     public void processScheduledTasks() {
         long startTime = System.nanoTime();
         LocalDateTime now = fetchCurrentDateTimeFromDatabase();
@@ -332,42 +378,10 @@ public class BudgetLifeCycleManager {
             logger.info("Processing {} tasks in batch using parallel stream", dueTasks.size());
             dueTasks.parallelStream().forEach(task -> transactionTemplate.execute(status -> {
                 try {
-                    Envelope envelope = envelopeRepository.findById(task.getEnvelopeId()).orElse(null);
-                    if (envelope == null) {
-                        logger.warn("Envelope {} not found for task {}", task.getEnvelopeId(), task.getId());
-                        taskIdsToDelete.add(task.getId());
-                        return null;
-                    }
-                    Budget budget = envelope.getBudget();
-                    if (budget == null || budget.getStatus() != BudgetStatus.ACTIVE) {
-                        logger.warn("Skipping task {} for envelope {}: budget is not active",
-                                task.getId(), task.getEnvelopeId());
-                        taskIdsToDelete.add(task.getId());
-                        return null;
-                    }
-                    String userId = budget.getUser().getId().toString();
-                    if ("PRE_DISBURSEMENT_NOTIFICATION_15MIN".equals(task.getTaskType())) {
-                        String message = String.format("Your '%s' envelope disbursement of ₦%s is 15 minutes away!",
-                                envelope.getName(), envelope.getConditions().get("limit"));
-                        notificationService.sendNotification(userId, message, NotificationType.PRE_DISBURSEMENT);
-                        logger.debug("Sent 15-minute pre-disbursement notification for envelope {}: {}",
-                                envelope.getId(), message);
-                        taskIdsToDelete.add(task.getId());
-                    } else if ("PRE_DISBURSEMENT_NOTIFICATION_5MIN".equals(task.getTaskType())) {
-                        String message = String.format("Your '%s' envelope disbursement of ₦%s is 5 minutes away!",
-                                envelope.getName(), envelope.getConditions().get("limit"));
-                        notificationService.sendNotification(userId, message, NotificationType.PRE_DISBURSEMENT);
-                        logger.debug("Sent 5-minute pre-disbursement notification for envelope {}: {}",
-                                envelope.getId(), message);
-                        taskIdsToDelete.add(task.getId());
-                    } else if ("DISBURSEMENT".equals(task.getTaskType())) {
-                        processEnvelopeDisbursement(envelope, now.toLocalDate(), envelopesToUpdate, logsToSave);
-                        taskIdsToDelete.add(task.getId());
-                    }
+                    processTask(task, now, envelopesToUpdate, logsToSave, taskIdsToDelete);
                     return null;
                 } catch (Exception e) {
-                    logger.error("Failed to process task {} for envelope {}: {}",
-                            task.getId(), task.getEnvelopeId(), e.getMessage());
+                    logger.error("Failed to process task {} for envelope {}: {}", task.getId(), task.getEnvelopeId(), e.getMessage());
                     throw new RuntimeException("Task processing failed", e);
                 }
             }));
@@ -376,42 +390,10 @@ public class BudgetLifeCycleManager {
             for (ScheduledTask task : dueTasks) {
                 transactionTemplate.execute(status -> {
                     try {
-                        Envelope envelope = envelopeRepository.findById(task.getEnvelopeId()).orElse(null);
-                        if (envelope == null) {
-                            logger.warn("Envelope {} not found for task {}", task.getEnvelopeId(), task.getId());
-                            taskIdsToDelete.add(task.getId());
-                            return null;
-                        }
-                        Budget budget = envelope.getBudget();
-                        if (budget == null || budget.getStatus() != BudgetStatus.ACTIVE) {
-                            logger.warn("Skipping task {} for envelope {}: budget is not active",
-                                    task.getId(), task.getEnvelopeId());
-                            taskIdsToDelete.add(task.getId());
-                            return null;
-                        }
-                        String userId = budget.getUser().getId().toString();
-                        if ("PRE_DISBURSEMENT_NOTIFICATION_15MIN".equals(task.getTaskType())) {
-                            String message = String.format("Your '%s' envelope disbursement of ₦%s is 15 minutes away!",
-                                    envelope.getName(), envelope.getConditions().get("limit"));
-                            notificationService.sendNotification(userId, message, NotificationType.PRE_DISBURSEMENT);
-                            logger.debug("Sent 15-minute pre-disbursement notification for envelope {}: {}",
-                                    envelope.getId(), message);
-                            taskIdsToDelete.add(task.getId());
-                        } else if ("PRE_DISBURSEMENT_NOTIFICATION_5MIN".equals(task.getTaskType())) {
-                            String message = String.format("Your '%s' envelope disbursement of ₦%s is 5 minutes away!",
-                                    envelope.getName(), envelope.getConditions().get("limit"));
-                            notificationService.sendNotification(userId, message, NotificationType.PRE_DISBURSEMENT);
-                            logger.debug("Sent 5-minute pre-disbursement notification for envelope {}: {}",
-                                    envelope.getId(), message);
-                            taskIdsToDelete.add(task.getId());
-                        } else if ("DISBURSEMENT".equals(task.getTaskType())) {
-                            processEnvelopeDisbursement(envelope, now.toLocalDate(), envelopesToUpdate, logsToSave);
-                            taskIdsToDelete.add(task.getId());
-                        }
+                        processTask(task, now, envelopesToUpdate, logsToSave, taskIdsToDelete);
                         return null;
                     } catch (Exception e) {
-                        logger.error("Failed to process task {} for envelope {}: {}",
-                                task.getId(), task.getEnvelopeId(), e.getMessage());
+                        logger.error("Failed to process task {} for envelope {}: {}", task.getId(), task.getEnvelopeId(), e.getMessage());
                         throw new RuntimeException("Task processing failed", e);
                     }
                 });
@@ -431,6 +413,63 @@ public class BudgetLifeCycleManager {
         long durationMs = (System.nanoTime() - startTime) / 1_000_000;
         logger.debug("Scheduled tasks processing completed in {}ms. Processed {} tasks", durationMs, dueTasks.size());
     }
+
+    // FIX: New method to process tasks, including LIMIT_RESET
+    private void processTask(ScheduledTask task, LocalDateTime now, List<Envelope> envelopesToUpdate,
+                             List<TransactionLog> logsToSave, List<Long> taskIdsToDelete) {
+        Envelope envelope = envelopeRepository.findById(task.getEnvelopeId()).orElse(null);
+        if (envelope == null) {
+            logger.warn("Envelope {} not found for task {}", task.getEnvelopeId(), task.getId());
+            taskIdsToDelete.add(task.getId());
+            return;
+        }
+        Budget budget = envelope.getBudget();
+        if (budget == null || budget.getStatus() != BudgetStatus.ACTIVE) {
+            logger.warn("Skipping task {} for envelope {}: budget is not active", task.getId(), task.getEnvelopeId());
+            taskIdsToDelete.add(task.getId());
+            return;
+        }
+        String userId = budget.getUser().getId().toString();
+        switch (task.getTaskType()) {
+            case "LIMIT_RESET":
+                envelopeService.resetEnvelopeLimits(envelope);
+                logger.info("Reset limit for envelope {} at {}", envelope.getId(), now);
+                taskIdsToDelete.add(task.getId());
+                break;
+            case "PRE_DISBURSEMENT_NOTIFICATION_15MIN":
+                // FIX: Include totalRemainingAmount in notification
+                String message15 = String.format("Your '%s' envelope disbursement of ₦%s is 15 minutes away! (Total remaining: ₦%.2f)",
+                        envelope.getName(), envelope.getConditions().get("limit"), envelope.getTotalRemainingAmount());
+                notificationService.sendNotification(
+                        userId, message15, NotificationType.PRE_DISBURSEMENT,
+                        budget.getId(), envelope.getId(), "VIEW_ENVELOPE",
+                        String.format("/budgets/%d/envelopes/%d", budget.getId(), envelope.getId())
+                );
+                logger.debug("Sent 15-minute pre-disbursement notification for envelope {}: {}", envelope.getId(), message15);
+                taskIdsToDelete.add(task.getId());
+                break;
+            case "PRE_DISBURSEMENT_NOTIFICATION_5MIN":
+                // FIX: Include totalRemainingAmount in notification
+                String message5 = String.format("Your '%s' envelope disbursement of ₦%s is 5 minutes away! (Total remaining: ₦%.2f)",
+                        envelope.getName(), envelope.getConditions().get("limit"), envelope.getTotalRemainingAmount());
+                notificationService.sendNotification(
+                        userId, message5, NotificationType.PRE_DISBURSEMENT,
+                        budget.getId(), envelope.getId(), "VIEW_ENVELOPE",
+                        String.format("/budgets/%d/envelopes/%d", budget.getId(), envelope.getId())
+                );
+                logger.debug("Sent 5-minute pre-disbursement notification for envelope {}: {}", envelope.getId(), message5);
+                taskIdsToDelete.add(task.getId());
+                break;
+            case "DISBURSEMENT":
+                processEnvelopeDisbursement(envelope, now.toLocalDate(), envelopesToUpdate, logsToSave);
+                taskIdsToDelete.add(task.getId());
+                break;
+            default:
+                logger.warn("Unknown task type {} for envelope {}", task.getTaskType(), envelope.getId());
+                taskIdsToDelete.add(task.getId());
+        }
+    }
+
     private void processBudgetExpiry(Budget budget, List<Budget> budgetsToUpdate, List<Envelope> envelopesToUpdate,
                                      List<TransactionLog> logsToSave) {
         User user = budget.getUser();
@@ -438,18 +477,16 @@ public class BudgetLifeCycleManager {
         BigDecimal totalRefunded = BigDecimal.ZERO;
         List<Envelope> envelopes = envelopeRepository.findByBudgetId(budget.getId());
 
-        // Refund unused funds from each envelope to user's wallet
+        // FIX: Use totalRemainingAmount for refunds and reset both amounts
         for (Envelope envelope : envelopes) {
-            BigDecimal remainingAmount = envelope.getRemainingAmount();
+            BigDecimal remainingAmount = envelope.getTotalRemainingAmount(); // Changed to totalRemainingAmount
             if (remainingAmount.compareTo(BigDecimal.ZERO) > 0) {
-                // Refund to wallet
                 walletService.fundWallet(
                         user.getId(),
                         remainingAmount,
                         String.format("Refund of unused amount from envelope %s of budget %s", envelope.getName(), budget.getName())
                 );
 
-                // Log refund transaction
                 TransactionLog refundLog = new TransactionLog();
                 refundLog.setUserId(user.getId());
                 refundLog.setBudgetId(budget.getId());
@@ -459,10 +496,11 @@ public class BudgetLifeCycleManager {
                 refundLog.setCreatedAt(now);
                 logsToSave.add(refundLog);
 
-                // Notify user per envelope
+                // FIX: Include totalRemainingAmount in notification
                 notificationService.sendNotification(
                         user.getId().toString(),
-                        String.format("Your budget '%s' has ended. ₦%.2f from '%s' has been refunded to your wallet.", budget.getName(), remainingAmount, envelope.getName()),
+                        String.format("Your budget '%s' has ended. ₦%.2f from '%s' (total remaining: ₦%.2f) has been refunded to your wallet.",
+                                budget.getName(), remainingAmount, envelope.getName(), remainingAmount),
                         NotificationType.BUDGET_COMPLETED,
                         budget.getId(),
                         envelope.getId(),
@@ -470,20 +508,19 @@ public class BudgetLifeCycleManager {
                         String.format("/budgets/%d/envelopes/%d", budget.getId(), envelope.getId())
                 );
 
-                // Reset envelope balance and clear tasks
                 envelope.setRemainingAmount(BigDecimal.ZERO);
+                envelope.setTotalRemainingAmount(BigDecimal.ZERO); // Reset both
                 envelopesToUpdate.add(envelope);
                 scheduledTaskRepository.deleteByEnvelopeId(envelope.getId());
                 totalRefunded = totalRefunded.add(remainingAmount);
             }
         }
 
-        // Mark budget as completed
         budget.setStatus(BudgetStatus.COMPLETED);
         budget.setRemainingAmount(BigDecimal.ZERO);
         budgetsToUpdate.add(budget);
 
-        // Notify user of total refund
+        // FIX: Include totalRemainingAmount in notification
         if (totalRefunded.compareTo(BigDecimal.ZERO) > 0) {
             notificationService.sendNotification(
                     user.getId().toString(),
@@ -508,9 +545,9 @@ public class BudgetLifeCycleManager {
 
         logger.info("Budget {} completed for user {}. Refunded ₦{}", budget.getId(), user.getId(), totalRefunded);
     }
+
     private void processEnvelopeDisbursement(Envelope envelope, LocalDate today, List<Envelope> envelopesToUpdate,
                                              List<TransactionLog> logsToSave) {
-        // Unchanged from provided code
         Map<String, Object> conditions = envelope.getConditions();
         if (conditions == null || !conditions.containsKey("type")) {
             logger.warn("Invalid conditions for envelope {}", envelope.getId());
@@ -518,6 +555,11 @@ public class BudgetLifeCycleManager {
         }
 
         String type = (String) conditions.get("type");
+        // FIX: Skip dynamic envelopes to prevent duplicate disbursements
+        if ("dynamic".equals(type)) {
+            return; // Handled by processScheduledTasks
+        }
+
         LocalDateTime lastDisbursedAt = envelope.getLastDisbursedAt() != null
                 ? envelope.getLastDisbursedAt()
                 : LocalDateTime.ofEpochSecond(0, 0, ZoneOffset.UTC);
@@ -528,23 +570,25 @@ public class BudgetLifeCycleManager {
         switch (type) {
             case "daily":
                 if (!lastDisbursedAt.toLocalDate().equals(today)) {
+                    // FIX: Reset via service before disbursement
+                    envelopeService.resetEnvelopeLimits(envelope);
                     disburseEnvelope(envelope, now, envelopesToUpdate, logsToSave);
-                    message = String.format("Your daily allowance of ₦%s for '%s' is ready!", conditions.get("limit"), envelope.getName());
+                    // FIX: Include totalRemainingAmount in notification
+                    message = String.format("Your daily allowance of ₦%s for '%s' (total remaining: ₦%.2f) is ready!",
+                            conditions.get("limit"), envelope.getName(), envelope.getTotalRemainingAmount());
                 }
                 break;
 
             case "weekly":
                 LocalDate weekStart = today.minusDays(today.getDayOfWeek().getValue() - 1);
                 if (lastDisbursedAt.isBefore(weekStart.atStartOfDay())) {
+                    // FIX: Reset via service before disbursement
+                    envelopeService.resetEnvelopeLimits(envelope);
                     disburseEnvelope(envelope, now, envelopesToUpdate, logsToSave);
-                    message = String.format("Your weekly funds of ₦%s for '%s' are ready!", conditions.get("limit"), envelope.getName());
+                    // FIX: Include totalRemainingAmount in notification
+                    message = String.format("Your weekly funds of ₦%s for '%s' (total remaining: ₦%.2f) are ready!",
+                            conditions.get("limit"), envelope.getName(), envelope.getTotalRemainingAmount());
                 }
-                break;
-
-            case "dynamic":
-                // Handled by processScheduledTasks; no action needed here
-                disburseEnvelope(envelope, now, envelopesToUpdate, logsToSave);
-                message = String.format("Your '%s' envelope disbursement of ₦%s is ready!", envelope.getName(), conditions.get("limit"));
                 break;
 
             case "safe_lock":
@@ -564,11 +608,15 @@ public class BudgetLifeCycleManager {
                             .divide(BigDecimal.valueOf(100), 2, RoundingMode.HALF_UP);
 
                     // Credit interest to envelope
+                    // FIX: Update totalRemainingAmount as well
                     envelope.setRemainingAmount(envelope.getRemainingAmount().add(interest));
+                    envelope.setTotalRemainingAmount(envelope.getTotalRemainingAmount().add(interest));
                     envelopesToUpdate.add(envelope);
 
                     disburseEnvelope(envelope, now, envelopesToUpdate, logsToSave);
-                    message = String.format("Lock lifted on '%s'! ₦%.2f interest added and ₦%s disbursed.", envelope.getName(), interest, conditions.get("limit"));
+                    // FIX: Include totalRemainingAmount in notification
+                    message = String.format("Lock lifted on '%s'! ₦%.2f interest added and ₦%s disbursed (total remaining: ₦%.2f).",
+                            envelope.getName(), interest, conditions.get("limit"), envelope.getTotalRemainingAmount());
                 }
                 break;
 
@@ -584,7 +632,11 @@ public class BudgetLifeCycleManager {
         if (message != null) {
             envelope.setLastAccessed(now);
             envelopesToUpdate.add(envelope);
-            notificationService.sendNotification(userId, message, NotificationType.DISBURSEMENT);
+            notificationService.sendNotification(
+                    userId, message, NotificationType.DISBURSEMENT,
+                    envelope.getBudget().getId(), envelope.getId(), "VIEW_ENVELOPE",
+                    String.format("/budgets/%d/envelopes/%d", envelope.getBudget().getId(), envelope.getId())
+            );
             logger.debug("Sent disbursement notification for envelope {}: {}", envelope.getId(), message);
         }
     }
@@ -603,24 +655,30 @@ public class BudgetLifeCycleManager {
             return;
         }
 
-        // Check if period has reset (e.g., new day for daily envelopes)
-        LocalDateTime periodStart = getPeriodStart(conditions, now, envelope.getLastDisbursedAt());
-        if (envelope.getLastDisbursedAt() == null || !isSamePeriod(conditions, now, envelope.getLastDisbursedAt())) {
-            envelope.setRemainingAmount(limit); // Reset to full limit for new period
-        }
-
+        // FIX: Remove embedded reset logic; rely on LIMIT_RESET tasks or resetDaily/WeeklyEnvelopes
         BigDecimal amountToDisburse = envelope.getRemainingAmount().min(limit);
         if (amountToDisburse.compareTo(BigDecimal.ZERO) > 0 && envelope.getTotalRemainingAmount().compareTo(BigDecimal.ZERO) > 0) {
             amountToDisburse = amountToDisburse.min(envelope.getTotalRemainingAmount()); // Cap at total remaining
-            walletService.fundWallet(envelope.getBudget().getUser().getId(), amountToDisburse,
-                    "Disbursement from envelope: " + envelope.getName());
+            // FIX: Use PendingDisbursement instead of direct wallet funding
+            long gracePeriodMinutes = conditions.containsKey("gracePeriodMinutes")
+                    ? Long.parseLong(conditions.get("gracePeriodMinutes").toString())
+                    : GRACE_PERIOD_MINUTES;
+
+            PendingDisbursement pd = new PendingDisbursement();
+            pd.setEnvelopeId(envelope.getId());
+            pd.setUserId(envelope.getBudget().getUser().getId());
+            pd.setEnvelopeName(envelope.getName());
+            pd.setAmount(amountToDisburse);
+            pd.setMaturedAt(now);
+            pd.setExpiresAt(now.plusMinutes(gracePeriodMinutes));
+            pendingDisbursementRepository.save(pd);
 
             TransactionLog disbursementLog = new TransactionLog();
             disbursementLog.setUserId(envelope.getBudget().getUser().getId());
             disbursementLog.setBudgetId(envelope.getBudget().getId());
             disbursementLog.setSourceEnvelopeId(envelope.getId());
             disbursementLog.setAmount(amountToDisburse);
-            disbursementLog.setTransactionType("envelope_disbursement");
+            disbursementLog.setTransactionType("envelope_disbursement_pending"); // FIX: Updated transaction type
             disbursementLog.setCreatedAt(now);
             logsToSave.add(disbursementLog);
 
@@ -638,7 +696,22 @@ public class BudgetLifeCycleManager {
             budget.setRemainingAmount(newBudgetRemaining);
             budgetRepository.save(budget);
 
-            logger.info("Disbursed ₦{} from envelope {} to user {}", amountToDisburse, envelope.getId(),
+            // FIX: Include totalRemainingAmount in notification
+            notificationService.sendNotification(
+                    pd.getUserId().toString(),
+                    String.format("₦%.2f from your '%s' envelope (Budget: %s, total remaining: ₦%.2f) is available. Claim within %d minutes!",
+                            amountToDisburse, envelope.getName(), budget.getName(), envelope.getTotalRemainingAmount(), gracePeriodMinutes),
+                    NotificationType.DISBURSEMENT,
+                    budget.getId(),
+                    envelope.getId(),
+                    "CLAIM_DISBURSEMENT",
+                    String.format("/disbursements/%d", pd.getId())
+            );
+
+            pd.setNotifiedUser(true);
+            pendingDisbursementRepository.save(pd);
+
+            logger.info("Created pending disbursement of ₦{} from envelope {} to user {}", amountToDisburse, envelope.getId(),
                     envelope.getBudget().getUser().getId());
         }
     }
@@ -655,7 +728,13 @@ public class BudgetLifeCycleManager {
                 break;
             case "dynamic":
                 String disbursementTimeStr = (String) conditions.getOrDefault("disbursementTime", "08:00");
-                LocalTime disbursementTime = LocalTime.parse(disbursementTimeStr);
+                LocalTime disbursementTime;
+                try {
+                    disbursementTime = LocalTime.parse(disbursementTimeStr);
+                } catch (DateTimeParseException e) {
+                    logger.error("Invalid disbursementTime for envelope: {}, defaulting to 08:00", conditions, e);
+                    disbursementTime = LocalTime.of(8, 0);
+                }
                 periodStart = now.toLocalDate().atTime(disbursementTime);
                 break;
             default:
@@ -676,7 +755,13 @@ public class BudgetLifeCycleManager {
                 return weekStartNow.equals(weekStartLast);
             case "dynamic":
                 String disbursementTimeStr = (String) conditions.getOrDefault("disbursementTime", "08:00");
-                LocalTime disbursementTime = LocalTime.parse(disbursementTimeStr);
+                LocalTime disbursementTime;
+                try {
+                    disbursementTime = LocalTime.parse(disbursementTimeStr);
+                } catch (DateTimeParseException e) {
+                    logger.error("Invalid disbursementTime for envelope: {}, defaulting to 08:00", conditions, e);
+                    disbursementTime = LocalTime.of(8, 0);
+                }
                 LocalDateTime periodStartNow = now.toLocalDate().atTime(disbursementTime);
                 LocalDateTime periodStartLast = lastDisbursedAt.toLocalDate().atTime(disbursementTime);
                 return now.isAfter(periodStartNow) && now.isBefore(periodStartNow.plusHours(1)) &&
@@ -685,17 +770,17 @@ public class BudgetLifeCycleManager {
                 return true;
         }
     }
-    @Scheduled(cron = "0 0 2 * * ?")
+
+    @Scheduled(cron = "0 0 2 * * ?", zone = "Africa/Lagos") // FIX: Added zone for consistency
     public void cleanOldTasks() {
-        // Unchanged from provided code
-        LocalDateTime threshold = LocalDateTime.now().minusDays(30);
+        LocalDateTime threshold = fetchCurrentDateTimeFromDatabase().minusDays(30);
         scheduledTaskRepository.deleteByTriggerTimeBefore(threshold);
+        logger.info("Cleaned tasks older than {}", threshold);
     }
 
-    @Scheduled(cron = "0 0 3 * * ?")
+    @Scheduled(cron = "0 0 3 * * ?", zone = "Africa/Lagos") // FIX: Added zone for consistency
     public void cleanOldNotifications() {
-        // Unchanged from provided code
-        LocalDateTime threshold = LocalDateTime.now().minusDays(30);
+        LocalDateTime threshold = fetchCurrentDateTimeFromDatabase().minusDays(30);
         notificationRepository.deleteByCreatedAtBefore(threshold);
         logger.info("Cleaned notifications older than {}", threshold);
     }
@@ -703,15 +788,12 @@ public class BudgetLifeCycleManager {
     @Scheduled(fixedRate = 60000)
     @Transactional
     public void checkAndHandleMaturedEnvelopes() {
-        // Unchanged from provided code
-        LocalDateTime now = LocalDateTime.now();
-        List<Envelope> envelopes = envelopeRepository.findAll();
+        // FIX: Use fetchCurrentDateTimeFromDatabase and optimized query
+        LocalDateTime now = fetchCurrentDateTimeFromDatabase();
+        List<Envelope> envelopes = envelopeRepository.findByNextDisbursementAtBefore(now);
 
         for (Envelope envelope : envelopes) {
-            LocalDateTime next = envelope.getNextDisbursementAt();
-            if (next != null && !now.isBefore(next)) {
-                handleMaturedEnvelope(envelope);
-            }
+            handleMaturedEnvelope(envelope);
         }
     }
 
@@ -732,12 +814,13 @@ public class BudgetLifeCycleManager {
 
         long gracePeriodMinutes = conditions.containsKey("gracePeriodMinutes")
                 ? Long.parseLong(conditions.get("gracePeriodMinutes").toString())
-                : 10;
+                : GRACE_PERIOD_MINUTES;
         LocalDateTime now = fetchCurrentDateTimeFromDatabase();
 
+        // FIX: Reset via service before disbursement
+        envelopeService.resetEnvelopeLimits(envelope);
         envelope.setLastDisbursedAt(now);
         envelope.setNextDisbursementAt(calculateNextDisbursementTime(envelope));
-        envelope.setRemainingAmount(limit); // Reset for new period
         envelope.setTotalRemainingAmount(envelope.getTotalRemainingAmount().subtract(amountToDisburse));
         envelope.setHasMatured(true);
         envelopeRepository.save(envelope);
@@ -760,10 +843,11 @@ public class BudgetLifeCycleManager {
         pd.setExpiresAt(now.plusMinutes(gracePeriodMinutes));
         pendingDisbursementRepository.save(pd);
 
+        // FIX: Include totalRemainingAmount in notification
         notificationService.sendNotification(
                 pd.getUserId().toString(),
-                String.format("₦%.2f from your '%s' envelope (Budget: %s) is available. You have %d minutes to claim before refund.",
-                        amountToDisburse, envelope.getName(), envelope.getBudget().getName(), gracePeriodMinutes),
+                String.format("₦%.2f from your '%s' envelope (Budget: %s, total remaining: ₦%.2f) is available. You have %d minutes to claim before refund.",
+                        amountToDisburse, envelope.getName(), envelope.getBudget().getName(), envelope.getTotalRemainingAmount(), gracePeriodMinutes),
                 NotificationType.DISBURSEMENT,
                 envelope.getBudget().getId(),
                 envelope.getId(),
@@ -774,6 +858,7 @@ public class BudgetLifeCycleManager {
         pd.setNotifiedUser(true);
         pendingDisbursementRepository.save(pd);
     }
+
     public void remindUsersOfExpiringFunds() {
         LocalDateTime now = fetchCurrentDateTimeFromDatabase();
         LocalDateTime inFifteenMinutes = now.plusMinutes(15);
@@ -782,9 +867,15 @@ public class BudgetLifeCycleManager {
         // 15-minute reminders
         List<PendingDisbursement> disbursements15Min = pendingDisbursementRepository.findByExpiresAtBeforeAndNotifiedUserFalse(inFifteenMinutes);
         for (PendingDisbursement pd : disbursements15Min) {
+            // FIX: Include totalRemainingAmount from envelope
+            Envelope envelope = envelopeRepository.findById(pd.getEnvelopeId()).orElse(null);
+            if (envelope == null) {
+                logger.warn("Envelope {} not found for disbursement {}", pd.getEnvelopeId(), pd.getId());
+                continue;
+            }
             String message = String.format(
-                    "Your ₦%.2f disbursement from '%s' expires in 15 minutes. Claim it now!",
-                    pd.getAmount(), pd.getEnvelopeName());
+                    "Your ₦%.2f disbursement from '%s' (total remaining: ₦%.2f) expires in 15 minutes. Claim it now!",
+                    pd.getAmount(), pd.getEnvelopeName(), envelope.getTotalRemainingAmount());
             notificationService.sendNotification(
                     pd.getUserId().toString(),
                     message,
@@ -802,9 +893,15 @@ public class BudgetLifeCycleManager {
         // 5-minute reminders
         List<PendingDisbursement> disbursements5Min = pendingDisbursementRepository.findByExpiresAtBeforeAndNotifiedUserTrue(inFiveMinutes);
         for (PendingDisbursement pd : disbursements5Min) {
+            // FIX: Include totalRemainingAmount from envelope
+            Envelope envelope = envelopeRepository.findById(pd.getEnvelopeId()).orElse(null);
+            if (envelope == null) {
+                logger.warn("Envelope {} not found for disbursement {}", pd.getEnvelopeId(), pd.getId());
+                continue;
+            }
             String message = String.format(
-                    "Your ₦%.2f disbursement from '%s' expires in 5 minutes. Claim it now!",
-                    pd.getAmount(), pd.getEnvelopeName());
+                    "Your ₦%.2f disbursement from '%s' (total remaining: ₦%.2f) expires in 5 minutes. Claim it now!",
+                    pd.getAmount(), pd.getEnvelopeName(), envelope.getTotalRemainingAmount());
             notificationService.sendNotification(
                     pd.getUserId().toString(),
                     message,
@@ -817,6 +914,7 @@ public class BudgetLifeCycleManager {
             logger.debug("Sent 5-minute grace period notification for disbursement {}", pd.getId());
         }
     }
+
     @Scheduled(fixedRate = 60000)
     @Transactional
     public void refundExpiredPendingDisbursements() {
@@ -830,7 +928,8 @@ public class BudgetLifeCycleManager {
             try {
                 Envelope envelope = envelopeRepository.findById(pd.getEnvelopeId())
                         .orElseThrow(() -> new IllegalStateException("Envelope not found: " + pd.getEnvelopeId()));
-                envelope.setRemainingAmount(envelope.getRemainingAmount().add(pd.getAmount()));
+                // FIX: Update totalRemainingAmount instead of remainingAmount
+                envelope.setTotalRemainingAmount(envelope.getTotalRemainingAmount().add(pd.getAmount()));
                 envelopesToUpdate.add(envelope);
 
                 TransactionLog refundLog = new TransactionLog();
@@ -843,10 +942,11 @@ public class BudgetLifeCycleManager {
                 refundLog.setCreatedAt(now);
                 logsToSave.add(refundLog);
 
+                // FIX: Include totalRemainingAmount in notification
                 notificationService.sendNotification(
                         pd.getUserId().toString(),
-                        String.format("Your ₦%.2f disbursement from '%s' (Budget: %s) has expired and been refunded to your envelope.",
-                                pd.getAmount(), pd.getEnvelopeName(), envelope.getBudget().getName()),
+                        String.format("Your ₦%.2f disbursement from '%s' (Budget: %s, total remaining: ₦%.2f) has expired and been refunded to your envelope.",
+                                pd.getAmount(), pd.getEnvelopeName(), envelope.getBudget().getName(), envelope.getTotalRemainingAmount()),
                         NotificationType.EXPIRED_DISBURSEMENT,
                         envelope.getBudget().getId(),
                         envelope.getId(),
@@ -866,7 +966,6 @@ public class BudgetLifeCycleManager {
     }
 
     public LocalDateTime calculateNextDisbursementTime(Envelope envelope) {
-        // Unchanged from provided code
         Map<String, Object> conditions = envelope.getConditions();
         if (conditions == null || !conditions.containsKey("type")) return null;
 
@@ -880,10 +979,10 @@ public class BudgetLifeCycleManager {
 
         switch (type) {
             case "daily":
-                String disbursementTime = (String) conditions.get("disbursementTime");
+                String disbursementTime = (String) conditions.getOrDefault("disbursementTime", "00:00");
                 LocalTime time;
                 try {
-                    time = disbursementTime != null ? LocalTime.parse(disbursementTime) : LocalTime.of(0, 0);
+                    time = LocalTime.parse(disbursementTime);
                 } catch (DateTimeParseException e) {
                     logger.error("Invalid disbursementTime format for daily envelope {}: {}, defaulting to 00:00", envelope.getId(), disbursementTime, e);
                     time = LocalTime.of(0, 0);
@@ -903,7 +1002,7 @@ public class BudgetLifeCycleManager {
             case "weekly":
                 LocalDate nextWeekStart = last.toLocalDate()
                         .plusWeeks(1)
-                        .with(java.time.DayOfWeek.MONDAY);
+                        .with(TemporalAdjusters.next(DayOfWeek.MONDAY));
                 return nextWeekStart.atStartOfDay();
 
             case "dynamic":
@@ -930,7 +1029,6 @@ public class BudgetLifeCycleManager {
             LocalDate budgetEndDate,
             List<DayOfWeek> allowedDays,
             LocalTime disbursementTime) {
-        // Unchanged from provided code
         LocalDate nextDate = searchDate;
         for (int i = 0; i <= 31; i++) {
             nextDate = nextDate.plusDays(1);
@@ -942,5 +1040,44 @@ public class BudgetLifeCycleManager {
             }
         }
         return null;
+    }
+
+    @Scheduled(cron = "0 0 0 * * ?", zone = "Africa/Lagos")
+    public void resetDailyEnvelopes() {
+        // FIX: Optimize with findByConditionsType
+        List<Envelope> dailyEnvelopes = envelopeRepository.findByConditionsType("daily");
+        dailyEnvelopes.forEach(envelopeService::resetEnvelopeLimits);
+        logger.info("Reset {} daily envelopes on {}", dailyEnvelopes.size(), fetchCurrentDateTimeFromDatabase());
+    }
+
+    @Scheduled(cron = "0 0 0 * * MON", zone = "Africa/Lagos")
+    public void resetWeeklyEnvelopes() {
+        // FIX: Optimize with findByConditionsType
+        List<Envelope> weeklyEnvelopes = envelopeRepository.findByConditionsType("weekly");
+        weeklyEnvelopes.forEach(envelopeService::resetEnvelopeLimits);
+        logger.info("Reset {} weekly envelopes on {}", weeklyEnvelopes.size(), fetchCurrentDateTimeFromDatabase());
+    }
+
+    private void scheduleDynamicReset(Envelope envelope, String day, String disbursementTime) {
+        // FIX: Implement actual scheduling instead of direct reset
+        try {
+            DayOfWeek.valueOf(day.toUpperCase()); // Validate day
+            LocalTime time = LocalTime.parse(disbursementTime);
+            LocalDateTime now = fetchCurrentDateTimeFromDatabase();
+            LocalDateTime triggerTime = now.toLocalDate()
+                    .with(TemporalAdjusters.next(DayOfWeek.valueOf(day.toUpperCase())))
+                    .atTime(time);
+            if (triggerTime.isAfter(now) && triggerTime.isBefore(envelope.getBudget().getEndDate().atTime(23, 59, 59))) {
+                ScheduledTask resetTask = new ScheduledTask();
+                resetTask.setEnvelopeId(envelope.getId());
+                resetTask.setTaskType("LIMIT_RESET");
+                resetTask.setTriggerTime(triggerTime);
+                resetTask.setCreatedAt(now);
+                scheduledTaskRepository.save(resetTask);
+                logger.info("Scheduled LIMIT_RESET task for envelope {} on {} at {}", envelope.getId(), day, disbursementTime);
+            }
+        } catch (IllegalArgumentException | DateTimeParseException e) {
+            logger.error("Invalid day {} or disbursementTime {} for envelope {}", day, disbursementTime, envelope.getId(), e);
+        }
     }
 }

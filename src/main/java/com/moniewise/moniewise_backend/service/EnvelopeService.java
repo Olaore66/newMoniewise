@@ -13,7 +13,6 @@ import com.moniewise.moniewise_backend.exception.EntityNotFoundException;
 import com.moniewise.moniewise_backend.repository.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -27,7 +26,6 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.format.DateTimeParseException;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -35,6 +33,7 @@ import java.util.stream.Collectors;
 @Service
 public class EnvelopeService {
 
+    private static final Logger logger = LoggerFactory.getLogger(EnvelopeService.class);
     private final EnvelopeRepository envelopeRepository;
     private final BudgetRepository budgetRepository;
     private final RevenueLogRepository revenueLogRepository;
@@ -46,6 +45,7 @@ public class EnvelopeService {
     private final ScheduledTaskRepository scheduledTaskRepository;
     private final BudgetLifeCycleManager budgetLifeCycleManager;
     private final PendingDisbursementRepository pendingDisbursementRepository;
+    private final JdbcTemplate jdbcTemplate;
 
     @Value("${moniewise.revenue.wallet.user-id}")
     private Long revenueWalletUserId;
@@ -57,28 +57,27 @@ public class EnvelopeService {
             UserService userService,
             TransactionLogRepository transactionLogRepository,
             NotificationService notificationService,
-            WalletService walletService, ScheduledTaskRepository scheduledTaskRepository, BudgetLifeCycleManager budgetLifeCycleManager, PendingDisbursementRepository pendingDisbursementRepository) {
+            WalletService walletService,
+            ScheduledTaskRepository scheduledTaskRepository,
+            BudgetLifeCycleManager budgetLifeCycleManager,
+            PendingDisbursementRepository pendingDisbursementRepository,
+            JdbcTemplate jdbcTemplate) {
         this.envelopeRepository = envelopeRepository;
         this.budgetRepository = budgetRepository;
         this.revenueLogRepository = revenueLogRepository;
         this.userService = userService;
         this.transactionLogRepository = transactionLogRepository;
         this.notificationService = notificationService;
-        this.walletService = walletService; // Assign walletService1 as in original
+        this.walletService = walletService;
         this.scheduledTaskRepository = scheduledTaskRepository;
         this.budgetLifeCycleManager = budgetLifeCycleManager;
         this.pendingDisbursementRepository = pendingDisbursementRepository;
+        this.jdbcTemplate = jdbcTemplate;
     }
 
-    @Autowired
-    private JdbcTemplate jdbcTemplate;
-
-
-    // In EnvelopeService.java, update line 64:
-    private static final Logger logger = LoggerFactory.getLogger(EnvelopeService.class);
     @PostConstruct
     public void init() {
-        System.out.println("Revenue Wallet User ID: " + revenueWalletUserId);
+        logger.info("Revenue Wallet User ID: {}", revenueWalletUserId);
     }
 
     private LocalDateTime fetchCurrentDateTimeFromDatabase() {
@@ -97,14 +96,11 @@ public class EnvelopeService {
             throw new IllegalArgumentException("Amount must be positive");
         }
         User user = userService.findByEmail(email);
-        Envelope source = envelopeRepository.findById(sourceId)
-                .orElseThrow(() -> new IllegalArgumentException("Source envelope not found with ID: " + sourceId));
-        Envelope target = envelopeRepository.findById(targetId)
-                .orElseThrow(() -> new IllegalArgumentException("Target envelope not found with ID: " + targetId));
+        Envelope source = envelopeRepository.findByIdAndBudget_UserEmail(sourceId, email)
+                .orElseThrow(() -> new EntityNotFoundException("Source envelope not found with ID: " + sourceId));
+        Envelope target = envelopeRepository.findByIdAndBudget_UserEmail(targetId, email)
+                .orElseThrow(() -> new EntityNotFoundException("Target envelope not found with ID: " + targetId));
         Budget sourceBudget = source.getBudget();
-        if (!sourceBudget.getUser().getId().equals(user.getId()) || !target.getBudget().getId().equals(user.getId())) {
-            throw new SecurityException("You do not have permission to move money from/to these envelopes");
-        }
         if (!sourceBudget.getId().equals(target.getBudget().getId())) {
             throw new IllegalArgumentException("Source and target envelopes must belong to the same budget");
         }
@@ -112,32 +108,24 @@ public class EnvelopeService {
             throw new IllegalArgumentException("Budget must be active to perform transactions");
         }
         BigDecimal transferAmount = BigDecimal.valueOf(amount);
-        if (transferAmount.compareTo(source.getRemainingAmount()) > 0) {
-            throw new IllegalArgumentException("Insufficient funds in source envelope. Available: ₦" + source.getRemainingAmount());
+        if (transferAmount.compareTo(source.getTotalRemainingAmount()) > 0) {
+            throw new IllegalArgumentException("Insufficient funds in source envelope. Available: ₦" + source.getTotalRemainingAmount());
         }
 
-        BigDecimal feePercentage = validateAndCalculateFee(source, sourceBudget, transferAmount, now, "envelope_transfer", email, targetId, null, transactionLogRepository);
+        BigDecimal feePercentage = validateAndCalculateFee(source, sourceBudget, transferAmount, now, "envelope_transfer", email, targetId, null);
         BigDecimal fee = transferAmount.multiply(feePercentage).divide(BigDecimal.valueOf(100), 2, RoundingMode.HALF_UP);
         BigDecimal amountAfterFee = transferAmount.subtract(fee);
 
-        source.setRemainingAmount(source.getRemainingAmount().subtract(transferAmount));
-        target.setRemainingAmount(target.getRemainingAmount().add(amountAfterFee));
-        envelopeRepository.save(source);
-        envelopeRepository.save(target);
+        source.setTotalRemainingAmount(source.getTotalRemainingAmount().subtract(transferAmount));
+        source.setRemainingAmount(getRemainingLimit(sourceId, email).subtract(transferAmount));
+        target.setTotalRemainingAmount(target.getTotalRemainingAmount().add(amountAfterFee));
+        envelopeRepository.saveAll(List.of(source, target));
 
-        // Recalculate Budget.remainingAmount
-//        BigDecimal newRemainingAmount = envelopeRepository.findByBudgetId(sourceBudget.getId())
-//                .stream()
-//                .map(Envelope::getRemainingAmount)
-//                .reduce(BigDecimal.ZERO, BigDecimal::add);
-//        sourceBudget.setRemainingAmount(newRemainingAmount);
-//        budgetRepository.save(sourceBudget);
-
-        BigDecimal newRemainingAmount = envelopeRepository.findByBudgetId(sourceBudget.getId())
+        BigDecimal newBudgetRemaining = envelopeRepository.findByBudgetId(sourceBudget.getId())
                 .stream()
                 .map(Envelope::getTotalRemainingAmount)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
-        sourceBudget.setRemainingAmount(newRemainingAmount);
+        sourceBudget.setRemainingAmount(newBudgetRemaining);
         budgetRepository.save(sourceBudget);
 
         TransactionLog transactionLog = new TransactionLog(
@@ -153,71 +141,53 @@ public class EnvelopeService {
         revenueLogRepository.save(revenueLog);
         creditRevenueAccount(fee, revenueDescription);
 
-        // Calculate remaining limit for source envelope
         BigDecimal remainingLimit = getRemainingLimit(sourceId, email);
-        String period = source.getConditions().get("type").equals("daily") ? "today" :
-                source.getConditions().get("type").equals("weekly") ? "this week" : "this period";
+        String period = source.getConditions().getOrDefault("type", "period").toString().equals("daily") ? "today" :
+                source.getConditions().getOrDefault("type", "period").toString().equals("weekly") ? "this week" : "this period";
 
-        // Send notification with remaining limit
         notificationService.sendNotification(
                 user.getId().toString(),
-                String.format("Moved ₦%.2f from '%s' to '%s' (Budget: %s, Fee: ₦%.2f). Remaining limit %s: ₦%.2f.",
-                        amountAfterFee, source.getName(), target.getName(), sourceBudget.getName(), fee, period, remainingLimit),
+                String.format("Moved ₦%.2f from '%s' to '%s' (Budget: %s, Fee: ₦%.2f). Remaining limit %s: ₦%.2f. Total remaining: ₦%.2f.",
+                        amountAfterFee, source.getName(), target.getName(), sourceBudget.getName(), fee, period, remainingLimit, source.getTotalRemainingAmount()),
                 NotificationType.ENVELOPE_TRANSFER,
                 sourceBudget.getId(),
-                source.getId(),
+                sourceId,
                 "VIEW_ENVELOPE",
-                String.format("/budgets/%d/envelopes/%d", sourceBudget.getId(), source.getId())
+                String.format("/budgets/%d/envelopes/%d", sourceBudget.getId(), sourceId)
         );
     }
-    // New Transfer to external account code --- 08/06/2025
 
-
-
-
-    // Update transferToExternal:
     @Transactional
     public void transferToExternal(Long sourceId, BudgetController.ExternalAccount externalAccount, Double amount, String email) {
-        Logger logger = LoggerFactory.getLogger(EnvelopeService.class);
         LocalDateTime now = fetchCurrentDateTimeFromDatabase();
-        logger.debug("Transferring ₦{} to external account {} from envelope {} for user {}", amount, externalAccount, sourceId, email);
-
         if (amount <= 0) {
             throw new IllegalArgumentException("Amount must be positive");
         }
-
         User user = userService.findByEmail(email);
-        Envelope source = envelopeRepository.findById(sourceId)
-                .orElseThrow(() -> new IllegalArgumentException("Source envelope not found with ID: " + sourceId));
+        Envelope source = envelopeRepository.findByIdAndBudget_UserEmail(sourceId, email)
+                .orElseThrow(() -> new EntityNotFoundException("Source envelope not found with ID: " + sourceId));
         Budget sourceBudget = source.getBudget();
-
-        if (!sourceBudget.getUser().getId().equals(user.getId())) {
-            throw new SecurityException("You do not have permission to transfer from this envelope");
-        }
         if (sourceBudget.getStatus() != BudgetStatus.ACTIVE) {
             throw new IllegalArgumentException("Budget must be active to perform transactions");
         }
-
         BigDecimal transferAmount = BigDecimal.valueOf(amount);
-        if (transferAmount.compareTo(source.getRemainingAmount()) > 0) {
-            throw new IllegalArgumentException("Insufficient funds in source envelope. Available: ₦" + source.getRemainingAmount());
+        if (transferAmount.compareTo(source.getTotalRemainingAmount()) > 0) {
+            throw new IllegalArgumentException("Insufficient funds in source envelope. Available: ₦" + source.getTotalRemainingAmount());
         }
 
-        BigDecimal feePercentage = validateAndCalculateFee(source, sourceBudget, transferAmount, now, "external_transfer", email, null, externalAccount.getAccountNumber(), transactionLogRepository);
+        BigDecimal feePercentage = validateAndCalculateFee(source, sourceBudget, transferAmount, now, "external_transfer", email, null, externalAccount.getAccountNumber());
         BigDecimal fee = transferAmount.multiply(feePercentage).divide(BigDecimal.valueOf(100), 2, RoundingMode.HALF_UP);
         BigDecimal amountAfterFee = transferAmount.subtract(fee);
 
-        // Update source envelope
-        source.setRemainingAmount(source.getRemainingAmount().subtract(transferAmount));
         source.setTotalRemainingAmount(source.getTotalRemainingAmount().subtract(transferAmount));
+        source.setRemainingAmount(getRemainingLimit(sourceId, email).subtract(transferAmount));
         envelopeRepository.save(source);
 
-        // Recalculate Budget.remainingAmount
-        BigDecimal newRemainingAmount = envelopeRepository.findByBudgetId(sourceBudget.getId())
+        BigDecimal newBudgetRemaining = envelopeRepository.findByBudgetId(sourceBudget.getId())
                 .stream()
                 .map(Envelope::getTotalRemainingAmount)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
-        sourceBudget.setRemainingAmount(newRemainingAmount);
+        sourceBudget.setRemainingAmount(newBudgetRemaining);
         budgetRepository.save(sourceBudget);
 
         logger.info("Simulating transfer of ₦{} to external account: {} (accountNumber: {}, bankCode: {}, recipient: {})",
@@ -237,36 +207,32 @@ public class EnvelopeService {
         RevenueLog revenueLog = new RevenueLog(user.getId(), "envelope_transfer_fee", fee, revenueDescription);
         revenueLog.setCreatedAt(now);
         revenueLogRepository.save(revenueLog);
-
         creditRevenueAccount(fee, revenueDescription);
 
-        // Calculate remaining limit for source envelope
         BigDecimal remainingLimit = getRemainingLimit(sourceId, email);
-        String period = source.getConditions().get("type").equals("daily") ? "today" :
-                source.getConditions().get("type").equals("weekly") ? "this week" : "this period";
+        String period = source.getConditions().getOrDefault("type", "period").toString().equals("daily") ? "today" :
+                source.getConditions().getOrDefault("type", "period").toString().equals("weekly") ? "this week" : "this period";
 
-        // Send notification with remaining limit
         notificationService.sendNotification(
                 user.getId().toString(),
-                String.format("Transferred ₦%.2f from '%s' (Budget: %s) to external account %s/%s (Fee: ₦%.2f). Remaining limit %s: ₦%.2f.",
-                        amountAfterFee, source.getName(), sourceBudget.getName(), externalAccount.getBankName(),
-                        externalAccount.getAccountNumber(), fee, period, remainingLimit),
+                String.format("Transferred ₦%.2f from '%s' (Budget: %s) to external account %s/%s (Fee: ₦%.2f). Remaining limit %s: ₦%.2f. Total remaining: ₦%.2f.",
+                        amountAfterFee, source.getName(), sourceBudget.getName(), externalAccount.getBankName(), externalAccount.getAccountNumber(), fee, period, remainingLimit, source.getTotalRemainingAmount()),
                 NotificationType.EXTERNAL_TRANSFER,
                 sourceBudget.getId(),
-                source.getId(),
+                sourceId,
                 "VIEW_ENVELOPE",
-                String.format("/budgets/%d/envelopes/%d", sourceBudget.getId(), source.getId())
+                String.format("/budgets/%d/envelopes/%d", sourceBudget.getId(), sourceId)
         );
     }
 
     @Transactional
     public EnvelopeResponse createEnvelope(EnvelopeRequest request, String email) {
         Budget budget = budgetRepository.findById(request.getBudgetId())
-                .orElseThrow(() -> new IllegalArgumentException("Budget not found with ID: " + request.getBudgetId()));
+                .orElseThrow(() -> new EntityNotFoundException("Budget not found with ID: " + request.getBudgetId()));
         if (!budget.getUser().getEmail().equals(email)) {
             throw new SecurityException("Unauthorized access to budget");
         }
-        if (budget.getStatus() != BudgetStatus.ACTIVE) {
+        if (budget.getStatus() != BudgetStatus.DRAFT) {
             throw new IllegalArgumentException("Can only add envelopes to draft budgets");
         }
 
@@ -300,8 +266,6 @@ public class EnvelopeService {
         }
 
         Envelope envelope = new Envelope(budget, request.getName(), amount, conditions);
-        envelope.setTotalRemainingAmount(amount);
-        envelope.setRemainingAmount(getPeriodLimit(conditions));
         envelope.setCreatedAt(fetchCurrentDateTimeFromDatabase());
         envelope.setNextDisbursementAt(budgetLifeCycleManager.calculateNextDisbursementTime(envelope));
         envelope.setHasMatured(false);
@@ -309,34 +273,46 @@ public class EnvelopeService {
 
         budgetLifeCycleManager.scheduleDynamicTasks(envelope);
 
+        notificationService.sendNotification(
+                budget.getUser().getId().toString(),
+                String.format("Created envelope '%s' with ₦%.2f in budget '%s'.",
+                        envelope.getName(), amount, budget.getName()),
+                NotificationType.ENVELOPE_CREATED,
+                budget.getId(),
+                envelope.getId(),
+                "VIEW_ENVELOPE",
+                String.format("/budgets/%d/envelopes/%d", budget.getId(), envelope.getId())
+        );
+
         return toResponse(envelope);
     }
 
-    private BigDecimal getPeriodLimit(Map<String, Object> conditions) {
-        if (conditions != null && conditions.containsKey("limit")) {
-            Object limitObj = conditions.get("limit");
-            if (limitObj instanceof Number) {
-                return new BigDecimal(((Number) limitObj).doubleValue());
-            }
-        }
-        return BigDecimal.ZERO;
-    }
-    // Get envelope
     public EnvelopeResponse getEnvelopeById(Long envelopeId, String email) {
         Envelope envelope = envelopeRepository.findByIdAndBudget_UserEmail(envelopeId, email)
                 .orElseThrow(() -> new EntityNotFoundException("Envelope not found or not accessible"));
         return toResponse(envelope);
     }
 
-    // Update envelope conditions only
+    @Transactional
     public EnvelopeResponse updateEnvelopeConditions(Long envelopeId, EnvelopeRequest request, String email) {
         Envelope envelope = envelopeRepository.findByIdAndBudget_UserEmail(envelopeId, email)
                 .orElseThrow(() -> new EntityNotFoundException("Envelope not found or not accessible"));
-
-        // Only update conditions
+        validateEnvelopeConditions(request, envelope.getAmount());
         envelope.setConditions(request.getConditions());
-
+        envelope.setRemainingAmount(getPeriodLimit(request.getConditions()));
         envelopeRepository.save(envelope);
+
+        notificationService.sendNotification(
+                envelope.getBudget().getUser().getId().toString(),
+                String.format("Updated conditions for envelope '%s' in budget '%s'.",
+                        envelope.getName(), envelope.getBudget().getName()),
+                NotificationType.ENVELOPE_UPDATED,
+                envelope.getBudget().getId(),
+                envelopeId,
+                "VIEW_ENVELOPE",
+                String.format("/budgets/%d/envelopes/%d", envelope.getBudget().getId(), envelopeId)
+        );
+
         return toResponse(envelope);
     }
 
@@ -355,11 +331,31 @@ public class EnvelopeService {
             throw new SecurityException("Unauthorized access to disbursement");
         }
 
+        BigDecimal remainingLimit = getRemainingLimit(envelope.getId(), email);
+        if (pd.getAmount().compareTo(remainingLimit) > 0) {
+            throw new IllegalStateException("Disbursement amount exceeds remaining limit of ₦" + remainingLimit);
+        }
+        if (pd.getAmount().compareTo(envelope.getTotalRemainingAmount()) > 0) {
+            throw new IllegalStateException("Disbursement amount exceeds total remaining amount of ₦" + envelope.getTotalRemainingAmount());
+        }
+
         walletService.fundWallet(user.getId(), pd.getAmount(), "Disbursement from envelope: " + pd.getEnvelopeName());
+        envelope.setTotalRemainingAmount(envelope.getTotalRemainingAmount().subtract(pd.getAmount()));
+        envelope.setRemainingAmount(remainingLimit.subtract(pd.getAmount()));
+        envelope.setLastDisbursedAt(now);
+        envelopeRepository.save(envelope);
+
         pd.setStatus(Status.CLAIMED);
         pd.setWithdrawn(true);
         pd.setProcessedAt(now);
         pendingDisbursementRepository.save(pd);
+
+        BigDecimal newBudgetRemaining = envelopeRepository.findByBudgetId(envelope.getBudget().getId())
+                .stream()
+                .map(Envelope::getTotalRemainingAmount)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        envelope.getBudget().setRemainingAmount(newBudgetRemaining);
+        budgetRepository.save(envelope.getBudget());
 
         TransactionLog log = new TransactionLog(
                 user.getId(), envelope.getBudget().getId(), envelope.getId(), null, null,
@@ -368,9 +364,14 @@ public class EnvelopeService {
         log.setCreatedAt(now);
         transactionLogRepository.save(log);
 
+        remainingLimit = getRemainingLimit(envelope.getId(), email); // Recalculate after transaction
+        String period = envelope.getConditions().getOrDefault("type", "period").toString().equals("daily") ? "today" :
+                envelope.getConditions().getOrDefault("type", "period").toString().equals("weekly") ? "this week" : "this period";
+
         notificationService.sendNotification(
                 user.getId().toString(),
-                String.format("You have successfully claimed ₦%.2f from '%s' (Budget: %s).", pd.getAmount(), pd.getEnvelopeName(), envelope.getBudget().getName()),
+                String.format("Claimed ₦%.2f from '%s' (Budget: %s). Remaining limit %s: ₦%.2f. Total remaining: ₦%.2f.",
+                        pd.getAmount(), pd.getEnvelopeName(), envelope.getBudget().getName(), period, remainingLimit, envelope.getTotalRemainingAmount()),
                 NotificationType.DISBURSEMENT,
                 envelope.getBudget().getId(),
                 envelope.getId(),
@@ -379,19 +380,26 @@ public class EnvelopeService {
         );
     }
 
-    // Delete envelope
     public void deleteEnvelope(Long envelopeId, String email) {
         Envelope envelope = envelopeRepository.findByIdAndBudget_UserEmail(envelopeId, email)
                 .orElseThrow(() -> new EntityNotFoundException("Envelope not found or not accessible"));
-
         if (envelope.getBudget().getStatus() == BudgetStatus.ACTIVE) {
             throw new IllegalStateException("Cannot delete envelope from an active budget");
         }
-
         envelopeRepository.delete(envelope);
+
+        notificationService.sendNotification(
+                envelope.getBudget().getUser().getId().toString(),
+                String.format("Deleted envelope '%s' from budget '%s'.",
+                        envelope.getName(), envelope.getBudget().getName()),
+                NotificationType.ENVELOPE_DELETED,
+                envelope.getBudget().getId(),
+                envelopeId,
+                "VIEW_BUDGET",
+                String.format("/budgets/%d", envelope.getBudget().getId())
+        );
     }
 
-    // Helper: convert entity → response DTO
     private EnvelopeResponse toResponse(Envelope envelope) {
         return new EnvelopeResponse(
                 envelope.getId(),
@@ -406,52 +414,89 @@ public class EnvelopeService {
         );
     }
 
-    // In EnvelopeService
     private void validateEnvelopeConditions(EnvelopeRequest request, BigDecimal allocatedAmount) {
         Map<String, Object> conditions = request.getConditions();
         if (conditions == null || !conditions.containsKey("type")) {
             throw new IllegalArgumentException("Envelope conditions must include 'type'");
         }
         String type = conditions.get("type").toString().toLowerCase();
-
-        // Require 'limit' only for daily, weekly, and dynamic envelopes
-        if (Arrays.asList("daily", "weekly", "dynamic").contains(type)) {
-            if (!conditions.containsKey("limit")) {
-                throw new IllegalArgumentException("Envelope conditions must include 'limit' for type: " + type);
-            }
-            if (!(conditions.get("limit") instanceof Number)) {
-                throw new IllegalArgumentException("Limit must be a number");
-            }
-        }
-
-        if ("daily".equals(type) || "dynamic".equals(type)) {
-            if (!conditions.containsKey("disbursementTime")) {
-                throw new IllegalArgumentException("disbursementTime required for " + type + " envelopes");
-            }
-            try {
-                LocalTime.parse((String) conditions.get("disbursementTime"));
-            } catch (DateTimeParseException e) {
-                throw new IllegalArgumentException("Invalid disbursementTime format: " + conditions.get("disbursementTime"));
-            }
-        }
-        if ("dynamic".equals(type) && (!conditions.containsKey("days") || ((List<?>) conditions.get("days")).isEmpty())) {
-            throw new IllegalArgumentException("Dynamic envelope must have non-empty 'days'");
+        switch (type) {
+            case "daily":
+                if (!conditions.containsKey("limit") || !(conditions.get("limit") instanceof Number)) {
+                    throw new IllegalArgumentException("Daily envelope must include a numeric 'limit'");
+                }
+                if (!conditions.containsKey("disbursementTime")) {
+                    throw new IllegalArgumentException("Daily envelope must include 'disbursementTime'");
+                }
+                try {
+                    LocalTime.parse((String) conditions.get("disbursementTime"));
+                } catch (DateTimeParseException e) {
+                    throw new IllegalArgumentException("Invalid disbursementTime format: " + conditions.get("disbursementTime"));
+                }
+                break;
+            case "weekly":
+                if (!conditions.containsKey("limit") || !(conditions.get("limit") instanceof Number)) {
+                    throw new IllegalArgumentException("Weekly envelope must include a numeric 'limit'");
+                }
+                break;
+            case "dynamic":
+                if (!conditions.containsKey("limit") || !(conditions.get("limit") instanceof Number)) {
+                    throw new IllegalArgumentException("Dynamic envelope must include a numeric 'limit'");
+                }
+                if (!conditions.containsKey("days") || ((List<?>) conditions.get("days")).isEmpty()) {
+                    throw new IllegalArgumentException("Dynamic envelope must have non-empty 'days'");
+                }
+                if (!conditions.containsKey("disbursementTime")) {
+                    throw new IllegalArgumentException("Dynamic envelope must include 'disbursementTime'");
+                }
+                try {
+                    LocalTime.parse((String) conditions.get("disbursementTime"));
+                } catch (DateTimeParseException e) {
+                    throw new IllegalArgumentException("Invalid disbursementTime format: " + conditions.get("disbursementTime"));
+                }
+                @SuppressWarnings("unchecked")
+                List<String> days = (List<String>) conditions.get("days");
+                try {
+                    days.forEach(day -> DayOfWeek.valueOf(day.toUpperCase()));
+                } catch (IllegalArgumentException e) {
+                    throw new IllegalArgumentException("Invalid day in dynamic condition: " + e.getMessage());
+                }
+                break;
+            case "safe_lock":
+            case "strict_lock":
+                if (!conditions.containsKey("lockStartDate") || !conditions.containsKey("lockDurationDays") || !conditions.containsKey("interestRate")) {
+                    throw new IllegalArgumentException("Lock envelope must include 'lockStartDate', 'lockDurationDays', and 'interestRate'");
+                }
+                try {
+                    LocalDate.parse((String) conditions.get("lockStartDate"));
+                    Integer.parseInt(conditions.get("lockDurationDays").toString());
+                    new BigDecimal(conditions.get("interestRate").toString());
+                } catch (Exception e) {
+                    throw new IllegalArgumentException("Invalid lock conditions: " + e.getMessage());
+                }
+                break;
+            case "emergency":
+                if (!conditions.containsKey("limit") || !(conditions.get("limit") instanceof Number)) {
+                    throw new IllegalArgumentException("Emergency envelope must include a numeric 'limit'");
+                }
+                break;
+            default:
+                throw new IllegalArgumentException("Unsupported envelope type: " + type);
         }
     }
-    // In EnvelopeService.java, add:
+
     private BigDecimal validateAndCalculateFee(Envelope source, Budget sourceBudget, BigDecimal transferAmount,
-                                         LocalDateTime now, String transactionType, String email,
-                                         Long targetId, String externalAccountNumber, TransactionLogRepository transactionLogRepository) {
+                                               LocalDateTime now, String transactionType, String email,
+                                               Long targetId, String externalAccountNumber) {
         Map<String, Object> conditions = source.getConditions();
-        String sourceConditionType = (String) conditions.get("type");
-        if (sourceConditionType == null) {
-            throw new IllegalArgumentException("Envelope condition type is missing");
+        if (conditions == null || !conditions.containsKey("type")) {
+            throw new IllegalArgumentException("Envelope conditions must include 'type'");
         }
+        String sourceConditionType = conditions.get("type").toString();
         boolean isTransferAllowed = true;
         BigDecimal feePercentage = BigDecimal.ZERO;
 
         LocalDate currentDate = now.toLocalDate();
-        LocalTime currentTime = now.toLocalTime();
         LocalDateTime periodStart;
         LocalDateTime periodEnd;
 
@@ -460,12 +505,7 @@ public class EnvelopeService {
                 periodStart = currentDate.atStartOfDay();
                 periodEnd = periodStart.plusDays(1);
                 Double dailyLimit = Double.parseDouble(conditions.get("limit").toString());
-                BigDecimal remainingDaily = BigDecimal.valueOf(dailyLimit).subtract(
-                        transactionLogRepository.findBySourceEnvelopeIdAndTimeRange(source.getId(), periodStart, periodEnd)
-                                .stream()
-                                .filter(t -> "envelope_to_envelope".equals(t.getTransactionType()) || "envelope_to_external".equals(t.getTransactionType()))
-                                .map(TransactionLog::getAmount)
-                                .reduce(BigDecimal.ZERO, BigDecimal::add));
+                BigDecimal remainingDaily = source.getRemainingAmount();
                 if (remainingDaily.compareTo(BigDecimal.ZERO) <= 0) {
                     throw new IllegalArgumentException("Daily limit of ₦" + dailyLimit + " exhausted until " + periodEnd);
                 }
@@ -478,12 +518,7 @@ public class EnvelopeService {
                 periodStart = currentDate.atStartOfDay().minusDays(currentDate.getDayOfWeek().getValue() - 1);
                 periodEnd = periodStart.plusDays(7);
                 Double weeklyLimit = Double.parseDouble(conditions.get("limit").toString());
-                BigDecimal remainingWeekly = BigDecimal.valueOf(weeklyLimit).subtract(
-                        transactionLogRepository.findBySourceEnvelopeIdAndTimeRange(source.getId(), periodStart, periodEnd)
-                                .stream()
-                                .filter(t -> "envelope_to_envelope".equals(t.getTransactionType()) || "envelope_to_external".equals(t.getTransactionType()))
-                                .map(TransactionLog::getAmount)
-                                .reduce(BigDecimal.ZERO, BigDecimal::add));
+                BigDecimal remainingWeekly = source.getRemainingAmount();
                 if (remainingWeekly.compareTo(BigDecimal.ZERO) <= 0) {
                     throw new IllegalArgumentException("Weekly limit of ₦" + weeklyLimit + " exhausted until " + periodEnd);
                 }
@@ -501,12 +536,7 @@ public class EnvelopeService {
                 @SuppressWarnings("unchecked")
                 List<String> days = (List<String>) conditions.getOrDefault("days", List.of());
                 String disbursementTimeStr = (String) conditions.getOrDefault("disbursementTime", "08:00");
-                Double dynamicLimit;
-                try {
-                    dynamicLimit = Double.parseDouble(conditions.get("limit").toString());
-                } catch (Exception e) {
-                    throw new IllegalArgumentException("Invalid dynamic limit: " + conditions.get("limit"), e);
-                }
+                Double dynamicLimit = Double.parseDouble(conditions.get("limit").toString());
                 LocalTime disbursementTime;
                 try {
                     disbursementTime = LocalTime.parse(disbursementTimeStr);
@@ -516,12 +546,7 @@ public class EnvelopeService {
                 if (days.isEmpty()) {
                     throw new IllegalArgumentException("No days specified for dynamic condition");
                 }
-                List<DayOfWeek> allowedDays;
-                try {
-                    allowedDays = days.stream().map(day -> DayOfWeek.valueOf(day.toUpperCase())).collect(Collectors.toList());
-                } catch (IllegalArgumentException e) {
-                    throw new IllegalArgumentException("Invalid day in dynamic condition: " + e.getMessage(), e);
-                }
+                List<DayOfWeek> allowedDays = days.stream().map(day -> DayOfWeek.valueOf(day.toUpperCase())).collect(Collectors.toList());
                 periodStart = currentDate.atStartOfDay();
                 periodEnd = periodStart.plusDays(1);
                 if (currentDate.isBefore(budgetStartDate) || currentDate.isAfter(budgetEndDate)) {
@@ -561,7 +586,7 @@ public class EnvelopeService {
                     LocalDateTime nextValidWindow = now.isBefore(validStartTime) ? validStartTime :
                             budgetLifeCycleManager.findNextValidWindow(currentDate, budgetStartDate, budgetEndDate, allowedDays, disbursementTime);
                     isTransferAllowed = false;
-                    String reason = "Outside time window: currentTime=" + currentTime + ", validWindow=" + validStartTime + " to " + validEndTime;
+                    String reason = "Outside time window: currentTime=" + now.toLocalTime() + ", validWindow=" + validStartTime + " to " + validEndTime;
                     TransactionLog transactionLog = new TransactionLog(
                             sourceBudget.getUser().getId(), sourceBudget.getId(), source.getId(), targetId, externalAccountNumber,
                             transferAmount, BigDecimal.ZERO, "failed_" + transactionType, reason);
@@ -571,12 +596,7 @@ public class EnvelopeService {
                             String.format("Transfer only allowed on %s at %s with limit ₦%.2f (next window: %s)",
                                     days, disbursementTime, dynamicLimit, nextValidWindow != null ? nextValidWindow : "none"));
                 }
-                BigDecimal remainingDynamic = BigDecimal.valueOf(dynamicLimit).subtract(
-                        transactionLogRepository.findBySourceEnvelopeIdAndTimeRange(source.getId(), periodStart, periodEnd)
-                                .stream()
-                                .filter(t -> "envelope_to_envelope".equals(t.getTransactionType()) || "envelope_to_external".equals(t.getTransactionType()))
-                                .map(TransactionLog::getAmount)
-                                .reduce(BigDecimal.ZERO, BigDecimal::add));
+                BigDecimal remainingDynamic = source.getRemainingAmount();
                 if (remainingDynamic.compareTo(BigDecimal.ZERO) <= 0) {
                     throw new IllegalArgumentException("Dynamic limit of ₦" + dynamicLimit + " exhausted until " + periodEnd);
                 }
@@ -615,18 +635,14 @@ public class EnvelopeService {
         if (!isTransferAllowed) {
             throw new IllegalArgumentException("Transfer not allowed due to source envelope conditions");
         }
-
-        // Set fee as an instance variable or return it if needed
-//        source.setFeePercentage(feePercentage); // Assuming Envelope has a transient field for feePercentage
         return feePercentage;
     }
 
-    /**
-     * Calculates the remaining spending limit for an envelope's current period.
-     * @param envelopeId ID of the envelope
-     * @param email User's email for authorization
-     * @return Remaining limit for the current period
-     */
+    private BigDecimal validateAndCalculateFee(Envelope source, Budget sourceBudget, BigDecimal transferAmount,
+                                               LocalDateTime now, String transactionType, String email) {
+        return validateAndCalculateFee(source, sourceBudget, transferAmount, now, transactionType, email, null, null);
+    }
+
     public BigDecimal getRemainingLimit(Long envelopeId, String email) {
         LocalDateTime now = fetchCurrentDateTimeFromDatabase();
         Envelope envelope = envelopeRepository.findByIdAndBudget_UserEmail(envelopeId, email)
@@ -666,18 +682,17 @@ public class EnvelopeService {
                     throw new IllegalArgumentException("Invalid disbursementTime format: " + disbursementTimeStr);
                 }
                 if (!days.contains(now.getDayOfWeek().getDisplayName(java.time.format.TextStyle.FULL, java.util.Locale.ENGLISH))) {
-                    return BigDecimal.ZERO; // No limit available on non-disbursement days
+                    return BigDecimal.ZERO;
                 }
                 periodStart = now.toLocalDate().atTime(disbursementTime);
-                periodEnd = periodStart.plusHours(1); // Assume 1-hour window for dynamic
+                periodEnd = periodStart.plusHours(1);
                 break;
             case "safe_lock":
             case "strict_lock":
             case "emergency":
-                // These types may have special rules; assume full limit available for now
                 periodStart = now.minusYears(1);
                 periodEnd = now.plusYears(1);
-                break;
+                return envelope.getRemainingAmount(); // Use stored value for these types
             default:
                 throw new IllegalArgumentException("Unsupported envelope type: " + type);
         }
@@ -689,9 +704,27 @@ public class EnvelopeService {
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
 
         BigDecimal remainingLimit = limit.subtract(spentAmount);
-        return remainingLimit.compareTo(BigDecimal.ZERO) < 0 ? BigDecimal.ZERO : remainingLimit;
+        envelope.setRemainingAmount(remainingLimit.compareTo(BigDecimal.ZERO) < 0 ? BigDecimal.ZERO : remainingLimit);
+        envelopeRepository.save(envelope);
+        return envelope.getRemainingAmount();
     }
 
+    @Transactional
+    public void resetEnvelopeLimits(Envelope envelope) {
+        Map<String, Object> conditions = envelope.getConditions();
+        if (conditions != null && conditions.containsKey("type")) {
+            String type = conditions.get("type").toString();
+            if (List.of("daily", "weekly", "dynamic").contains(type)) {
+                envelope.setRemainingAmount(getPeriodLimit(conditions));
+                envelopeRepository.save(envelope);
+            }
+        }
+    }
+
+    private BigDecimal getPeriodLimit(Map<String, Object> conditions) {
+        if (conditions != null && conditions.containsKey("limit") && conditions.get("limit") instanceof Number) {
+            return new BigDecimal(((Number) conditions.get("limit")).doubleValue());
+        }
+        return BigDecimal.ZERO;
+    }
 }
-
-
