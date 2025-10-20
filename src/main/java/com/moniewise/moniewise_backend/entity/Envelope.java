@@ -40,6 +40,7 @@ public class Envelope {
     @Column(name = "total_remaining_amount", nullable = false)
     private BigDecimal totalRemainingAmount; // Tracks total unspent balance
 
+    @Convert(disableConversion = true) // Disable auto-converter
     @Type(type = "jsonb")
     @Column(columnDefinition = "jsonb")
     private Map<String, Object> conditions;
