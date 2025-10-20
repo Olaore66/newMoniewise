@@ -14,6 +14,7 @@ import com.moniewise.moniewise_backend.repository.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -59,7 +60,7 @@ public class EnvelopeService {
             NotificationService notificationService,
             WalletService walletService,
             ScheduledTaskRepository scheduledTaskRepository,
-            BudgetLifeCycleManager budgetLifeCycleManager,
+            @Lazy BudgetLifeCycleManager budgetLifeCycleManager,
             PendingDisbursementRepository pendingDisbursementRepository,
             JdbcTemplate jdbcTemplate) {
         this.envelopeRepository = envelopeRepository;
