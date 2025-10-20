@@ -31,7 +31,9 @@ public interface EnvelopeRepository extends JpaRepository<Envelope, Long> {
     @Query(value = "SELECT * FROM envelopes e WHERE e.conditions->>'type' = :type", nativeQuery = true)
     List<Envelope> findByConditionsType(String type);
 
-    Stream<Envelope> findByBudgetStatusAndTypeNot(BudgetStatus status, String type);
+    @Query(value = "SELECT * FROM envelope e JOIN budget b ON e.budget_id = b.id WHERE b.status = :status AND e.conditions->>'type' != :type", nativeQuery = true)
+    Stream<Envelope> findByBudgetStatusAndTypeNot(@Param("status") BudgetStatus status, @Param("type") String type);
+
 
     List<Envelope> findByNextDisbursementAtBefore(LocalDateTime now);
 }
