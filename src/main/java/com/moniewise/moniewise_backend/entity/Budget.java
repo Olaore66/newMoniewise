@@ -68,4 +68,5 @@ public class Budget {
 
     @OneToMany(mappedBy = "budget", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<Envelope> envelopes = new ArrayList<>();
+    
 }

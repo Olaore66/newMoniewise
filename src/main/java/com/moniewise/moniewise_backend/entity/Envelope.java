@@ -63,6 +63,17 @@ public class Envelope {
     @Column(name = "has_matured")
     private Boolean hasMatured;
 
+    @Column(name = "deleted_at")
+    private LocalDateTime deletedAt;
+
+    public boolean isDeleted() {
+        return deletedAt != null;
+    }
+
+    public void markAsDeleted() {
+        this.deletedAt = LocalDateTime.now();
+    }
+
     private static final ObjectMapper mapper = new ObjectMapper();
 
     public Envelope(Budget budget, String name, BigDecimal amount, Map<String, Object> conditions) {
