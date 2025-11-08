@@ -233,8 +233,8 @@ public class EnvelopeService {
         if (!budget.getUser().getEmail().equals(email)) {
             throw new SecurityException("Unauthorized access to budget");
         }
-        if (budget.getStatus() != BudgetStatus.DRAFT) {
-            throw new IllegalArgumentException("Can only add envelopes to draft budgets");
+        if (budget.getStatus() == BudgetStatus.DRAFT) {
+            throw new IllegalArgumentException("Can only add envelopes to active budgets");
         }
 
         BigDecimal amount = budget.getTotalAmount()
