@@ -45,6 +45,8 @@ public class EnvelopeService {
     private final WalletService walletService;
     private final ScheduledTaskRepository scheduledTaskRepository;
     private final BudgetLifeCycleManager budgetLifeCycleManager;
+
+    private final BudgetService budgetService;
     private final PendingDisbursementRepository pendingDisbursementRepository;
     private final JdbcTemplate jdbcTemplate;
 
@@ -61,7 +63,7 @@ public class EnvelopeService {
             WalletService walletService,
             ScheduledTaskRepository scheduledTaskRepository,
             @Lazy BudgetLifeCycleManager budgetLifeCycleManager,
-            PendingDisbursementRepository pendingDisbursementRepository,
+            BudgetService budgetService, PendingDisbursementRepository pendingDisbursementRepository,
             JdbcTemplate jdbcTemplate) {
         this.envelopeRepository = envelopeRepository;
         this.budgetRepository = budgetRepository;
@@ -72,6 +74,7 @@ public class EnvelopeService {
         this.walletService = walletService;
         this.scheduledTaskRepository = scheduledTaskRepository;
         this.budgetLifeCycleManager = budgetLifeCycleManager;
+        this.budgetService = budgetService;
         this.pendingDisbursementRepository = pendingDisbursementRepository;
         this.jdbcTemplate = jdbcTemplate;
     }
@@ -406,8 +409,18 @@ public class EnvelopeService {
                 envelope.getId(),
                 envelope.getBudget().getId(),
                 envelope.getName(),
-                envelope.getAmount(),
-                envelope.getRemainingAmount(),
+
+                // Legacy
+                envelope.getAmount(),                    // amount
+                envelope.getRemainingAmount(),           // remainingAmount
+
+                // New
+                envelope.getAmount(),                    // initialAmount
+                envelope.getTotalRemainingAmount(),      // totalRemaining
+                envelope.getRemainingAmount(),           // periodRemaining
+                getPeriodLimit(envelope.getConditions()), // periodLimit
+                budgetService.getUsedThisPeriod(envelope),             // usedThisPeriod
+
                 envelope.getConditions(),
                 envelope.getCreatedAt(),
                 envelope.getLastDisbursedAt(),
@@ -485,6 +498,7 @@ public class EnvelopeService {
                 throw new IllegalArgumentException("Unsupported envelope type: " + type);
         }
     }
+
 
     private BigDecimal validateAndCalculateFee(Envelope source, Budget sourceBudget, BigDecimal transferAmount,
                                                LocalDateTime now, String transactionType, String email,

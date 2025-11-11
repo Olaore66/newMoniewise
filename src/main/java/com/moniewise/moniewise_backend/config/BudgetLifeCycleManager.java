@@ -29,12 +29,15 @@ import java.util.*;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+
+
 @Service
 public class BudgetLifeCycleManager {
 
     private static final Logger logger = LoggerFactory.getLogger(BudgetLifeCycleManager.class);
     @Value("${moniewise.revenue.wallet.user-id}")
     private Long revenueWalletUserId;
+
 
     private final BudgetRepository budgetRepository;
     private final EnvelopeRepository envelopeRepository;
@@ -43,7 +46,7 @@ public class BudgetLifeCycleManager {
     private final WalletService walletService;
     private final NotificationService notificationService;
     private final TransactionTemplate transactionTemplate;
-    private final JdbcTemplate jdbcTemplate;
+//    private final JdbcTemplate jdbcTemplate;
     private final NotificationRepository notificationRepository;
     private final PendingDisbursementRepository pendingDisbursementRepository;
     private final EnvelopeService envelopeService;
@@ -58,7 +61,7 @@ public class BudgetLifeCycleManager {
             WalletService walletService,
             NotificationService notificationService,
             TransactionTemplate transactionTemplate,
-            JdbcTemplate jdbcTemplate,
+//            JdbcTemplate jdbcTemplate,
             NotificationRepository notificationRepository,
             PendingDisbursementRepository pendingDisbursementRepository,
             @Lazy EnvelopeService envelopeService
@@ -70,7 +73,7 @@ public class BudgetLifeCycleManager {
         this.walletService = walletService;
         this.notificationService = notificationService;
         this.transactionTemplate = transactionTemplate;
-        this.jdbcTemplate = jdbcTemplate;
+//        this.jdbcTemplate = jdbcTemplate;
         this.notificationRepository = notificationRepository;
         this.pendingDisbursementRepository = pendingDisbursementRepository;
         this.envelopeService = envelopeService;
@@ -81,13 +84,22 @@ public class BudgetLifeCycleManager {
         logger.info("Revenue Wallet User ID: {}", revenueWalletUserId);
     }
 
+//    private LocalDateTime fetchCurrentDateTimeFromDatabase() {
+//        // FIX: Added try-catch for robust error handling
+//        try {
+//            String sql = "SELECT CURRENT_TIMESTAMP AT TIME ZONE 'Africa/Lagos'";
+//            return jdbcTemplate.queryForObject(sql, LocalDateTime.class);
+//        } catch (Exception e) {
+//            logger.error("Failed to fetch timestamp from database, using system time: {}", e.getMessage());
+//            return LocalDateTime.now(ZoneId.of("Africa/Lagos"));
+//        }
+//    }
+
     private LocalDateTime fetchCurrentDateTimeFromDatabase() {
-        // FIX: Added try-catch for robust error handling
         try {
-            String sql = "SELECT CURRENT_TIMESTAMP AT TIME ZONE 'Africa/Lagos'";
-            return jdbcTemplate.queryForObject(sql, LocalDateTime.class);
+            return budgetRepository.getCurrentLagosTime();
         } catch (Exception e) {
-            logger.error("Failed to fetch timestamp from database, using system time: {}", e.getMessage());
+            logger.error("Failed to fetch DB time, using system: {}", e.getMessage());
             return LocalDateTime.now(ZoneId.of("Africa/Lagos"));
         }
     }
@@ -363,8 +375,9 @@ public class BudgetLifeCycleManager {
                 durationMs, expiredBudgets.size(), envelopesToUpdate.size(), budgetsNearingEnd.size());
     }
 
-    @Transactional(timeout = 120)
+
     @Scheduled(cron = "0 * * * * ?", zone = "Africa/Lagos") // FIX: Added zone for consistency
+    @Transactional(timeout = 120)
     public void processScheduledTasks() {
         long startTime = System.nanoTime();
         LocalDateTime now = fetchCurrentDateTimeFromDatabase();
@@ -1043,12 +1056,24 @@ public class BudgetLifeCycleManager {
         return null;
     }
 
-    @Scheduled(cron = "0 0 0 * * ?", zone = "Africa/Lagos")
+    @Scheduled(cron = "0 0 8 * * ?", zone = "Africa/Lagos")
     public void resetDailyEnvelopes() {
-        // FIX: Optimize with findByConditionsType
+        LocalDateTime now = fetchCurrentDateTimeFromDatabase();
         List<Envelope> dailyEnvelopes = envelopeRepository.findByConditionsType("daily");
-        dailyEnvelopes.forEach(envelopeService::resetEnvelopeLimits);
-        logger.info("Reset {} daily envelopes on {}", dailyEnvelopes.size(), fetchCurrentDateTimeFromDatabase());
+
+        dailyEnvelopes.forEach(envelope -> {
+            // Only reset if it's time (based on disbursementTime or task)
+            if (shouldResetToday(envelope, now)) {
+                envelopeService.resetEnvelopeLimits(envelope);
+            }
+        });
+    }
+
+    private boolean shouldResetToday(Envelope envelope, LocalDateTime now) {
+        String timeStr = (String) envelope.getConditions().getOrDefault("disbursementTime", "00:00");
+        LocalTime time = LocalTime.parse(timeStr);
+        LocalDateTime todayReset = now.toLocalDate().atTime(time);
+        return now.isAfter(todayReset) || now.equals(todayReset);
     }
 
     @Scheduled(cron = "0 0 0 * * MON", zone = "Africa/Lagos")

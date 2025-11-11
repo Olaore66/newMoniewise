@@ -55,31 +55,6 @@ public class BudgetController {
 
     private static final Logger logger = LoggerFactory.getLogger(BudgetController.class);
 
-//    @PostMapping
-//    public ResponseEntity<?> createBudget(@RequestBody BudgetRequest request, Authentication authentication) {
-//
-//            String email = authentication.getName();
-//            BudgetResponse response = budgetService.createBudget(request, email);
-//            return new ResponseEntity<>(response, HttpStatus.CREATED);
-//
-//    }
-
-//    @PostMapping
-//    public ResponseEntity<?> createBudget(@RequestBody BudgetRequest request, Authentication authentication) {
-//        String email = authentication.getName();
-//        User user = userService.findByEmail(email); // Use this instead of login()
-//
-//        // ✅ Check if user accepted T&C
-//        if (!Boolean.TRUE.equals(user.getTncAccepted())) {
-//            return ResponseEntity.status(HttpStatus.FORBIDDEN)
-//                    .body(Map.of("error", "Please accept the Terms and Conditions to continue"));
-//        }
-//
-//        // ✅ Proceed to create the budget
-//        BudgetResponse response = budgetService.createBudget(request, email);
-//        return new ResponseEntity<>(response, HttpStatus.CREATED);
-//    }
-
     @PostMapping
     public ResponseEntity<?> createBudget(@Valid @RequestBody BudgetRequest request, Authentication authentication) {
         String email = authentication.getName();
@@ -270,10 +245,7 @@ public class BudgetController {
     }
 
     @PostMapping("/envelopes/lock")
-    public ResponseEntity<?> lockEnvelope(
-            @RequestBody LockRequest request,
-            Authentication authentication
-    ) {
+    public ResponseEntity<?> lockEnvelope(@RequestBody LockRequest request, Authentication authentication) {
         try {
             String email = authentication.getName();
             EnvelopeResponse response = budgetService.lockEnvelope(

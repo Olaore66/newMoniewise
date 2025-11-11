@@ -7,6 +7,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.stereotype.Repository;
 
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
@@ -15,6 +16,9 @@ public interface BudgetRepository extends JpaRepository<Budget, Long> {
     List<Budget> findByUserId(Long userId);
 
     List<Budget> findByUserIdAndStatus(Long userId, BudgetStatus status);
+
+    @Query(value = "SELECT CURRENT_TIMESTAMP AT TIME ZONE 'Africa/Lagos'", nativeQuery = true)
+    LocalDateTime getCurrentLagosTime();
 
     @Query("SELECT b.id FROM Budget b")
     List<Long> findAllIds();

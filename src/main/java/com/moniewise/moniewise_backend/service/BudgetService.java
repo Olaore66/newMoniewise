@@ -16,6 +16,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.core.userdetails.UserDetails;
@@ -60,7 +61,7 @@ public class BudgetService {
             UserService userService,
             TransactionLogRepository transactionLogRepository,
             NotificationService notificationService,
-            WalletService walletService, ScheduledTaskRepository scheduledTaskRepository, EnvelopeService envelopeService, BudgetLifeCycleManager budgetLifeCycleManager) {
+            WalletService walletService, ScheduledTaskRepository scheduledTaskRepository, @Lazy EnvelopeService envelopeService, BudgetLifeCycleManager budgetLifeCycleManager) {
         this.envelopeRepository = envelopeRepository;
         this.budgetRepository = budgetRepository;
         this.revenueLogRepository = revenueLogRepository;
@@ -180,7 +181,9 @@ public class BudgetService {
         budget.setDurationDays((int) durationDays);
         budget.setStatus(request.getStatus());
         budget.setCreatedAt(now);
+        budget.setRemainingAmount(request.getTotalAmount().subtract(budget.getFeeAmount()));
         Budget savedBudget = budgetRepository.save(budget);
+
 
         // Create envelopes using EnvelopeService
         List<Envelope> envelopes = new ArrayList<>();
@@ -253,7 +256,6 @@ public class BudgetService {
                 savedBudget.getName(),
                 savedBudget.getTotalAmount(),
                 savedBudget.getAllocatedAmount(),
-                savedBudget.getAllocatedAmount(),
                 savedBudget.getDurationDays(),
                 savedBudget.getStartDate(),
                 savedBudget.getEndDate(),
@@ -268,6 +270,13 @@ public class BudgetService {
                                 e.getName(),
                                 e.getAmount(),
                                 e.getRemainingAmount(),
+
+                                e.getAmount(),
+                                e.getTotalRemainingAmount(),
+                                e.getRemainingAmount(),
+                                getLimitFromConditions(e),
+                                getUsedThisPeriod(e),
+
                                 e.getConditions(),
                                 e.getCreatedAt(),
                                 e.getLastDisbursedAt(),
@@ -277,6 +286,20 @@ public class BudgetService {
                 savedBudget.getOriginalAmount(),
                 savedBudget.getFeeAmount()
         );
+    }
+
+    // Helper classes to calculate period
+    public BigDecimal getLimitFromConditions(Envelope e){
+        Map<String, Object> cond = e.getConditions();
+        if(cond == null || !cond.containsKey("limit")) return BigDecimal.ZERO;
+        Object limit = cond.get("limit");
+        return limit instanceof Number ? new BigDecimal(((Number) limit).doubleValue()) : BigDecimal.ZERO;
+    }
+
+    // Helper classes to calculate how much has been used in the condition limit
+    public BigDecimal getUsedThisPeriod(Envelope e){
+        BigDecimal limit = getLimitFromConditions(e);
+        return limit.subtract(e.getRemainingAmount()).max(BigDecimal.ZERO);
     }
 
     // New: Get a single Budget by ID
@@ -350,6 +373,13 @@ public class BudgetService {
                         envelope.getBudget().getId(),
                         envelope.getName(),
                         envelope.getAmount(),
+                        // New fields
+                        envelope.getAmount(),                    // ← initialAmount
+                        envelope.getTotalRemainingAmount(),      // ← totalRemaining
+                        envelope.getRemainingAmount(),           // ← periodRemaining
+                        getPeriodLimit(envelope),                // ← periodLimit
+                        getUsedThisPeriod(envelope),
+
                         envelope.getRemainingAmount(),
                         envelope.getConditions(),
                         envelope.getCreatedAt(),
@@ -614,6 +644,14 @@ public class BudgetService {
                                     e.getName(),
                                     e.getAmount(), // Fixed: Initial amount
                                     e.getRemainingAmount(),
+
+                                    // New fields
+                                    e.getAmount(),                    // ← initialAmount
+                                    e.getTotalRemainingAmount(),      // ← totalRemaining
+                                    e.getRemainingAmount(),           // ← periodRemaining
+                                    getPeriodLimit(e),                // ← periodLimit
+                                    getUsedThisPeriod(e),             // ← usedThisPeriod
+
                                     e.getConditions(),
                                     e.getCreatedAt(),
                                     e.getLastDisbursedAt(),
@@ -808,6 +846,14 @@ public class BudgetService {
                         envelope.getName(),
                         envelope.getAmount(),
                         envelope.getRemainingAmount(),
+
+                        // New fields
+                        envelope.getAmount(),                    // ← initialAmount
+                        envelope.getTotalRemainingAmount(),      // ← totalRemaining
+                        envelope.getRemainingAmount(),           // ← periodRemaining
+                        getPeriodLimit(envelope),                // ← periodLimit
+                        getUsedThisPeriod(envelope),             // ← usedThisPeriod
+
                         envelope.getConditions(),
                         envelope.getCreatedAt(),
                         envelope.getLastDisbursedAt(),
@@ -862,10 +908,26 @@ public class BudgetService {
                 envelope.getName(),
                 envelope.getRemainingAmount(),
                 envelope.getRemainingAmount(),
+                // New fields
+                envelope.getAmount(),                    // ← initialAmount
+                envelope.getTotalRemainingAmount(),      // ← totalRemaining
+                envelope.getRemainingAmount(),           // ← periodRemaining
+                getPeriodLimit(envelope),                // ← periodLimit
+                getUsedThisPeriod(envelope),             // ← usedThisPeriod
+
                 envelope.getConditions(),
                 envelope.getCreatedAt(),
                 envelope.getLastDisbursedAt(),
                 envelope.getNextDisbursementAt()
         );
+    }
+
+    private BigDecimal getPeriodLimit(Envelope envelope) {
+        Map<String, Object> conditions = envelope.getConditions();
+        if (conditions == null || !conditions.containsKey("limit")) {
+            return BigDecimal.ZERO;
+        }
+        Object limit = conditions.get("limit");
+        return limit instanceof Number ? new BigDecimal(((Number) limit).doubleValue()) : BigDecimal.ZERO;
     }
 }

@@ -42,8 +42,18 @@ public class EnvelopeResponse {
     private Long id;
     private Long budgetId;
     private String name;
+
+
     private BigDecimal amount;
     private BigDecimal remainingAmount;
+
+    private BigDecimal initialAmount;
+    private BigDecimal totalRemaining;
+    private BigDecimal periodRemaining;
+    private BigDecimal periodLimit;
+    private BigDecimal usedThisPeriod;
+
+
     private Map<String, Object> conditions;
     private LocalDateTime createdAt;
     private LocalDateTime lastDisbursedAt;

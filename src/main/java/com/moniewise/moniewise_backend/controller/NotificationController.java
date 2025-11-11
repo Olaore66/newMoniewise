@@ -1,9 +1,12 @@
 package com.moniewise.moniewise_backend.controller;
 
+import org.springframework.data.domain.Page;
 import com.moniewise.moniewise_backend.entity.Notification;
 import com.moniewise.moniewise_backend.repository.NotificationRepository;
 import com.moniewise.moniewise_backend.repository.UserRepository;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.web.PageableDefault;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.core.userdetails.UserDetails;
@@ -11,6 +14,8 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 import java.util.Optional;
+
+import static org.springframework.data.domain.Sort.Direction.DESC;
 
 @RestController
 @RequestMapping("/notifications")
@@ -25,11 +30,20 @@ public class NotificationController {
         this.userRepository = userRepository;
     }
 
+//    @GetMapping
+//    public ResponseEntity<List<Notification>> getNotifications(@AuthenticationPrincipal UserDetails userDetails) {
+//        Long userId = getUserIdFromUserDetails(userDetails);
+//        List<Notification> notifications = notificationRepository.findByUserIdOrderByCreatedAtDesc(userId);
+//        return ResponseEntity.ok(notifications);
+//    }
+
     @GetMapping
-    public ResponseEntity<List<Notification>> getNotifications(@AuthenticationPrincipal UserDetails userDetails) {
+    public ResponseEntity<Page<Notification>> getNotifications(
+            @AuthenticationPrincipal UserDetails userDetails,
+            @PageableDefault(size = 20, sort = "createdAt", direction = DESC) Pageable pageable) {
         Long userId = getUserIdFromUserDetails(userDetails);
-        List<Notification> notifications = notificationRepository.findByUserIdOrderByCreatedAtDesc(userId);
-        return ResponseEntity.ok(notifications);
+        Page<Notification> page = notificationRepository.findByUserId(userId, pageable);
+        return ResponseEntity.ok(page);
     }
 
     @GetMapping("/unread")
