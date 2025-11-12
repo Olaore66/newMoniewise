@@ -18,10 +18,19 @@ public enum NotificationType {
     WALLET_FUNDED,
 
     BUDGET_CREATION,
-
     ENVELOPE_CREATED,
     ENVELOPE_UPDATED,
-    ENVELOPE_DELETED
+    ENVELOPE_DELETED,
+
+    // NEW — BEST PRACTICES
+    BUDGET_END_SOON,           // 3 days left
+    DISBURSEMENT_SUCCESS,      // Money released
+    DISBURSEMENT_FAILED,       // Grace period expired
+    LIMIT_REACHED,             // Daily/weekly cap
+    EMERGENCY_USED,
+    LOCK_EXPIRED,              // Strict lock → refund
+    WEEKLY_SUMMARY,
+    POSITIVE_NUDGE,
 
 
 

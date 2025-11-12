@@ -141,6 +141,7 @@ public class BudgetService {
                         .divide(new BigDecimal("100"), 2, RoundingMode.HALF_UP))
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
 
+
         // Validate allocation
         BigDecimal minimumAllocation = actualBudgetAmount.multiply(new BigDecimal("50"))
                 .divide(new BigDecimal("100"), 2, RoundingMode.HALF_UP);
@@ -157,6 +158,15 @@ public class BudgetService {
             );
         }
 
+        // ADD THIS LOOP: VALIDATE EACH ENVELOPE LIMIT
+        for (EnvelopeRequest envelopeRequest : request.getEnvelopes()) {
+            BigDecimal envelopeAmount = actualBudgetAmount
+                    .multiply(envelopeRequest.getPercentage())
+                    .divide(new BigDecimal("100"), 2, RoundingMode.HALF_UP);
+
+            validateEnvelopeLimit(envelopeRequest, envelopeAmount, request.getStartDate(), request.getEndDate());
+        }
+
         // Check wallet balance for allocation sum
         BigDecimal walletBalance = walletService.checkBalance(user.getId());
         if (walletBalance.compareTo(allocationSum) < 0) {
@@ -164,7 +174,9 @@ public class BudgetService {
                     "Transaction failed: Your wallet has insufficient funds. At least ₦%.2f is required for allocation, but your current balance is ₦%.2f. Please fund your wallet.",
                     allocationSum, walletBalance
             );
+
             notificationService.sendNotification(user.getId().toString(), message, NotificationType.BUDGET_CREATION);
+            
             throw new IllegalArgumentException(message);
         }
 
@@ -195,8 +207,10 @@ public class BudgetService {
             envelopes.add(envelope);
         }
 
-        savedBudget.setEnvelopes(envelopes);
-        budgetRepository.save(savedBudget);
+        savedBudget.clearEnvelopes();
+        savedBudget.addAllEnvelopes(envelopes);
+//        savedBudget.setEnvelopes(envelopes);
+//        budgetRepository.save(savedBudget);
 
         // Deduct allocation from user wallet
         walletService.deductBalance(user.getId(), allocationSum);
@@ -274,7 +288,8 @@ public class BudgetService {
                                 e.getAmount(),
                                 e.getTotalRemainingAmount(),
                                 e.getRemainingAmount(),
-                                getLimitFromConditions(e),
+//                                getLimitFromConditions(e),
+                                calculatePeriodLimit(e, savedBudget),
                                 getUsedThisPeriod(e),
 
                                 e.getConditions(),
@@ -377,7 +392,8 @@ public class BudgetService {
                         envelope.getAmount(),                    // ← initialAmount
                         envelope.getTotalRemainingAmount(),      // ← totalRemaining
                         envelope.getRemainingAmount(),           // ← periodRemaining
-                        getPeriodLimit(envelope),                // ← periodLimit
+//                        getPeriodLimit(envelope),                // ← periodLimit
+                        calculatePeriodLimit(envelope, budget),
                         getUsedThisPeriod(envelope),
 
                         envelope.getRemainingAmount(),
@@ -649,7 +665,8 @@ public class BudgetService {
                                     e.getAmount(),                    // ← initialAmount
                                     e.getTotalRemainingAmount(),      // ← totalRemaining
                                     e.getRemainingAmount(),           // ← periodRemaining
-                                    getPeriodLimit(e),                // ← periodLimit
+//                                    getPeriodLimit(e),                // ← periodLimit
+                                    calculatePeriodLimit(e, budget),
                                     getUsedThisPeriod(e),             // ← usedThisPeriod
 
                                     e.getConditions(),
@@ -851,7 +868,8 @@ public class BudgetService {
                         envelope.getAmount(),                    // ← initialAmount
                         envelope.getTotalRemainingAmount(),      // ← totalRemaining
                         envelope.getRemainingAmount(),           // ← periodRemaining
-                        getPeriodLimit(envelope),                // ← periodLimit
+//                        getPeriodLimit(envelope),                // ← periodLimit
+                        calculatePeriodLimit(envelope, budget),
                         getUsedThisPeriod(envelope),             // ← usedThisPeriod
 
                         envelope.getConditions(),
@@ -922,6 +940,12 @@ public class BudgetService {
         );
     }
 
+    private long countActiveDays(LocalDate start, LocalDate end, List<String> days) {
+        return start.datesUntil(end.plusDays(1))
+                .filter(d -> days.contains(d.getDayOfWeek().name()))
+                .count();
+    }
+
     private BigDecimal getPeriodLimit(Envelope envelope) {
         Map<String, Object> conditions = envelope.getConditions();
         if (conditions == null || !conditions.containsKey("limit")) {
@@ -929,5 +953,81 @@ public class BudgetService {
         }
         Object limit = conditions.get("limit");
         return limit instanceof Number ? new BigDecimal(((Number) limit).doubleValue()) : BigDecimal.ZERO;
+    }
+
+    // CALCULATE THE PERIODLIMIT
+    private BigDecimal calculatePeriodLimit(Envelope envelope, Budget budget) {
+        Map<String, Object> cond = envelope.getConditions();
+        if (cond == null || !cond.containsKey("type")) return envelope.getAmount();
+
+        String type = ((String) cond.get("type")).toLowerCase();
+        BigDecimal amount = envelope.getAmount();
+        LocalDate start = budget.getStartDate();
+        LocalDate end = budget.getEndDate();
+
+        return switch (type) {
+            case "daily" -> amount.divide(BigDecimal.valueOf(ChronoUnit.DAYS.between(start, end) + 1), 2, RoundingMode.HALF_UP);
+            case "weekly" -> amount.divide(BigDecimal.valueOf((ChronoUnit.DAYS.between(start, end) + 6) / 7), 2, RoundingMode.HALF_UP);
+            case "dynamic" -> {
+                List<String> days = (List<String>) cond.get("days");
+                long active = countActiveDays(start, end, days);
+                yield active > 0 ? amount.divide(BigDecimal.valueOf(active), 2, RoundingMode.HALF_UP) : BigDecimal.ZERO;
+            }
+            default -> BigDecimal.ZERO;
+        };
+    }
+
+    private void validateEnvelopeLimit(EnvelopeRequest req, BigDecimal envelopeAmount, LocalDate start, LocalDate end) {
+        Map<String, Object> cond = req.getConditions();
+        if (cond == null || !cond.containsKey("limit")) return;
+
+        String type = ((String) cond.get("type")).toLowerCase();
+        if (List.of("emergency", "strict_lock", "safe_lock").contains(type)) return;
+
+        BigDecimal userLimit = new BigDecimal(cond.get("limit").toString());
+        if (userLimit.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new IllegalArgumentException(
+                    String.format("'%s' envelope: Limit must be positive. You set ₦%,.2f.", req.getName(), userLimit)
+            );
+        }
+
+        long activePeriods = switch (type) {
+            case "daily" -> ChronoUnit.DAYS.between(start, end) + 1;
+            case "weekly" -> (ChronoUnit.DAYS.between(start, end) + 6) / 7;
+            case "dynamic" -> {
+                List<String> days = (List<String>) cond.get("days");
+                if (days == null || days.isEmpty()) {
+                    throw new IllegalArgumentException(
+                            String.format("'%s' envelope: Dynamic type requires 'days' array.", req.getName())
+                    );
+                }
+                yield countActiveDays(start, end, days);
+            }
+            default -> 1;
+        };
+
+        BigDecimal maxAllowed = envelopeAmount;
+        BigDecimal maxFromLimit = userLimit.multiply(BigDecimal.valueOf(activePeriods));
+        BigDecimal maxSafeLimit = maxAllowed.divide(BigDecimal.valueOf(activePeriods), 2, RoundingMode.HALF_UP);
+        BigDecimal minNeededAllocation = maxFromLimit;
+
+        if (maxFromLimit.compareTo(maxAllowed) > 0) {
+            String message = String.format(
+                    "'%s' envelope: Your limit of ₦%,.2f is too high.\n" +
+                            "• With %d active %s, total allowed = ₦%,.2f\n" +
+                            "• But you only allocated ₦%,.2f\n\n" +
+                            "Fix it by:\n" +
+                            "1. Reduce limit to ≤ ₦%,.2f per %s, or\n" +
+                            "2. Increase envelope allocation to ≥ ₦%,.2f",
+                    req.getName(),
+                    userLimit,
+                    activePeriods, activePeriods == 1 ? "period" : "periods",
+                    maxFromLimit,
+                    maxAllowed,
+                    maxSafeLimit, type.equals("dynamic") ? "disbursement" : type,
+                    minNeededAllocation
+            );
+            throw new IllegalArgumentException(message);
+        }
     }
 }

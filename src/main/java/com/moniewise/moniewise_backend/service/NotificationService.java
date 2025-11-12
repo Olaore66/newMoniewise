@@ -74,7 +74,15 @@ public class NotificationService {
         }
     }
 
-    public void sendNotification(String userId, String message, NotificationType type, Long budgetId, Long envelopeId, String actionType, String redirectUrl) {
+    public void sendNotification(
+            String userId,
+            String message,
+            NotificationType type,
+            Long budgetId,
+            Long envelopeId,
+            String actionType,
+            String redirectUrl) {
+
         try {
             Notification notification = new Notification();
             notification.setUserId(Long.valueOf(userId));
