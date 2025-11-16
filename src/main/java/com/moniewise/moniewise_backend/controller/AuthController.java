@@ -71,22 +71,6 @@ public class AuthController {
         }
     }
 
-
-//    @PostMapping("/login")
-//    public ResponseEntity<?> login(@RequestBody AuthRequest request) {
-//        try {
-//            User user = userService.login(request.getEmailOrPhone(), request.getPassword());
-//            UserDetails userDetails = userService.loadUserByUsername(user.getEmail());
-//            String token = jwtUtil.generateToken(userDetails);
-//            return ResponseEntity.ok(new AuthResponse(token));
-//        } catch (RuntimeException e) {
-//            if ("OTP verification required".equals(e.getMessage())) {
-//                return ResponseEntity.status(HttpStatus.FORBIDDEN)
-//                        .body(Map.of("error", "OTP verification required"));
-//            }
-//            return ResponseEntity.badRequest().body(e.getMessage());
-//        }
-//    }
     @PostMapping("/login")
     public ResponseEntity<?> login(@RequestBody AuthRequest request) {
         try {

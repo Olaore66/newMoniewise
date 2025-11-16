@@ -109,10 +109,11 @@ public class BudgetService {
             throw new IllegalArgumentException("Start date must be before end date");
         }
 
-        long durationDays = ChronoUnit.DAYS.between(request.getStartDate(), request.getEndDate()) + 1;
+        long durationDays = ChronoUnit.DAYS.between(request.getStartDate(), request.getEndDate());
+        if (durationDays <= 0) durationDays = 1;
 
         // Validate duration
-        if (durationDays <= 0 || durationDays > 90) {
+        if (durationDays > 90) {
             notificationService.sendNotification(user.getId().toString(),
                     "Budget creation failed: Duration cannot exceed 90 days.", NotificationType.BUDGET_CREATION);
             throw new IllegalArgumentException("Budget duration must be between 1 and 90 days");
