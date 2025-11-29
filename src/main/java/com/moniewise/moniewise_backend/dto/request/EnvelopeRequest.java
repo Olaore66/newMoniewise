@@ -55,6 +55,8 @@ public class EnvelopeRequest {
 
     private Long budgetId;
 
+    private BigDecimal exactAmount;
+
     // Getters and setters
     public String getName() { return name; }
     public void setName(String name) { this.name = name; }
@@ -70,4 +72,7 @@ public class EnvelopeRequest {
     public Long getBudgetId() {
         return budgetId;
     }
+
+    public BigDecimal getExactAmount() { return exactAmount; }
+    public void setExactAmount(BigDecimal exactAmount) { this.exactAmount = exactAmount; }
 }

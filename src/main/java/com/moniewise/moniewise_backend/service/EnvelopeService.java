@@ -240,9 +240,20 @@ public class EnvelopeService {
             throw new IllegalArgumentException("Can only add envelopes to active budgets");
         }
 
-        BigDecimal amount = budget.getTotalAmount()
-                .multiply(request.getPercentage())
-                .divide(BigDecimal.valueOf(100), 2, RoundingMode.HALF_UP);
+//        BigDecimal amount = budget.getTotalAmount()
+//                .multiply(request.getPercentage())
+//                .divide(BigDecimal.valueOf(100), 2, RoundingMode.HALF_UP);
+
+        BigDecimal amount;
+
+        // Use pre-calculated exact amount if provided (from createBudget), otherwise fall back to percentage
+        if (request.getExactAmount() != null && request.getExactAmount().compareTo(BigDecimal.ZERO) > 0) {
+            amount = request.getExactAmount();
+        } else {
+            amount = budget.getTotalAmount()
+                    .multiply(request.getPercentage())
+                    .divide(BigDecimal.valueOf(100), 2, RoundingMode.HALF_UP);
+        }
 
         validateEnvelopeConditions(request, amount);
 

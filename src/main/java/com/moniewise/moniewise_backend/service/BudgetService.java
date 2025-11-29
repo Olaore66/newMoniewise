@@ -125,6 +125,44 @@ public class BudgetService {
         BigDecimal originalAmount = request.getTotalAmount();
         BigDecimal actualBudgetAmount = originalAmount.subtract(fee);
 
+        // === ADD THIS NEW BLOCK (Option 3 implementation) ===
+        List<EnvelopeRequest> envelopeRequests = request.getEnvelopes();
+        Map<EnvelopeRequest, BigDecimal> finalAmounts = new LinkedHashMap<>();
+
+        BigDecimal sumOfRoundedAmounts = BigDecimal.ZERO;
+
+        for (EnvelopeRequest env : envelopeRequests) {
+            BigDecimal percentage = env.getPercentage();
+            BigDecimal calculated = actualBudgetAmount
+                    .multiply(percentage)
+                    .divide(new BigDecimal("100"), 10, RoundingMode.HALF_UP); // keep precision
+
+            BigDecimal rounded = calculated.setScale(2, RoundingMode.HALF_UP);
+            finalAmounts.put(env, rounded);
+            sumOfRoundedAmounts = sumOfRoundedAmounts.add(rounded);
+        }
+
+        // Calculate the rounding error (usually between -0.99 and +0.99)
+        BigDecimal roundingError = actualBudgetAmount.subtract(sumOfRoundedAmounts);
+
+        // Distribute the error to the largest envelope(s) – this makes sum EXACT
+        if (roundingError.compareTo(BigDecimal.ZERO) != 0) {
+            // Strategy: give all the difference to the envelope with highest percentage
+            EnvelopeRequest largest = envelopeRequests.stream()
+                    .max(Comparator.comparing(EnvelopeRequest::getPercentage))
+                    .orElse(envelopeRequests.get(0));
+
+            BigDecimal oldAmount = finalAmounts.get(largest);
+            BigDecimal newAmount = oldAmount.add(roundingError);
+            finalAmounts.put(largest, newAmount);
+
+            logger.info("Adjusted envelope '{}' by ₦{} due to rounding. New amount: ₦{}",
+                    largest.getName(), roundingError, newAmount);
+        }
+
+
+
+
         // Validate envelope percentages
         BigDecimal totalPercentage = request.getEnvelopes().stream()
                 .map(EnvelopeRequest::getPercentage)
@@ -161,9 +199,10 @@ public class BudgetService {
 
         // ADD THIS LOOP: VALIDATE EACH ENVELOPE LIMIT
         for (EnvelopeRequest envelopeRequest : request.getEnvelopes()) {
-            BigDecimal envelopeAmount = actualBudgetAmount
-                    .multiply(envelopeRequest.getPercentage())
-                    .divide(new BigDecimal("100"), 2, RoundingMode.HALF_UP);
+//            BigDecimal envelopeAmount = actualBudgetAmount
+//                    .multiply(envelopeRequest.getPercentage())
+//                    .divide(new BigDecimal("100"), 2, RoundingMode.HALF_UP);
+            BigDecimal envelopeAmount = finalAmounts.get(envelopeRequest); // ← THIS IS NOW GUARANTEED TO SUM CORRECTLY
 
             validateEnvelopeLimit(envelopeRequest, envelopeAmount, request.getStartDate(), request.getEndDate());
         }
@@ -201,7 +240,12 @@ public class BudgetService {
         // Create envelopes using EnvelopeService
         List<Envelope> envelopes = new ArrayList<>();
         for (EnvelopeRequest envelopeRequest : request.getEnvelopes()) {
+
+            BigDecimal correctAmount = finalAmounts.get(envelopeRequest);
+            envelopeRequest.setExactAmount(correctAmount);
+
             envelopeRequest.setBudgetId(savedBudget.getId()); // Set budget ID
+
             EnvelopeResponse envelopeResponse = envelopeService.createEnvelope(envelopeRequest, email);
             Envelope envelope = envelopeRepository.findById(envelopeResponse.getId())
                     .orElseThrow(() -> new IllegalStateException("Failed to retrieve created envelope"));
