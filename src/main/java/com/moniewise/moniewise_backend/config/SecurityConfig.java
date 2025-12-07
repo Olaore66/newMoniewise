@@ -172,18 +172,20 @@ public class SecurityConfig {
                         "/auth/forgot-password",
                         "/auth/reset-password"// Add this
                 ).permitAll()
+                .antMatchers("/webhooks/paystack").permitAll() // Open for Paystack
+
                 .antMatchers("/auth/logout", "/auth/refresh").authenticated()
-//                .antMatchers("/tnc/**").authenticated()
+//              .antMatchers("/tnc/**").authenticated()
                 .antMatchers("/users/**").authenticated()
                 .antMatchers("/notifications/**").authenticated()
                 .antMatchers("/disbursements/**").authenticated()
+                .antMatchers("/transactions/**").authenticated()
 
-//                .antMatchers("/users/otp/generate", "/users/otp/verify").authenticated()
+//              .antMatchers("/users/otp/generate", "/users/otp/verify").authenticated()
                 .antMatchers("/budgets/**").authenticated()
                 .antMatchers("/envelopes/**").authenticated()
                 .antMatchers("/wallets/**").authenticated()
                 .antMatchers(HttpMethod.PATCH, "/users/tnc").authenticated() // Explicitly secure TNC
-                .antMatchers("/webhooks/paystack").permitAll() // Open for Paystack
                 .anyRequest().authenticated()
                 .and()
                 .oauth2Login()

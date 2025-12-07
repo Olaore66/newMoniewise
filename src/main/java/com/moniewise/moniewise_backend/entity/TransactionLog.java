@@ -45,6 +45,18 @@ public class TransactionLog {
     public TransactionLog() {}
 
     public TransactionLog(Long userId, Long budgetId, Long sourceEnvelopeId, Long targetEnvelopeId,
+                         BigDecimal amount,  String transactionType, String description) {
+        this.userId = userId;
+        this.budgetId = budgetId;
+        this.sourceEnvelopeId = sourceEnvelopeId;
+        this.targetEnvelopeId = targetEnvelopeId;
+        this.amount = amount;
+        this.transactionType = transactionType;
+        this.description = description;
+        // createdAt set via setCreatedAt() in service
+    }
+
+    public TransactionLog(Long userId, Long budgetId, Long sourceEnvelopeId, Long targetEnvelopeId,
                           String externalAccountId, BigDecimal amount, BigDecimal fee, String transactionType, String description) {
         this.userId = userId;
         this.budgetId = budgetId;

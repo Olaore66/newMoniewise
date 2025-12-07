@@ -116,13 +116,14 @@ public class EnvelopeService {
             throw new IllegalArgumentException("Insufficient funds in source envelope. Available: ₦" + source.getTotalRemainingAmount());
         }
 
-        BigDecimal feePercentage = validateAndCalculateFee(source, sourceBudget, transferAmount, now, "envelope_transfer", email, targetId, null);
-        BigDecimal fee = transferAmount.multiply(feePercentage).divide(BigDecimal.valueOf(100), 2, RoundingMode.HALF_UP);
-        BigDecimal amountAfterFee = transferAmount.subtract(fee);
+        // CHARGE TO MOVE FROM BETWEEN ENVELOPES
+//        BigDecimal feePercentage = validateAndCalculateFee(source, sourceBudget, transferAmount, now, "envelope_transfer", email, targetId, null);
+//        BigDecimal fee = transferAmount.multiply(feePercentage).divide(BigDecimal.valueOf(100), 2, RoundingMode.HALF_UP);
+//        BigDecimal amountAfterFee = transferAmount.subtract(fee);
 
         source.setTotalRemainingAmount(source.getTotalRemainingAmount().subtract(transferAmount));
         source.setRemainingAmount(getRemainingLimit(sourceId, email).subtract(transferAmount));
-        target.setTotalRemainingAmount(target.getTotalRemainingAmount().add(amountAfterFee));
+        target.setTotalRemainingAmount(target.getTotalRemainingAmount().add(transferAmount));
         envelopeRepository.saveAll(List.of(source, target));
 
         BigDecimal newBudgetRemaining = envelopeRepository.findByBudgetId(sourceBudget.getId())
@@ -132,18 +133,38 @@ public class EnvelopeService {
         sourceBudget.setRemainingAmount(newBudgetRemaining);
         budgetRepository.save(sourceBudget);
 
+        // Main title – instantly tells the user what happened
+        String description = String.format("From %s → %s • Budget: %s • Moved ₦%.2f",
+                source.getName(),
+                target.getName(),
+                sourceBudget.getName(),
+                transferAmount
+        );
+
         TransactionLog transactionLog = new TransactionLog(
-                user.getId(), sourceBudget.getId(), sourceId, targetId, null,
-                transferAmount, fee, "envelope_to_envelope", null);
+                user.getId(),
+                sourceBudget.getId(),
+                sourceId,
+                targetId,
+                transferAmount,
+                "envelope_to_envelope",
+                description
+        );
         transactionLog.setCreatedAt(now);
         transactionLogRepository.save(transactionLog);
 
-        String revenueDescription = String.format("Transfer in Budget %d from %s to %s (fee: %s%%)",
-                sourceBudget.getId(), source.getName(), target.getName(), feePercentage);
-        RevenueLog revenueLog = new RevenueLog(user.getId(), "envelope_transfer_fee", fee, revenueDescription);
-        revenueLog.setCreatedAt(now);
-        revenueLogRepository.save(revenueLog);
-        creditRevenueAccount(fee, revenueDescription);
+//        String revenueDescription = String.format("Transfer in Budget %d from %s to %s (fee: %s%%)",
+//                sourceBudget.getId(), source.getName(), target.getName());
+//        RevenueLog revenueLog = new RevenueLog(
+//                user.getId(),
+//                "envelope_transfer_fee",
+//                fee,
+//                revenueDescription
+//        );
+//        revenueLog.setCreatedAt(now);
+//
+//        revenueLogRepository.save(revenueLog);
+//        creditRevenueAccount(fee, revenueDescription);
 
         BigDecimal remainingLimit = getRemainingLimit(sourceId, email);
         String period = source.getConditions().getOrDefault("type", "period").toString().equals("daily") ? "today" :
@@ -151,8 +172,15 @@ public class EnvelopeService {
 
         notificationService.sendNotification(
                 user.getId().toString(),
-                String.format("Moved ₦%.2f from '%s' to '%s' (Budget: %s, Fee: ₦%.2f). Remaining limit %s: ₦%.2f. Total remaining: ₦%.2f.",
-                        amountAfterFee, source.getName(), target.getName(), sourceBudget.getName(), fee, period, remainingLimit, source.getTotalRemainingAmount()),
+                String.format(
+                        "Moved ₦%.2f from '%s' to '%s' (Budget: %s, Fee: ₦%.2f). Remaining limit %s: ₦%.2f. Total remaining: ₦%.2f.",
+                        source.getName(),
+                        target.getName(),
+                        sourceBudget.getName(),
+                        period,
+                        remainingLimit,
+                        source.getTotalRemainingAmount()
+                ),
                 NotificationType.ENVELOPE_TRANSFER,
                 sourceBudget.getId(),
                 sourceId,
