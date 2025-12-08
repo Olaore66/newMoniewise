@@ -1,6 +1,8 @@
 // File: src/main/java/com/moniewise/moniewise_backend/dto/response/TransactionListResponse.java
 package com.moniewise.moniewise_backend.dto.response;
 
+import com.moniewise.moniewise_backend.enums.TransactionType;
+
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
@@ -10,7 +12,7 @@ public record TransactionListResponse(
         String description,
         BigDecimal amount,           // negative if outgoing
         BigDecimal fee,
-        String type,
+        TransactionType transactionType,
         LocalDateTime createdAt,
         TransactionMeta meta
 ) {

@@ -1,6 +1,7 @@
 package com.moniewise.moniewise_backend.repository;
 
 import com.moniewise.moniewise_backend.entity.TransactionLog;
+import com.moniewise.moniewise_backend.enums.TransactionType;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -10,6 +11,7 @@ import org.springframework.stereotype.Repository;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Set;
 
 @Repository
 public interface TransactionLogRepository extends JpaRepository<TransactionLog, Long> {
@@ -41,4 +43,12 @@ public interface TransactionLogRepository extends JpaRepository<TransactionLog, 
     // Keep your old ones if you use them elsewhere
     List<TransactionLog> findByUserId(Long userId);
     List<TransactionLog> findByBudgetId(Long budgetId);
+
+    @Query("SELECT t FROM TransactionLog t WHERE t.userId = :userId " +
+            "AND t.transactionType IN :types " +
+            "ORDER BY t.createdAt DESC")
+    Page<TransactionLog> findUserVisibleTransactions(
+            @Param("userId") Long userId,
+            @Param("types") Set<TransactionType> types,
+            Pageable pageable);
 }

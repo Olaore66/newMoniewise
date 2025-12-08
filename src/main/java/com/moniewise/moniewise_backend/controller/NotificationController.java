@@ -42,6 +42,7 @@ public class NotificationController {
             @AuthenticationPrincipal UserDetails userDetails,
             @PageableDefault(size = 20, sort = "createdAt", direction = DESC) Pageable pageable) {
         Long userId = getUserIdFromUserDetails(userDetails);
+
         Page<Notification> page = notificationRepository.findByUserId(userId, pageable);
         return ResponseEntity.ok(page);
     }

@@ -29,6 +29,7 @@ import java.util.*;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import static com.moniewise.moniewise_backend.enums.TransactionType.*;
 
 
 @Service
@@ -506,7 +507,7 @@ public class BudgetLifeCycleManager {
                 refundLog.setBudgetId(budget.getId());
                 refundLog.setSourceEnvelopeId(envelope.getId());
                 refundLog.setAmount(remainingAmount);
-                refundLog.setTransactionType("budget_completion_refunded");
+                refundLog.setTransactionType(BUDGET_COMPLETION_REFUND);
                 refundLog.setCreatedAt(now);
                 logsToSave.add(refundLog);
 
@@ -692,7 +693,7 @@ public class BudgetLifeCycleManager {
             disbursementLog.setBudgetId(envelope.getBudget().getId());
             disbursementLog.setSourceEnvelopeId(envelope.getId());
             disbursementLog.setAmount(amountToDisburse);
-            disbursementLog.setTransactionType("envelope_disbursement_pending"); // FIX: Updated transaction type
+            disbursementLog.setTransactionType(ENVELOPE_DISBURSEMENT_PENDING); // FIX: Updated transaction type
             disbursementLog.setCreatedAt(now);
             logsToSave.add(disbursementLog);
 
@@ -951,7 +952,7 @@ public class BudgetLifeCycleManager {
                 refundLog.setBudgetId(envelope.getBudget().getId());
                 refundLog.setSourceEnvelopeId(pd.getEnvelopeId());
                 refundLog.setAmount(pd.getAmount());
-                refundLog.setTransactionType("disbursement_refunded");
+                refundLog.setTransactionType(DISBURSEMENT_REFUNDED);
                 refundLog.setDescription(String.format("Refund of ₦%.2f to envelope %s", pd.getAmount(), pd.getEnvelopeName()));
                 refundLog.setCreatedAt(now);
                 logsToSave.add(refundLog);

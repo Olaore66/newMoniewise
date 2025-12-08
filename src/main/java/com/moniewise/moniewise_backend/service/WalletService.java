@@ -4,6 +4,7 @@ import com.moniewise.moniewise_backend.entity.TransactionLog;
 import com.moniewise.moniewise_backend.entity.User;
 import com.moniewise.moniewise_backend.entity.Wallet;
 import com.moniewise.moniewise_backend.enums.NotificationType;
+import com.moniewise.moniewise_backend.enums.TransactionType;
 import com.moniewise.moniewise_backend.enums.WalletStatus;
 import com.moniewise.moniewise_backend.repository.TransactionLogRepository;
 import com.moniewise.moniewise_backend.repository.UserRepository;
@@ -21,6 +22,9 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+
+import static com.moniewise.moniewise_backend.enums.TransactionType.WALLET_DEDUCTION;
+import static com.moniewise.moniewise_backend.enums.TransactionType.WALLET_DEPOSIT;
 
 @Service
 public class WalletService {
@@ -90,7 +94,7 @@ public class WalletService {
         transactionLog.setBudgetId(null);
         transactionLog.setAmount(amount);
         transactionLog.setFee(BigDecimal.ZERO);
-        transactionLog.setTransactionType("wallet_deduction");
+        transactionLog.setTransactionType(WALLET_DEDUCTION);
         transactionLog.setCreatedAt(LocalDateTime.now());
         transactionLogRepository.save(transactionLog);
 
@@ -200,7 +204,7 @@ public class WalletService {
         transactionLog.setBudgetId(null);
         transactionLog.setAmount(amount);
         transactionLog.setFee(BigDecimal.ZERO);
-        transactionLog.setTransactionType("wallet_deposit");
+        transactionLog.setTransactionType(WALLET_DEPOSIT);
         transactionLog.setCreatedAt(LocalDateTime.now());
         transactionLogRepository.save(transactionLog);
         String message = notificationMessage != null

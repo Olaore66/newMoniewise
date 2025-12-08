@@ -1,6 +1,8 @@
 // src/main/java/com/moniewise/moniewise_backend/dto/transaction/TransactionDetailResponse.java
 package com.moniewise.moniewise_backend.dto.response;
 
+import com.moniewise.moniewise_backend.enums.TransactionType;
+
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
@@ -11,7 +13,7 @@ public record TransactionDetailResponse(
         BigDecimal amount,
         BigDecimal fee,
         BigDecimal netAmount,            // amount - fee (for clarity)
-        String transactionType,
+        TransactionType transactionType,
         LocalDateTime createdAt,
 
         // Context

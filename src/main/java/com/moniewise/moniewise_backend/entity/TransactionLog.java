@@ -1,5 +1,8 @@
 package com.moniewise.moniewise_backend.entity;
 
+import com.moniewise.moniewise_backend.config.TransactionTypeConverter;
+import com.moniewise.moniewise_backend.enums.TransactionType;
+
 import javax.persistence.*;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -32,8 +35,16 @@ public class TransactionLog {
     @Column(name = "fee")
     private BigDecimal fee;
 
+//    @Column(name = "transaction_type", nullable = false)
+//    @Enumerated(EnumType.STRING)
+//    private TransactionType transactionType;
+
     @Column(name = "transaction_type", nullable = false)
-    private String transactionType; // e.g., "envelope_to_envelope", "envelope_to_external", "failed_external_transfer"
+    @Convert(converter = TransactionTypeConverter.class)
+    private TransactionType transactionType;
+
+//    @Column(name = "transaction_type", nullable = false)
+//    private String transactionType; // e.g., "envelope_to_envelope", "envelope_to_external", "failed_external_transfer"
 
     @Column(name = "description")
     private String description; // For failure reasons
@@ -45,7 +56,7 @@ public class TransactionLog {
     public TransactionLog() {}
 
     public TransactionLog(Long userId, Long budgetId, Long sourceEnvelopeId, Long targetEnvelopeId,
-                         BigDecimal amount,  String transactionType, String description) {
+                         BigDecimal amount,  TransactionType transactionType, String description) {
         this.userId = userId;
         this.budgetId = budgetId;
         this.sourceEnvelopeId = sourceEnvelopeId;
@@ -57,7 +68,7 @@ public class TransactionLog {
     }
 
     public TransactionLog(Long userId, Long budgetId, Long sourceEnvelopeId, Long targetEnvelopeId,
-                          String externalAccountId, BigDecimal amount, BigDecimal fee, String transactionType, String description) {
+                          String externalAccountId, BigDecimal amount, BigDecimal fee, TransactionType transactionType, String description) {
         this.userId = userId;
         this.budgetId = budgetId;
         this.sourceEnvelopeId = sourceEnvelopeId;
@@ -87,8 +98,8 @@ public class TransactionLog {
     public void setAmount(BigDecimal amount) { this.amount = amount; }
     public BigDecimal getFee() { return fee; }
     public void setFee(BigDecimal fee) { this.fee = fee; }
-    public String getTransactionType() { return transactionType; }
-    public void setTransactionType(String transactionType) { this.transactionType = transactionType; }
+    public TransactionType getTransactionType() { return transactionType; }
+    public void setTransactionType(TransactionType transactionType) { this.transactionType = transactionType; }
     public String getDescription() { return description; }
     public void setDescription(String description) { this.description = description; }
     public LocalDateTime getCreatedAt() { return createdAt; }

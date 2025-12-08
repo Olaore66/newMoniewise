@@ -9,6 +9,7 @@ import com.moniewise.moniewise_backend.entity.*;
 import com.moniewise.moniewise_backend.enums.BudgetStatus;
 import com.moniewise.moniewise_backend.enums.NotificationType;
 import com.moniewise.moniewise_backend.enums.Status;
+import com.moniewise.moniewise_backend.enums.TransactionType;
 import com.moniewise.moniewise_backend.exception.EntityNotFoundException;
 import com.moniewise.moniewise_backend.repository.*;
 import org.slf4j.Logger;
@@ -30,6 +31,9 @@ import java.time.format.DateTimeParseException;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
+
+import static com.moniewise.moniewise_backend.enums.TransactionStatus.FAILED;
+import static com.moniewise.moniewise_backend.enums.TransactionType.*;
 
 @Service
 public class EnvelopeService {
@@ -147,7 +151,7 @@ public class EnvelopeService {
                 sourceId,
                 targetId,
                 transferAmount,
-                "envelope_to_envelope",
+                ENVELOPE_TO_ENVELOPE,
                 description
         );
         transactionLog.setCreatedAt(now);
@@ -228,7 +232,7 @@ public class EnvelopeService {
 
         TransactionLog transactionLog = new TransactionLog(
                 user.getId(), sourceBudget.getId(), sourceId, null, externalAccount.getAccountNumber(),
-                transferAmount, fee, "envelope_to_external", null);
+                transferAmount, fee, ENVELOPE_TO_EXTERNAL, null);
         transactionLog.setCreatedAt(now);
         transactionLogRepository.save(transactionLog);
 
@@ -402,7 +406,7 @@ public class EnvelopeService {
 
         TransactionLog log = new TransactionLog(
                 user.getId(), envelope.getBudget().getId(), envelope.getId(), null, null,
-                pd.getAmount(), BigDecimal.ZERO, "envelope_disbursement", "Claimed pending disbursement"
+                pd.getAmount(), BigDecimal.ZERO, ENVELOPE_DISBURSEMENT, "Claimed pending disbursement"
         );
         log.setCreatedAt(now);
         transactionLogRepository.save(log);
@@ -612,7 +616,7 @@ public class EnvelopeService {
                             "Budget period has ended on " + budgetEndDate;
                     TransactionLog transactionLog = new TransactionLog(
                             sourceBudget.getUser().getId(), sourceBudget.getId(), source.getId(), targetId, externalAccountNumber,
-                            transferAmount, BigDecimal.ZERO, "failed_" + transactionType, reason);
+                            transferAmount, BigDecimal.ZERO, TransactionType.FAILED, reason);
                     transactionLog.setCreatedAt(now);
                     transactionLogRepository.save(transactionLog);
                     throw new IllegalArgumentException(
@@ -627,7 +631,7 @@ public class EnvelopeService {
                     String reason = "Invalid day: " + currentDayOfWeek;
                     TransactionLog transactionLog = new TransactionLog(
                             sourceBudget.getUser().getId(), sourceBudget.getId(), source.getId(), targetId, externalAccountNumber,
-                            transferAmount, BigDecimal.ZERO, "failed_" + transactionType, reason);
+                            transferAmount, BigDecimal.ZERO, TransactionType.FAILED, reason);
                     transactionLog.setCreatedAt(now);
                     transactionLogRepository.save(transactionLog);
                     throw new IllegalArgumentException(
@@ -643,7 +647,7 @@ public class EnvelopeService {
                     String reason = "Outside time window: currentTime=" + now.toLocalTime() + ", validWindow=" + validStartTime + " to " + validEndTime;
                     TransactionLog transactionLog = new TransactionLog(
                             sourceBudget.getUser().getId(), sourceBudget.getId(), source.getId(), targetId, externalAccountNumber,
-                            transferAmount, BigDecimal.ZERO, "failed_" + transactionType, reason);
+                            transferAmount, BigDecimal.ZERO, TransactionType.FAILED, reason);
                     transactionLog.setCreatedAt(now);
                     transactionLogRepository.save(transactionLog);
                     throw new IllegalArgumentException(
@@ -677,7 +681,7 @@ public class EnvelopeService {
                 logger.warn("Attempted transfer from strict_lock envelope {} by user {}: {}", source.getId(), email, reason);
                 TransactionLog transactionLog = new TransactionLog(
                         sourceBudget.getUser().getId(), sourceBudget.getId(), source.getId(), targetId, externalAccountNumber,
-                        transferAmount, BigDecimal.ZERO, "failed_" + transactionType, reason);
+                        transferAmount, BigDecimal.ZERO, TransactionType.FAILED, reason);
                 transactionLog.setCreatedAt(now);
                 transactionLogRepository.save(transactionLog);
                 throw new IllegalArgumentException(reason);

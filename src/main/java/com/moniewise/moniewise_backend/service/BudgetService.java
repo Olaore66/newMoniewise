@@ -33,6 +33,8 @@ import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.stream.Collectors;
 
+import static com.moniewise.moniewise_backend.enums.TransactionType.*;
+
 @Service
 public class BudgetService {
 
@@ -254,8 +256,6 @@ public class BudgetService {
 
         savedBudget.clearEnvelopes();
         savedBudget.addAllEnvelopes(envelopes);
-//        savedBudget.setEnvelopes(envelopes);
-//        budgetRepository.save(savedBudget);
 
         // Deduct allocation from user wallet
         walletService.deductBalance(user.getId(), allocationSum);
@@ -273,7 +273,7 @@ public class BudgetService {
             refundLog.setUserId(user.getId());
             refundLog.setBudgetId(savedBudget.getId());
             refundLog.setAmount(unallocatedAmount);
-            refundLog.setTransactionType("budget_unallocated_refunded");
+            refundLog.setTransactionType(BUDGET_UNALLOCATED_REFUNDED);
             refundLog.setCreatedAt(now);
             transactionLogRepository.save(refundLog);
         }
@@ -283,7 +283,7 @@ public class BudgetService {
         budgetLog.setUserId(user.getId());
         budgetLog.setBudgetId(savedBudget.getId());
         budgetLog.setAmount(allocationSum);
-        budgetLog.setTransactionType("budget_allocation");
+        budgetLog.setTransactionType(BUDGET_ALLOCATION);
         budgetLog.setCreatedAt(now);
         transactionLogRepository.save(budgetLog);
 
@@ -291,7 +291,7 @@ public class BudgetService {
         feeLog.setUserId(user.getId());
         feeLog.setBudgetId(savedBudget.getId());
         feeLog.setAmount(fee);
-        feeLog.setTransactionType("budget_creation_fee");
+        feeLog.setTransactionType(BUDGET_CREATION_FEE);
         feeLog.setCreatedAt(now);
         transactionLogRepository.save(feeLog);
 
@@ -531,7 +531,7 @@ public class BudgetService {
                 null, // No external account
                 topupAmount,
                 BigDecimal.ZERO, // No fee
-                "wallet_to_budget",
+                WALLET_DEDUCTION,
                 "Topped up budget from user wallet"
         );
         transactionLog.setCreatedAt(now);
@@ -603,7 +603,7 @@ public class BudgetService {
                 null, // No external account
                 BigDecimal.ZERO, // No amount
                 BigDecimal.ZERO, // No fee
-                "budget_extension",
+                BUDGET_EXTENSION,
                 "Extended budget end date to " + newEndDate
         );
         transactionLog.setCreatedAt(now);
@@ -645,7 +645,7 @@ public class BudgetService {
                             "user_wallet", // Destination is user's wallet (MVP placeholder)
                             remainingAmount,
                             BigDecimal.ZERO, // No fee
-                            "strict_lock_rollback",
+                            STRICT_LOCK_ROLLBACK,
                             "Rollback due to strict lock expiration"
                     );
                     transactionLog.setCreatedAt(now);
@@ -843,7 +843,7 @@ public class BudgetService {
         spendLog.setSourceEnvelopeId(envelope.getId());
         spendLog.setAmount(amount);
         spendLog.setFee(fee);
-        spendLog.setTransactionType("envelope_spend");
+        spendLog.setTransactionType(ENVELOPE_DISBURSEMENT);
         spendLog.setCreatedAt(now);
         transactionLogRepository.save(spendLog);
 
@@ -855,7 +855,7 @@ public class BudgetService {
             feeLog.setSourceEnvelopeId(envelope.getId());
             feeLog.setAmount(fee);
             feeLog.setFee(BigDecimal.ZERO);
-            feeLog.setTransactionType("spend_fee");
+            feeLog.setTransactionType(ENVELOPE_DISBURSEMENT);
             feeLog.setCreatedAt(now);
             transactionLogRepository.save(feeLog);
 
