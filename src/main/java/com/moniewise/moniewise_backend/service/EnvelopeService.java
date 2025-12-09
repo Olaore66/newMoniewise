@@ -28,8 +28,11 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.format.DateTimeParseException;
+import java.time.temporal.ChronoUnit;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 import static com.moniewise.moniewise_backend.enums.TransactionStatus.FAILED;
@@ -128,6 +131,10 @@ public class EnvelopeService {
         source.setTotalRemainingAmount(source.getTotalRemainingAmount().subtract(transferAmount));
         source.setRemainingAmount(getRemainingLimit(sourceId, email).subtract(transferAmount));
         target.setTotalRemainingAmount(target.getTotalRemainingAmount().add(transferAmount));
+
+        // === RECALCULATE TARGET LIMIT BASED ON ITS CONDITION ===
+        recalculateTargetEnvelopeLimit(target, sourceBudget);
+
         envelopeRepository.saveAll(List.of(source, target));
 
         BigDecimal newBudgetRemaining = envelopeRepository.findByBudgetId(sourceBudget.getId())
@@ -170,9 +177,14 @@ public class EnvelopeService {
 //        revenueLogRepository.save(revenueLog);
 //        creditRevenueAccount(fee, revenueDescription);
 
+
         BigDecimal remainingLimit = getRemainingLimit(sourceId, email);
         String period = source.getConditions().getOrDefault("type", "period").toString().equals("daily") ? "today" :
                 source.getConditions().getOrDefault("type", "period").toString().equals("weekly") ? "this week" : "this period";
+
+        // Optional: improved notification
+//        String period = getPeriodText(target);
+        BigDecimal newLimit = getCurrentLimitValue(target);
 
         notificationService.sendNotification(
                 user.getId().toString(),
@@ -784,5 +796,80 @@ public class EnvelopeService {
             return new BigDecimal(((Number) conditions.get("limit")).doubleValue());
         }
         return BigDecimal.ZERO;
+    }
+
+
+    // HELPER METHOD TO RECALC
+    private void recalculateTargetEnvelopeLimit(Envelope envelope, Budget budget) {
+        String type = (String) envelope.getConditions().get("type");
+        if (type == null) return;
+
+        // Only recalculate for time-based spending limits
+        if (!Set.of("daily", "weekly", "dynamic").contains(type)) {
+            return; // safe_lock, strict_lock, emergency → no recalculation
+        }
+
+        LocalDate today = LocalDate.now();
+        LocalDate budgetEnd = budget.getEndDate();
+        if (budgetEnd == null || budgetEnd.isBefore(today)) {
+            return; // Budget ended → no recalc
+        }
+
+        BigDecimal totalRemaining = envelope.getTotalRemainingAmount();
+        long remainingUnits = 0;
+        BigDecimal newLimit;
+
+        switch (type) {
+            case "daily" -> {
+                remainingUnits = ChronoUnit.DAYS.between(today, budgetEnd) + 1; // includes today
+                newLimit = totalRemaining.divide(BigDecimal.valueOf(remainingUnits), 2, RoundingMode.HALF_UP);
+            }
+            case "weekly" -> {
+                remainingUnits = ChronoUnit.WEEKS.between(today, budgetEnd) + 1;
+                if (remainingUnits <= 0) remainingUnits = 1;
+                newLimit = totalRemaining.divide(BigDecimal.valueOf(remainingUnits), 2, RoundingMode.HALF_UP);
+            }
+            case "dynamic" -> {
+                // "dynamic" = user selected specific days (Mon, Wed, Sat, etc.)
+                // We assume you store selected days as comma-separated string or list
+                String selectedDaysStr = (String) envelope.getConditions().get("selectedDays");
+                if (selectedDaysStr == null || selectedDaysStr.isBlank()) {
+                    // Fallback: treat as daily
+                    remainingUnits = ChronoUnit.DAYS.between(today, budgetEnd) + 1;
+                } else {
+                    List<String> selectedDays = Arrays.stream(selectedDaysStr.split(","))
+                            .map(String::trim)
+                            .map(String::toUpperCase)
+                            .toList();
+
+                    long daysUntilEnd = ChronoUnit.DAYS.between(today, budgetEnd);
+                    long remainingOccurrences = 0;
+
+                    for (int i = 0; i <= daysUntilEnd; i++) {
+                        LocalDate checkDate = today.plusDays(i);
+                        String dayName = checkDate.getDayOfWeek().name(); // MONDAY, TUESDAY...
+                        if (selectedDays.contains(dayName)) {
+                            remainingOccurrences++;
+                        }
+                    }
+                    remainingUnits = remainingOccurrences > 0 ? remainingOccurrences : 1;
+                }
+                newLimit = totalRemaining.divide(BigDecimal.valueOf(remainingUnits), 2, RoundingMode.HALF_UP);
+            }
+            default -> {
+                return; // Should never happen
+            }
+        }
+
+        // Store the new calculated limit
+        envelope.getConditions().put("limit_value", newLimit);
+        envelope.getConditions().put("remaining_units", remainingUnits); // Optional: for debugging
+
+        // Optional: also update today's remainingAmount if you use it
+        // envelope.setRemainingAmount(newLimit);
+    }
+
+    private BigDecimal getCurrentLimitValue(Envelope e) {
+        return (BigDecimal) e.getConditions().getOrDefault("limit_value", BigDecimal.ZERO);
     }
 }
