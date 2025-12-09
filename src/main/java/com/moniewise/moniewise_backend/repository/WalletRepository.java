@@ -14,4 +14,6 @@ public interface WalletRepository extends JpaRepository<Wallet, Long> {
     boolean existsByUserId(Long userId);
 
     boolean existsByUser(User user); // Add this method
+
+    Optional<Wallet> findByIsRevenueWalletTrue();
 }

@@ -22,12 +22,17 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import org.springframework.beans.factory.annotation.Value;
 
 import static com.moniewise.moniewise_backend.enums.TransactionType.WALLET_DEDUCTION;
 import static com.moniewise.moniewise_backend.enums.TransactionType.WALLET_DEPOSIT;
 
 @Service
 public class WalletService {
+
+    @Value("${moniewise.revenue.wallet.user-id}")
+    private Long revenueWalletUserId;  // -1
+
 
     private static final Logger logger = LoggerFactory.getLogger(WalletService.class);
 
@@ -46,6 +51,29 @@ public class WalletService {
 
         this.userRepository = userRepository;
         this.paymentGateway = paymentGateway;
+    }
+
+    @PostConstruct
+    public void ensureRevenueWalletExists() {
+        // Check by flag — safest possible way
+        if (walletRepository.findByIsRevenueWalletTrue().isPresent()) {
+            logger.info("Platform revenue wallet already exists");
+            return;
+        }
+
+        User revenueUser = userRepository.findById(revenueWalletUserId)
+                .orElseThrow(() -> new RuntimeException("System revenue user not found! Run SQL to create user ID -1"));
+
+        Wallet revenueWallet = new Wallet();
+        revenueWallet.setUser(revenueUser);
+        revenueWallet.setBalance(BigDecimal.ZERO);
+        revenueWallet.setCurrency("NGN");
+        revenueWallet.setStatus(WalletStatus.ACTIVE);
+        revenueWallet.setIsRevenueWallet(true);
+        revenueWallet.setUpdatedAt(LocalDateTime.now());
+
+        walletRepository.save(revenueWallet);
+        logger.info("Created platform revenue wallet for system user ID {}", revenueWalletUserId);
     }
 
     /**

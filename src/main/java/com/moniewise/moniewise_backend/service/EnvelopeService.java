@@ -177,7 +177,6 @@ public class EnvelopeService {
 //        revenueLogRepository.save(revenueLog);
 //        creditRevenueAccount(fee, revenueDescription);
 
-
         BigDecimal remainingLimit = getRemainingLimit(sourceId, email);
         String period = source.getConditions().getOrDefault("type", "period").toString().equals("daily") ? "today" :
                 source.getConditions().getOrDefault("type", "period").toString().equals("weekly") ? "this week" : "this period";
@@ -206,31 +205,39 @@ public class EnvelopeService {
     }
 
     @Transactional
-    public void transferToExternal(Long sourceId, BudgetController.ExternalAccount externalAccount, Double amount, String email) {
+    public void transferToExternal(Long sourceId,
+                                   BudgetController.ExternalAccount externalAccount,
+                                   Double amount,
+                                   String email) {
         LocalDateTime now = fetchCurrentDateTimeFromDatabase();
+
         if (amount <= 0) {
             throw new IllegalArgumentException("Amount must be positive");
         }
+
         User user = userService.findByEmail(email);
         Envelope source = envelopeRepository.findByIdAndBudget_UserEmail(sourceId, email)
                 .orElseThrow(() -> new EntityNotFoundException("Source envelope not found with ID: " + sourceId));
+
         Budget sourceBudget = source.getBudget();
         if (sourceBudget.getStatus() != BudgetStatus.ACTIVE) {
             throw new IllegalArgumentException("Budget must be active to perform transactions");
         }
+
         BigDecimal transferAmount = BigDecimal.valueOf(amount);
         if (transferAmount.compareTo(source.getTotalRemainingAmount()) > 0) {
             throw new IllegalArgumentException("Insufficient funds in source envelope. Available: ₦" + source.getTotalRemainingAmount());
         }
 
-        BigDecimal feePercentage = validateAndCalculateFee(source, sourceBudget, transferAmount, now, "external_transfer", email, null, externalAccount.getAccountNumber());
-        BigDecimal fee = transferAmount.multiply(feePercentage).divide(BigDecimal.valueOf(100), 2, RoundingMode.HALF_UP);
-        BigDecimal amountAfterFee = transferAmount.subtract(fee);
+        // NO FEE — FULL AMOUNT IS SENT
+        BigDecimal amountSent = transferAmount;
 
+        // Deduct full amount from envelope
         source.setTotalRemainingAmount(source.getTotalRemainingAmount().subtract(transferAmount));
         source.setRemainingAmount(getRemainingLimit(sourceId, email).subtract(transferAmount));
         envelopeRepository.save(source);
 
+        // Update budget total
         BigDecimal newBudgetRemaining = envelopeRepository.findByBudgetId(sourceBudget.getId())
                 .stream()
                 .map(Envelope::getTotalRemainingAmount)
@@ -238,33 +245,43 @@ public class EnvelopeService {
         sourceBudget.setRemainingAmount(newBudgetRemaining);
         budgetRepository.save(sourceBudget);
 
-        logger.info("Simulating transfer of ₦{} to external account: {} (accountNumber: {}, bankCode: {}, recipient: {})",
-                amountAfterFee, externalAccount.getBankName() != null ? externalAccount.getBankName() : "Unknown",
-                externalAccount.getAccountNumber(), externalAccount.getBankCode(), externalAccount.getRecipientName());
-
+        // Log transaction — fee = 0
         TransactionLog transactionLog = new TransactionLog(
-                user.getId(), sourceBudget.getId(), sourceId, null, externalAccount.getAccountNumber(),
-                transferAmount, fee, ENVELOPE_TO_EXTERNAL, null);
+                user.getId(),
+                sourceBudget.getId(),
+                sourceId,
+                null,
+                externalAccount.getAccountNumber(),
+                transferAmount,
+                BigDecimal.ZERO,  // Fee = 0
+                ENVELOPE_TO_EXTERNAL,
+                null
+        );
         transactionLog.setCreatedAt(now);
         transactionLogRepository.save(transactionLog);
 
-        String revenueDescription = String.format("Transfer in Budget %d from %s to external account %s/%s (%s) (fee: %s%%)",
-                sourceBudget.getId(), source.getName(),
-                externalAccount.getBankName() != null ? externalAccount.getBankName() : "Unknown",
-                externalAccount.getAccountNumber(), externalAccount.getRecipientName(), feePercentage);
-        RevenueLog revenueLog = new RevenueLog(user.getId(), "envelope_transfer_fee", fee, revenueDescription);
-        revenueLog.setCreatedAt(now);
-        revenueLogRepository.save(revenueLog);
-        creditRevenueAccount(fee, revenueDescription);
+        logger.info("Transferring ₦{} from envelope '{}' to external account: {} ({}) – Recipient: {}",
+                amountSent, source.getName(),
+                externalAccount.getBankName() != null ? externalAccount.getBankName() : "Unknown Bank",
+                externalAccount.getAccountNumber(),
+                externalAccount.getRecipientName());
 
-        BigDecimal remainingLimit = getRemainingLimit(sourceId, email);
+        // CLEAN, TRUST-BUILDING NOTIFICATION — NO FEE MENTIONED
         String period = source.getConditions().getOrDefault("type", "period").toString().equals("daily") ? "today" :
                 source.getConditions().getOrDefault("type", "period").toString().equals("weekly") ? "this week" : "this period";
 
+        BigDecimal remainingLimit = getRemainingLimit(sourceId, email);
+
         notificationService.sendNotification(
                 user.getId().toString(),
-                String.format("Transferred ₦%.2f from '%s' (Budget: %s) to external account %s/%s (Fee: ₦%.2f). Remaining limit %s: ₦%.2f. Total remaining: ₦%.2f.",
-                        amountAfterFee, source.getName(), sourceBudget.getName(), externalAccount.getBankName(), externalAccount.getAccountNumber(), fee, period, remainingLimit, source.getTotalRemainingAmount()),
+                String.format("Transferred ₦%.2f from '%s' (Budget: %s) to %s – %s. Remaining %s limit: ₦%.2f",
+                        amountSent,
+                        source.getName(),
+                        sourceBudget.getName(),
+                        externalAccount.getRecipientName(),
+                        externalAccount.getAccountNumber(),
+                        period,
+                        remainingLimit),
                 NotificationType.EXTERNAL_TRANSFER,
                 sourceBudget.getId(),
                 sourceId,
@@ -272,6 +289,74 @@ public class EnvelopeService {
                 String.format("/budgets/%d/envelopes/%d", sourceBudget.getId(), sourceId)
         );
     }
+
+//    @Transactional
+//    public void transferToExternal(Long sourceId, BudgetController.ExternalAccount externalAccount, Double amount, String email) {
+//        LocalDateTime now = fetchCurrentDateTimeFromDatabase();
+//        if (amount <= 0) {
+//            throw new IllegalArgumentException("Amount must be positive");
+//        }
+//        User user = userService.findByEmail(email);
+//        Envelope source = envelopeRepository.findByIdAndBudget_UserEmail(sourceId, email)
+//                .orElseThrow(() -> new EntityNotFoundException("Source envelope not found with ID: " + sourceId));
+//        Budget sourceBudget = source.getBudget();
+//        if (sourceBudget.getStatus() != BudgetStatus.ACTIVE) {
+//            throw new IllegalArgumentException("Budget must be active to perform transactions");
+//        }
+//        BigDecimal transferAmount = BigDecimal.valueOf(amount);
+//        if (transferAmount.compareTo(source.getTotalRemainingAmount()) > 0) {
+//            throw new IllegalArgumentException("Insufficient funds in source envelope. Available: ₦" + source.getTotalRemainingAmount());
+//        }
+//
+//        BigDecimal feePercentage = validateAndCalculateFee(source, sourceBudget, transferAmount, now, "external_transfer", email, null, externalAccount.getAccountNumber());
+//        BigDecimal fee = transferAmount.multiply(feePercentage).divide(BigDecimal.valueOf(100), 2, RoundingMode.HALF_UP);
+//        BigDecimal amountAfterFee = transferAmount.subtract(fee);
+//
+//        source.setTotalRemainingAmount(source.getTotalRemainingAmount().subtract(transferAmount));
+//        source.setRemainingAmount(getRemainingLimit(sourceId, email).subtract(transferAmount));
+//        envelopeRepository.save(source);
+//
+//        BigDecimal newBudgetRemaining = envelopeRepository.findByBudgetId(sourceBudget.getId())
+//                .stream()
+//                .map(Envelope::getTotalRemainingAmount)
+//                .reduce(BigDecimal.ZERO, BigDecimal::add);
+//        sourceBudget.setRemainingAmount(newBudgetRemaining);
+//        budgetRepository.save(sourceBudget);
+//
+//        logger.info("Simulating transfer of ₦{} to external account: {} (accountNumber: {}, bankCode: {}, recipient: {})",
+//                amountAfterFee, externalAccount.getBankName() != null ? externalAccount.getBankName() : "Unknown",
+//                externalAccount.getAccountNumber(), externalAccount.getBankCode(), externalAccount.getRecipientName());
+//
+//        TransactionLog transactionLog = new TransactionLog(
+//                user.getId(), sourceBudget.getId(), sourceId, null, externalAccount.getAccountNumber(),
+//                transferAmount, fee, ENVELOPE_TO_EXTERNAL, null);
+//        transactionLog.setCreatedAt(now);
+//        transactionLogRepository.save(transactionLog);
+//
+//        String revenueDescription = String.format("Transfer in Budget %d from %s to external account %s/%s (%s) (fee: %s%%)",
+//                sourceBudget.getId(), source.getName(),
+//                externalAccount.getBankName() != null ? externalAccount.getBankName() : "Unknown",
+//                externalAccount.getAccountNumber(), externalAccount.getRecipientName(), feePercentage);
+//        RevenueLog revenueLog = new RevenueLog(user.getId(), "envelope_transfer_fee", fee, revenueDescription);
+//        revenueLog.setCreatedAt(now);
+//        revenueLogRepository.save(revenueLog);
+//        creditRevenueAccount(fee, revenueDescription);
+//
+//        BigDecimal remainingLimit = getRemainingLimit(sourceId, email);
+//        String period = source.getConditions().getOrDefault("type", "period").toString().equals("daily") ? "today" :
+//                source.getConditions().getOrDefault("type", "period").toString().equals("weekly") ? "this week" : "this period";
+//
+//        notificationService.sendNotification(
+//                user.getId().toString(),
+//                String.format("Transferred ₦%.2f from '%s' (Budget: %s) to external account %s/%s (Fee: ₦%.2f). Remaining limit %s: ₦%.2f. Total remaining: ₦%.2f.",
+//                        amountAfterFee, source.getName(), sourceBudget.getName(), externalAccount.getBankName(), externalAccount.getAccountNumber(), fee, period, remainingLimit, source.getTotalRemainingAmount()),
+//                NotificationType.EXTERNAL_TRANSFER,
+//                sourceBudget.getId(),
+//                sourceId,
+//                "VIEW_ENVELOPE",
+//                String.format("/budgets/%d/envelopes/%d", sourceBudget.getId(), sourceId)
+//        );
+//    }
 
     @Transactional
     public EnvelopeResponse createEnvelope(EnvelopeRequest request, String email) {

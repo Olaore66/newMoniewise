@@ -10,7 +10,10 @@ import com.moniewise.moniewise_backend.dto.response.EnvelopeResponse;
 import com.moniewise.moniewise_backend.entity.*;
 import com.moniewise.moniewise_backend.enums.BudgetStatus;
 import com.moniewise.moniewise_backend.enums.NotificationType;
+import com.moniewise.moniewise_backend.exception.InsufficientFundsException;
 import com.moniewise.moniewise_backend.repository.*;
+
+
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -28,7 +31,6 @@ import javax.annotation.PostConstruct;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.*;
-import java.time.format.DateTimeParseException;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.stream.Collectors;
@@ -41,6 +43,8 @@ public class BudgetService {
     private final EnvelopeRepository envelopeRepository;
     private final BudgetRepository budgetRepository;
     private final RevenueLogRepository revenueLogRepository;
+
+    private final WalletRepository walletRepository;
     private final UserService userService;
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final TransactionLogRepository transactionLogRepository;
@@ -60,13 +64,14 @@ public class BudgetService {
             EnvelopeRepository envelopeRepository,
             BudgetRepository budgetRepository,
             RevenueLogRepository revenueLogRepository,
-            UserService userService,
+            WalletRepository walletRepository, UserService userService,
             TransactionLogRepository transactionLogRepository,
             NotificationService notificationService,
             WalletService walletService, ScheduledTaskRepository scheduledTaskRepository, @Lazy EnvelopeService envelopeService, BudgetLifeCycleManager budgetLifeCycleManager) {
         this.envelopeRepository = envelopeRepository;
         this.budgetRepository = budgetRepository;
         this.revenueLogRepository = revenueLogRepository;
+        this.walletRepository = walletRepository;
         this.userService = userService;
         this.transactionLogRepository = transactionLogRepository;
         this.notificationService = notificationService;
@@ -123,7 +128,7 @@ public class BudgetService {
 
         // Calculate fee and budget amounts
         int feeIntervals = (int) Math.ceil((double) durationDays / 30);
-        BigDecimal fee = new BigDecimal("100").multiply(BigDecimal.valueOf(feeIntervals));
+        BigDecimal fee = new BigDecimal("200").multiply(BigDecimal.valueOf(feeIntervals));
         BigDecimal originalAmount = request.getTotalAmount();
         BigDecimal actualBudgetAmount = originalAmount.subtract(fee);
 
@@ -218,9 +223,14 @@ public class BudgetService {
             );
 
             notificationService.sendNotification(user.getId().toString(), message, NotificationType.BUDGET_CREATION);
+
+
             
             throw new IllegalArgumentException(message);
         }
+
+        // Charge the fee
+        deductBudgetCreationFee(user.getId());
 
         // Create and save budget entity
         Budget budget = new Budget();
@@ -261,8 +271,13 @@ public class BudgetService {
         walletService.deductBalance(user.getId(), allocationSum);
 
         // Transfer fee to revenue wallet
-        walletService.fundWallet(revenueWalletUserId, fee,
-                String.format("₦%.2f received as budget creation fee.", fee));
+//        walletService.fundWallet(revenueWalletUserId, fee,
+//                String.format("₦%.2f received as budget creation fee.", fee));
+
+        Wallet revenueWallet = walletRepository.findByIsRevenueWalletTrue()
+                .orElseThrow();
+        revenueWallet.setBalance(revenueWallet.getBalance().add(fee));
+        walletRepository.save(revenueWallet);
 
         // Refund unallocated amount
         BigDecimal unallocatedAmount = actualBudgetAmount.subtract(allocationSum);
@@ -278,37 +293,100 @@ public class BudgetService {
             transactionLogRepository.save(refundLog);
         }
 
-        // Log transactions
-        TransactionLog budgetLog = new TransactionLog();
-        budgetLog.setUserId(user.getId());
-        budgetLog.setBudgetId(savedBudget.getId());
-        budgetLog.setAmount(allocationSum);
-        budgetLog.setTransactionType(BUDGET_ALLOCATION);
-        budgetLog.setCreatedAt(now);
-        transactionLogRepository.save(budgetLog);
+//        // Log transactions
+//        TransactionLog budgetLog = new TransactionLog();
+//        budgetLog.setUserId(user.getId());
+//        budgetLog.setBudgetId(savedBudget.getId());
+//        budgetLog.setAmount(allocationSum);
+//        budgetLog.setTransactionType(BUDGET_ALLOCATION);
+//        budgetLog.setCreatedAt(now);
+//        transactionLogRepository.save(budgetLog);
+//
+//        TransactionLog feeLog = new TransactionLog();
+//        feeLog.setUserId(user.getId());
+//        feeLog.setBudgetId(savedBudget.getId());
+//        feeLog.setAmount(fee);
+//        feeLog.setTransactionType(BUDGET_CREATION_FEE);
+//        feeLog.setCreatedAt(now);
+//        transactionLogRepository.save(feeLog);
+//
+//        RevenueLog revenueLog = new RevenueLog();
+//        revenueLog.setUserId(revenueWalletUserId);
+//        revenueLog.setType("budget_creation_fee");
+//        revenueLog.setAmount(fee);
+//        revenueLog.setDescription("Budget fee for " + durationDays + " days");
+//        revenueLog.setCreatedAt(now);
+//        revenueLogRepository.save(revenueLog);
+//
+//        // Send notification
+//        String message = String.format(
+//                "Budget '%s' created! ₦%.2f allocated (₦%.2f fee applied, ₦%.2f refunded to wallet).",
+//                savedBudget.getName(), allocationSum, fee, unallocatedAmount
+//        );
+//        notificationService.sendNotification(user.getId().toString(), message, NotificationType.BUDGET_CREATION);
 
+        // ——————— TRANSACTION LOGS ———————
+        // 1. Budget allocation deduction
+        TransactionLog allocationLog = new TransactionLog();
+        allocationLog.setUserId(user.getId());
+        allocationLog.setBudgetId(savedBudget.getId());
+        allocationLog.setAmount(allocationSum.negate());  // Negative = money left wallet
+        allocationLog.setFee(BigDecimal.ZERO);
+        allocationLog.setTransactionType(BUDGET_ALLOCATION);
+        allocationLog.setDescription("Allocated to budget envelopes");
+        allocationLog.setCreatedAt(now);
+        transactionLogRepository.save(allocationLog);
+
+        // 2. Budget creation fee deduction
         TransactionLog feeLog = new TransactionLog();
         feeLog.setUserId(user.getId());
         feeLog.setBudgetId(savedBudget.getId());
-        feeLog.setAmount(fee);
+        feeLog.setAmount(fee.negate());  // ← NEGATIVE = deduction
+        feeLog.setFee(BigDecimal.ZERO);
         feeLog.setTransactionType(BUDGET_CREATION_FEE);
+        feeLog.setDescription("Budget creation fee");
         feeLog.setCreatedAt(now);
         transactionLogRepository.save(feeLog);
 
+        // 3. Unallocated amount refunded (if any)
+        if (unallocatedAmount.compareTo(BigDecimal.ZERO) > 0) {
+            TransactionLog refundLog = new TransactionLog();
+            refundLog.setUserId(user.getId());
+            refundLog.setBudgetId(savedBudget.getId());
+            refundLog.setAmount(unallocatedAmount);  // Positive = money back
+            refundLog.setFee(BigDecimal.ZERO);
+            refundLog.setTransactionType(BUDGET_UNALLOCATED_REFUNDED);
+            refundLog.setDescription("Unallocated amount refunded to wallet");
+            refundLog.setCreatedAt(now);
+            transactionLogRepository.save(refundLog);
+        }
+
+        // ——————— REVENUE LOG ———————
         RevenueLog revenueLog = new RevenueLog();
         revenueLog.setUserId(revenueWalletUserId);
-        revenueLog.setType("budget_creation");
+        revenueLog.setType("budget_creation_fee");
         revenueLog.setAmount(fee);
         revenueLog.setDescription("Budget fee for " + durationDays + " days");
         revenueLog.setCreatedAt(now);
         revenueLogRepository.save(revenueLog);
 
-        // Send notification
+        // ——————— NOTIFICATION ———————
         String message = String.format(
-                "Budget '%s' created! ₦%.2f allocated (₦%.2f fee applied, ₦%.2f refunded to wallet).",
-                savedBudget.getName(), allocationSum, fee, unallocatedAmount
+                "Budget '%s' created successfully! " +
+                        "₦%.2f allocated • ₦%.2f fee deducted%s",
+                savedBudget.getName(),
+                allocationSum,
+                fee,
+                unallocatedAmount.compareTo(BigDecimal.ZERO) > 0
+                        ? " • ₦" + unallocatedAmount + " refunded to wallet"
+                        : ""
         );
-        notificationService.sendNotification(user.getId().toString(), message, NotificationType.BUDGET_CREATION);
+
+        notificationService.sendNotification(
+                user.getId().toString(),
+                message,
+                NotificationType.BUDGET_CREATION
+        );
 
         return new BudgetResponse(
                 savedBudget.getId(),
@@ -853,10 +931,11 @@ public class BudgetService {
             feeLog.setUserId(user.getId());
             feeLog.setBudgetId(budget.getId());
             feeLog.setSourceEnvelopeId(envelope.getId());
-            feeLog.setAmount(fee);
+            feeLog.setAmount(fee.negate());  // ← CORRECT — negative = deduction.setAmount(fee);
             feeLog.setFee(BigDecimal.ZERO);
             feeLog.setTransactionType(ENVELOPE_DISBURSEMENT);
             feeLog.setCreatedAt(now);
+            feeLog.setDescription("Budget creation fee");
             transactionLogRepository.save(feeLog);
 
             RevenueLog revenueLog = new RevenueLog();
@@ -1074,5 +1153,47 @@ public class BudgetService {
             );
             throw new IllegalArgumentException(message);
         }
+    }
+
+    @Transactional
+    public void deductBudgetCreationFee(Long userId) {
+        BigDecimal fee = new BigDecimal("200.00");
+
+        // 1. Deduct from user's wallet
+        Wallet userWallet = walletRepository.findByUserId(userId)
+                .orElseThrow(() -> new IllegalArgumentException("User wallet not found"));
+
+        if (userWallet.getBalance().compareTo(fee) < 0) {
+            throw new InsufficientFundsException("Add ₦200+ to your wallet to create a budget.");
+        }
+
+        userWallet.setBalance(userWallet.getBalance().subtract(fee));
+        walletRepository.save(userWallet);
+
+        // 2. Credit platform revenue wallet
+        Wallet revenueWallet = walletRepository.findByIsRevenueWalletTrue()
+                .orElseThrow(() -> new RuntimeException("Revenue wallet not configured"));
+
+        revenueWallet.setBalance(revenueWallet.getBalance().add(fee));
+        walletRepository.save(revenueWallet);
+
+        // 3. Log revenue
+        RevenueLog revenueLog = new RevenueLog(
+                userId,
+                "budget_creation_fee",
+                fee,
+                "Budget creation fee deducted"
+        );
+        revenueLog.setCreatedAt(LocalDateTime.now());
+        revenueLogRepository.save(revenueLog);
+
+        // 4. Notify user
+        notificationService.sendNotification(
+                userId.toString(),
+                "₦200 budget creation fee deducted from your wallet.",
+                NotificationType.BUDGET_CREATION_FEE
+        );
+
+        logger.info("₦200 budget creation fee collected from user {} → platform revenue", userId);
     }
 }

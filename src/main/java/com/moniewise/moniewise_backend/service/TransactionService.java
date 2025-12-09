@@ -64,55 +64,6 @@ public class TransactionService {
         return mapToDetailResponse(log);
     }
 
-//    private TransactionListResponse mapToListResponse(TransactionLog t) {
-//        String sourceName = getEnvelopeName(t.getSourceEnvelopeId());
-//        String targetName = getEnvelopeName(t.getTargetEnvelopeId());
-//        String budgetName = getBudgetName(t.getBudgetId());
-//
-////        String title = switch (t.getTransactionType()) {
-////            case ENVELOPE_TO_ENVELOPE          -> "From %s to %s".formatted(sourceName, targetName);
-////            case DEPOSIT                -> "Wallet topped up";
-////            case ENVELOPE_DISBURSEMENT -> "Sent to bank account";
-////            case DISBURSEMENT_REFUNDED         -> "Refunded • %s".formatted(sourceName);
-////            default                              -> t.getTransactionType().replace("_", " ");
-////        };
-//
-//        String title = switch (t.getTransactionType()) {
-//
-//            case ENVELOPE_TO_ENVELOPE ->
-//                    "From %s to %s".formatted(sourceName, targetName);
-//
-//            case DEPOSIT ->
-//                    "Wallet topped up";
-//
-//            case ENVELOPE_DISBURSEMENT ->
-//                    "Sent to bank account";
-//
-//            case DISBURSEMENT_REFUNDED ->
-//                    "Refunded • %s".formatted(sourceName);
-//
-//            default ->
-//                    t.getTransactionType().name().replace("_", " ");
-//        };
-//
-//
-//        String description = t.getDescription() != null ? t.getDescription() :
-//                "%s • ₦%,.2f".formatted(budgetName, t.getAmount());
-//
-//        boolean isOutgoing = t.getSourceEnvelopeId() != null;
-//
-//        return new TransactionListResponse(
-//                t.getId(),
-//                title,
-//                description,
-//                isOutgoing ? t.getAmount().negate() : t.getAmount(),
-//                t.getFee() != null ? t.getFee() : BigDecimal.ZERO,
-//                t.getTransactionType(),
-//                t.getCreatedAt(),
-//                new TransactionMeta(sourceName, targetName, budgetName, isOutgoing)
-//        );
-//    }
-
     private TransactionListResponse mapToListResponse(TransactionLog t) {
         String sourceName = getEnvelopeName(t.getSourceEnvelopeId());
         String targetName = getEnvelopeName(t.getTargetEnvelopeId());
@@ -121,17 +72,23 @@ public class TransactionService {
         // 1. Clean, user-friendly title
         String title = switch (t.getTransactionType()) {
             case WALLET_DEPOSIT -> "Wallet funded";
-            case ENVELOPE_TO_ENVELOPE -> "From %s → %s".formatted(sourceName, targetName);
+            case ENVELOPE_TO_ENVELOPE -> "From %s to %s".formatted(sourceName, targetName);
             case ENVELOPE_TO_EXTERNAL, ENVELOPE_DISBURSEMENT_PENDING -> "Sent to bank";
-            default -> "Transaction";
+            case BUDGET_CREATION_FEE -> "Budget creation fee";
+            case BUDGET_ALLOCATION -> "Allocated to budget";
+            case BUDGET_UNALLOCATED_REFUNDED -> "Refunded to wallet";
+            default -> t.getTransactionType().name().replace("_", " ");
         };
 
         // 2. Correct amount sign
         boolean isOutgoing = switch (t.getTransactionType()) {
             case ENVELOPE_TO_ENVELOPE,
                     ENVELOPE_TO_EXTERNAL,
-                    ENVELOPE_DISBURSEMENT_PENDING -> true;
-            case WALLET_DEPOSIT -> false;
+                    ENVELOPE_DISBURSEMENT_PENDING,
+                    BUDGET_CREATION_FEE,
+                    BUDGET_ALLOCATION -> true;
+            case WALLET_DEPOSIT,
+                    BUDGET_UNALLOCATED_REFUNDED -> false;
             default -> false;
         };
 
@@ -164,26 +121,14 @@ public class TransactionService {
         String targetName = getEnvelopeName(t.getTargetEnvelopeId());
         String budgetName = getBudgetName(t.getBudgetId());
 
-//        String title = switch (t.getTransactionType()) {
-//            case ENVELOPE_TO_ENVELOPE -> "From %s to %s".formatted(sourceName, targetName);
-//            case DEPOSIT              -> "Added to %s".formatted(targetName);
-//            case WITHDRAWAL           -> "Withdrawn from %s".formatted(sourceName);
-//            default                     -> t.getTransactionType();
-//        };
-
         String title = switch (t.getTransactionType()) {
-
-            case ENVELOPE_TO_ENVELOPE ->
-                    "From %s to %s".formatted(sourceName, targetName);
-
-            case DEPOSIT ->
-                    "Added to %s".formatted(targetName);
-
-            case WITHDRAWAL ->
-                    "Withdrawn from %s".formatted(sourceName);
-
-            default ->
-                    t.getTransactionType().name().replace("_", " ");
+            case WALLET_DEPOSIT -> "Wallet funded";
+            case ENVELOPE_TO_ENVELOPE -> "From %s to %s".formatted(sourceName, targetName);
+            case ENVELOPE_TO_EXTERNAL, ENVELOPE_DISBURSEMENT_PENDING -> "Sent to bank";
+            case BUDGET_CREATION_FEE -> "Budget creation fee";
+            case BUDGET_ALLOCATION -> "Allocated to budget";
+            case BUDGET_UNALLOCATED_REFUNDED -> "Refunded to wallet";
+            default -> t.getTransactionType().name().replace("_", " ");
         };
 
 
@@ -224,6 +169,10 @@ public class TransactionService {
             TransactionType.WALLET_DEPOSIT,           // User funded wallet
             TransactionType.ENVELOPE_TO_ENVELOPE,     // Moved between envelopes
             TransactionType.ENVELOPE_TO_EXTERNAL,     // Sent to bank
-            TransactionType.ENVELOPE_DISBURSEMENT_PENDING  // Pending bank transfer
+            TransactionType.ENVELOPE_DISBURSEMENT_PENDING,  // Pending bank transfer
+
+            TransactionType.BUDGET_CREATION_FEE,
+            TransactionType.BUDGET_ALLOCATION,
+            TransactionType.BUDGET_UNALLOCATED_REFUNDED
     );
 }

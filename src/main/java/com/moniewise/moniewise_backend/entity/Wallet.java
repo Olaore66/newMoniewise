@@ -51,4 +51,11 @@ public class Wallet {
     @Column(name = "updated_at")
     @Convert(converter = Jsr310JpaConverters.LocalDateTimeConverter.class) // Add this
     private LocalDateTime updatedAt = LocalDateTime.now();
+
+    @Column(name = "is_revenue_wallet", nullable = false)
+    private boolean isRevenueWallet = false;
+
+    // Lombok @Getter @Setter already works
+    public boolean isRevenueWallet() { return isRevenueWallet; }
+    public void setIsRevenueWallet(boolean isRevenueWallet) { this.isRevenueWallet = isRevenueWallet; }
 }

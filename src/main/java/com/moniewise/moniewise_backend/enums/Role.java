@@ -3,7 +3,7 @@ package com.moniewise.moniewise_backend.enums;
 import org.springframework.security.core.GrantedAuthority;
 
 public enum Role implements GrantedAuthority {
-    USER, ADMIN;
+    USER, ADMIN, SYSTEM;
 
     @Override
     public String getAuthority() {

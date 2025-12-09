@@ -1,5 +1,6 @@
 package com.moniewise.moniewise_backend.controller;
 
+import com.moniewise.moniewise_backend.enums.TransactionType;
 import org.springframework.data.domain.Page;
 import com.moniewise.moniewise_backend.entity.Notification;
 import com.moniewise.moniewise_backend.repository.NotificationRepository;
@@ -14,7 +15,9 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
+import static com.moniewise.moniewise_backend.enums.TransactionType.WALLET_DEPOSIT;
 import static org.springframework.data.domain.Sort.Direction.DESC;
 
 @RestController
@@ -30,13 +33,6 @@ public class NotificationController {
         this.userRepository = userRepository;
     }
 
-//    @GetMapping
-//    public ResponseEntity<List<Notification>> getNotifications(@AuthenticationPrincipal UserDetails userDetails) {
-//        Long userId = getUserIdFromUserDetails(userDetails);
-//        List<Notification> notifications = notificationRepository.findByUserIdOrderByCreatedAtDesc(userId);
-//        return ResponseEntity.ok(notifications);
-//    }
-
     @GetMapping
     public ResponseEntity<Page<Notification>> getNotifications(
             @AuthenticationPrincipal UserDetails userDetails,
@@ -48,10 +44,19 @@ public class NotificationController {
     }
 
     @GetMapping("/unread")
-    public ResponseEntity<List<Notification>> getUnreadNotifications(@AuthenticationPrincipal UserDetails userDetails) {
+    public ResponseEntity<List<Notification>> getUnreadNotifications(
+            @AuthenticationPrincipal UserDetails userDetails) {
+
         Long userId = getUserIdFromUserDetails(userDetails);
-        List<Notification> unreadNotifications = notificationRepository.findByUserIdAndIsReadFalseOrderByCreatedAtDesc(userId);
-        return ResponseEntity.ok(unreadNotifications);
+
+        // Only show HIGH-VALUE, USER-FACING notifications
+        List<Notification> importantUnread = notificationRepository
+                .findByUserIdAndIsReadFalseOrderByCreatedAtDesc(userId)
+                .stream()
+                .filter(this::isImportantNotification)
+                .collect(Collectors.toList());
+
+        return ResponseEntity.ok(importantUnread);
     }
 
     @GetMapping("/type/{type}")
@@ -93,4 +98,40 @@ public class NotificationController {
                 .map(user -> user.getId())
                 .orElseThrow(() -> new IllegalArgumentException("User not found for email: " + username));
     }
+
+
+    // ———————————————————————————————————————
+    // ONLY SHOW THESE — EVERYTHING ELSE IS NOISE
+    // ———————————————————————————————————————
+    private boolean isImportantNotification(Notification n) {
+        return switch (n.getType()) {
+            // Money actually moved — ALWAYS show
+            case ENVELOPE_TRANSFER,
+                    EXTERNAL_TRANSFER,
+                    WALLET_DEPOSIT,
+                    DISBURSEMENT_SUCCESS,
+                    DISBURSEMENT_FAILED,
+                    DISBURSEMENT,
+                    REFUND_ISSUED,
+                    BUDGET_CREATION,           // ← ADD THIS LINE
+                    BUDGET_CREATION_SUCCESS,
+                    BUDGET_EXPIRED,
+                    ENVELOPE_LOCKED,
+                    ENVELOPE_UNLOCKED,
+                    LOW_BALANCE_WARNING,
+                    PRE_DISBURSEMENT,
+                    GOAL_ACHIEVED -> true;
+
+            // NEVER show these — they are system spam
+            case  ENVELOPE_CREATED,           // Too noisy
+                    ENVELOPE_UPDATED,
+                    BUDGET_UPDATED,
+                    DISBURSEMENT_REMINDER,
+                    SYSTEM -> false;
+
+            // Default: hide unknown types (safe)
+            default -> false;
+        };
+    }
+
 }
