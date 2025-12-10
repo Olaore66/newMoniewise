@@ -17,7 +17,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.stream.Collectors;
 
-import static com.moniewise.moniewise_backend.enums.TransactionType.WALLET_DEPOSIT;
+import static com.moniewise.moniewise_backend.enums.TransactionType.*;
 import static org.springframework.data.domain.Sort.Direction.DESC;
 
 @RestController
@@ -105,33 +105,35 @@ public class NotificationController {
     // ———————————————————————————————————————
     private boolean isImportantNotification(Notification n) {
         return switch (n.getType()) {
-            // Money actually moved — ALWAYS show
+            // Money moved — ALWAYS show
             case ENVELOPE_TRANSFER,
                     EXTERNAL_TRANSFER,
                     WALLET_DEPOSIT,
+                    WALLET_FUNDED,
                     DISBURSEMENT_SUCCESS,
                     DISBURSEMENT_FAILED,
-                    DISBURSEMENT,
-                    REFUND_ISSUED,
-                    BUDGET_CREATION,           // ← ADD THIS LINE
+                    DISBURSEMENT_READY,
+                    DISBURSEMENT_REFUNDED,
+                    BUDGET_ALLOCATION,
+                    BUDGET_CREATION_FEE,
+                    BUDGET_UNALLOCATED_REFUNDED -> true;
+
+            // Critical events — show once
+            case BUDGET_CREATION,           // ← THIS IS THE ONE YOU'RE USING
                     BUDGET_CREATION_SUCCESS,
                     BUDGET_EXPIRED,
-                    ENVELOPE_LOCKED,
-                    ENVELOPE_UNLOCKED,
-                    LOW_BALANCE_WARNING,
-                    PRE_DISBURSEMENT,
-                    GOAL_ACHIEVED -> true;
+                    BUDGET_ENDING_SOON,
+                    ENVELOPE_LOW_BALANCE,
+                    GOAL_ACHIEVED,
+                    WELCOME -> true;
 
-            // NEVER show these — they are system spam
-            case  ENVELOPE_CREATED,           // Too noisy
+            // NEVER show these — pure spam
+            case PRE_DISBURSEMENT,
+                    ENVELOPE_CREATED,
                     ENVELOPE_UPDATED,
-                    BUDGET_UPDATED,
-                    DISBURSEMENT_REMINDER,
                     SYSTEM -> false;
 
-            // Default: hide unknown types (safe)
             default -> false;
         };
     }
-
 }

@@ -187,13 +187,4 @@ public class NotificationService {
         }
     }
 
-    public void sendWelcomeNotification(User user, Wallet wallet) {
-        sendWelcomeEmail(user.getEmail(), wallet.getAccountNumber(), wallet.getBankName(), wallet.getBalance());
-        if (user.getPhone() != null && !user.getPhone().isEmpty()) {
-            sendWelcomeSms(user.getPhone(), wallet.getAccountNumber(), wallet.getBankName(), wallet.getBalance());
-        }
-        String message = String.format("Welcome to Moniewise! Your wallet (Acc/%s, Bank/%s) is ready.",
-                wallet.getAccountNumber(), wallet.getBankName());
-        sendNotification(user.getId().toString(), message, NotificationType.WELCOME);
-    }
 }
