@@ -1,69 +1,41 @@
 package com.moniewise.moniewise_backend.config;
 
+import com.google.auth.oauth2.GoogleCredentials;
 import com.google.firebase.FirebaseApp;
 import com.google.firebase.FirebaseOptions;
 import com.google.firebase.messaging.FirebaseMessaging;
-import com.google.auth.oauth2.GoogleCredentials;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
+import org.springframework.core.io.ClassPathResource; // ✅ CORRECT IMPORT
 import org.springframework.context.annotation.Configuration;
-import org.springframework.context.annotation.Conditional;
-import org.springframework.context.annotation.Condition;
-import org.springframework.context.annotation.ConditionContext;
-import org.springframework.core.type.AnnotatedTypeMetadata;
 
-import java.io.FileInputStream;
+import javax.annotation.PostConstruct;
 import java.io.IOException;
 
 @Configuration
 public class FirebaseConfig {
-    private static final Logger logger = LoggerFactory.getLogger(FirebaseConfig.class);
-
-    @Value("${spring.profiles.active:stub}")
-    private String activeProfile;
-
-    @Value("${firebase.enabled:false}")
-    private boolean firebaseEnabled;
-
-    @Bean
-    @Conditional(FirebaseEnabledCondition.class)
-    public FirebaseApp initializeFirebase() {
-        if (!firebaseEnabled || "stub".equals(activeProfile) || "dev".equals(activeProfile)) {
-            logger.info("[STUB] FirebaseApp not initialized in {} mode", activeProfile);
-            return null;
-        }
+    @PostConstruct
+    public void initialize() {
         try {
-            FileInputStream serviceAccount = new FileInputStream("src/main/resources/moniewise-firebase-adminsdk.json");
-            FirebaseOptions options = FirebaseOptions.builder()
-                    .setCredentials(GoogleCredentials.fromStream(serviceAccount))
-                    .build();
-            FirebaseApp app = FirebaseApp.initializeApp(options);
-            logger.info("FirebaseApp initialized successfully");
-            return app;
+            if (FirebaseApp.getApps().isEmpty()) {
+                // This looks for the file in src/main/resources
+                ClassPathResource resource = new ClassPathResource("serviceAccountKey.json");
+                
+                FirebaseOptions options = FirebaseOptions.builder()
+                        .setCredentials(GoogleCredentials.fromStream(resource.getInputStream()))
+                        .build();
+
+                FirebaseApp.initializeApp(options);
+                System.out.println("✅ Firebase initialized successfully!");
+            }
         } catch (IOException e) {
-            logger.error("Failed to initialize Firebase: {}", e.getMessage());
-            return null;
+            e.printStackTrace();
         }
     }
 
+    // 👇 ADD THIS BEAN DEFINITION 👇
     @Bean
-    @Conditional(FirebaseEnabledCondition.class)
-    public FirebaseMessaging firebaseMessaging(FirebaseApp firebaseApp) {
-        if (firebaseApp == null) {
-            logger.info("[STUB] FirebaseMessaging not initialized due to null FirebaseApp");
-            return null;
-        }
-        return FirebaseMessaging.getInstance(firebaseApp);
-    }
-
-    static class FirebaseEnabledCondition implements Condition {
-        @Override
-        public boolean matches(ConditionContext context, AnnotatedTypeMetadata metadata) {
-            String activeProfile = context.getEnvironment().getProperty("spring.profiles.active", "stub");
-            String firebaseEnabled = context.getEnvironment().getProperty("firebase.enabled", "false");
-            return "true".equals(firebaseEnabled) && !"stub".equals(activeProfile) && !"dev".equals(activeProfile);
-        }
+    public FirebaseMessaging firebaseMessaging() {
+        // This makes the object available for @Autowired in your Service
+        return FirebaseMessaging.getInstance();
     }
 }

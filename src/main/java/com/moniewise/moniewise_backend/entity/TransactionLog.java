@@ -1,6 +1,7 @@
 package com.moniewise.moniewise_backend.entity;
 
 import com.moniewise.moniewise_backend.config.TransactionTypeConverter;
+import com.moniewise.moniewise_backend.enums.TransactionStatus;
 import com.moniewise.moniewise_backend.enums.TransactionType;
 
 import javax.persistence.*;
@@ -51,6 +52,16 @@ public class TransactionLog {
 
     @Column(name = "created_at", nullable = false, columnDefinition = "TIMESTAMPTZ")
     private LocalDateTime createdAt;
+
+    @Column(nullable = false, unique = true)
+    private String reference;
+
+    @Column(nullable = false)
+    @Enumerated(EnumType.STRING)
+    private TransactionStatus status;
+
+    @Column(name = "counterparty_user_id")
+    private Long counterpartyUserId; // Nullable (Only for P2P)
 
     // Constructors
     public TransactionLog() {}
@@ -104,4 +115,129 @@ public class TransactionLog {
     public void setDescription(String description) { this.description = description; }
     public LocalDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
+
+    public String getReference() { return reference; }
+    public void setReference(String reference) { this.reference = reference; }
+
+    public TransactionStatus getStatus() { return status; }
+    public void setStatus(TransactionStatus status) { this.status = status; }
+
+    public Long getCounterpartyUserId() { return counterpartyUserId; }
+    public void setCounterpartyUserId(Long counterpartyUserId) { this.counterpartyUserId = counterpartyUserId; }
+
+
+// ==================================================================
+    // MANUAL BUILDER PATTERN (Paste this inside TransactionLog class)
+    // ==================================================================
+
+    public static TransactionLogBuilder builder() {
+        return new TransactionLogBuilder();
+    }
+
+    public static class TransactionLogBuilder {
+        private Long userId;
+        private Long budgetId;
+        private Long sourceEnvelopeId;
+        private Long targetEnvelopeId;
+        private String externalAccountId;
+        private Long counterpartyUserId;
+        private BigDecimal amount;
+        private BigDecimal fee;
+        private String reference;
+        private TransactionStatus status;
+        private TransactionType transactionType;
+        private String description;
+        private LocalDateTime createdAt;
+
+        TransactionLogBuilder() { }
+
+        public TransactionLogBuilder userId(Long userId) {
+            this.userId = userId;
+            return this;
+        }
+
+        public TransactionLogBuilder budgetId(Long budgetId) {
+            this.budgetId = budgetId;
+            return this;
+        }
+
+        public TransactionLogBuilder sourceEnvelopeId(Long sourceEnvelopeId) {
+            this.sourceEnvelopeId = sourceEnvelopeId;
+            return this;
+        }
+
+        public TransactionLogBuilder targetEnvelopeId(Long targetEnvelopeId) {
+            this.targetEnvelopeId = targetEnvelopeId;
+            return this;
+        }
+
+        public TransactionLogBuilder externalAccountId(String externalAccountId) {
+            this.externalAccountId = externalAccountId;
+            return this;
+        }
+
+        public TransactionLogBuilder counterpartyUserId(Long counterpartyUserId) {
+            this.counterpartyUserId = counterpartyUserId;
+            return this;
+        }
+
+        public TransactionLogBuilder amount(BigDecimal amount) {
+            this.amount = amount;
+            return this;
+        }
+
+        public TransactionLogBuilder fee(BigDecimal fee) {
+            this.fee = fee;
+            return this;
+        }
+
+        public TransactionLogBuilder reference(String reference) {
+            this.reference = reference;
+            return this;
+        }
+
+        public TransactionLogBuilder status(TransactionStatus status) {
+            this.status = status;
+            return this;
+        }
+
+        public TransactionLogBuilder transactionType(TransactionType transactionType) {
+            this.transactionType = transactionType;
+            return this;
+        }
+
+        public TransactionLogBuilder description(String description) {
+            this.description = description;
+            return this;
+        }
+
+        public TransactionLogBuilder createdAt(LocalDateTime createdAt) {
+            this.createdAt = createdAt;
+            return this;
+        }
+
+        public TransactionLog build() {
+            // Use the constructor with all arguments (Lombok @AllArgsConstructor generates this,
+            // or you can ensure your manual constructor matches this)
+            TransactionLog log = new TransactionLog();
+            log.setUserId(this.userId);
+            log.setBudgetId(this.budgetId);
+            log.setSourceEnvelopeId(this.sourceEnvelopeId);
+            log.setTargetEnvelopeId(this.targetEnvelopeId);
+            log.setExternalAccountId(this.externalAccountId);
+            log.setCounterpartyUserId(this.counterpartyUserId);
+            log.setAmount(this.amount);
+            log.setFee(this.fee);
+            log.setReference(this.reference);
+            log.setStatus(this.status);
+            log.setTransactionType(this.transactionType);
+            log.setDescription(this.description);
+            log.setCreatedAt(this.createdAt);
+            return log;
+        }
+    }
+
 }
+
+
+

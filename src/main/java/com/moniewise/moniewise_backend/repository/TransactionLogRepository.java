@@ -51,4 +51,17 @@ public interface TransactionLogRepository extends JpaRepository<TransactionLog, 
             @Param("userId") Long userId,
             @Param("types") Set<TransactionType> types,
             Pageable pageable);
+
+    @Query("""
+        SELECT t FROM TransactionLog t
+        WHERE t.userId = :userId
+        AND (:types IS NULL OR t.transactionType IN :types)
+        ORDER BY t.createdAt DESC
+    """)
+    List<TransactionLog> findUserTransactions(
+            @Param("userId") Long userId,
+            @Param("types") Set<TransactionType> types
+    );
+
+    boolean existsByReference(String transactionReference);
 }

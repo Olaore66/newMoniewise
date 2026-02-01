@@ -4,33 +4,28 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.moniewise.moniewise_backend.config.BudgetLifeCycleManager;
 import com.moniewise.moniewise_backend.dto.request.BudgetRequest;
 import com.moniewise.moniewise_backend.dto.request.EnvelopeRequest;
-import com.moniewise.moniewise_backend.dto.request.SpendEnvelopeRequest;
 import com.moniewise.moniewise_backend.dto.response.BudgetResponse;
 import com.moniewise.moniewise_backend.dto.response.EnvelopeResponse;
 import com.moniewise.moniewise_backend.entity.*;
 import com.moniewise.moniewise_backend.enums.BudgetStatus;
 import com.moniewise.moniewise_backend.enums.NotificationType;
+import com.moniewise.moniewise_backend.enums.TransactionStatus;
 import com.moniewise.moniewise_backend.exception.InsufficientFundsException;
 import com.moniewise.moniewise_backend.repository.*;
-
-
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.security.core.context.SecurityContextHolder;
-import org.springframework.security.core.userdetails.UserDetails;
-
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import javax.annotation.PostConstruct;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
-import java.time.*;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.stream.Collectors;
@@ -84,11 +79,7 @@ public class BudgetService {
     // Helper method to fetch current date/time from Postgres
     @Autowired
     private JdbcTemplate jdbcTemplate;
-
-
     private static final Logger logger = LoggerFactory.getLogger(BudgetService.class);
-
-
     private static final String LATEST_TNC_VERSION = "2.0";
     private static final String LATEST_TNC_CONTENT = "MonieWise helps you budget... (your terms here)";
 
@@ -109,12 +100,35 @@ public class BudgetService {
         logger.debug("Starting budget creation for {}", email);
         logger.debug("User found: {}", user.getId());
 
+        // 0. CHECK ACTIVE BUDGET LIMIT (Max 5 Concurrent)
+        List<Budget> userBudgets = budgetRepository.findByUserId(user.getId());
+        long activeBudgetCount = userBudgets.stream()
+                .filter(b -> b.getStatus() == BudgetStatus.ACTIVE)
+                .count();
+
+        if (activeBudgetCount >= 10) {
+            throw new IllegalStateException("Limit reached: You can have a maximum of 10 active budgets. Please complete or delete an existing budget to create a new one.");
+        }
+        // 👆 END INSERT 👆
+
         LocalDateTime now = fetchCurrentDateTimeFromDatabase();
 
         // Validate dates
         if (request.getStartDate().isAfter(request.getEndDate())) {
             throw new IllegalArgumentException("Start date must be before end date");
         }
+
+        // 👇 ADD THIS BLOCK HERE 👇
+        BigDecimal minAmount = new BigDecimal("5000");
+        if (request.getTotalAmount().compareTo(minAmount) < 0) {
+            // Throw clearer error for UI to display
+            throw new IllegalArgumentException("Minimum budget amount is ₦5,000.00");
+        }
+        // 👆 END INSERT 👆
+
+        // 2. 🛑 MAXIMUM CHECK (₦50,000,000)
+        // Best Practice: Prevent integer overflows, UI breaks, and extreme laundering attempts.
+        BigDecimal maxAmount = new BigDecimal("50000000");
 
         long durationDays = ChronoUnit.DAYS.between(request.getStartDate(), request.getEndDate());
         if (durationDays <= 0) durationDays = 1;
@@ -137,6 +151,14 @@ public class BudgetService {
         Map<EnvelopeRequest, BigDecimal> finalAmounts = new LinkedHashMap<>();
 
         BigDecimal sumOfRoundedAmounts = BigDecimal.ZERO;
+
+        long emergencyCount = request.getEnvelopes().stream()
+                .filter(e -> "emergency".equalsIgnoreCase((String) e.getConditions().getOrDefault("type", "")))
+                .count();
+
+        if (emergencyCount > 1) {
+            throw new IllegalArgumentException("Strict Rule: You can only have ONE 'Emergency' envelope per budget. Use Standard envelopes for specific savings (e.g., 'Car Repair').");
+        }
 
         for (EnvelopeRequest env : envelopeRequests) {
             BigDecimal percentage = env.getPercentage();
@@ -166,9 +188,6 @@ public class BudgetService {
             logger.info("Adjusted envelope '{}' by ₦{} due to rounding. New amount: ₦{}",
                     largest.getName(), roundingError, newAmount);
         }
-
-
-
 
         // Validate envelope percentages
         BigDecimal totalPercentage = request.getEnvelopes().stream()
@@ -224,8 +243,6 @@ public class BudgetService {
 
             notificationService.sendNotification(user.getId().toString(), message, NotificationType.BUDGET_CREATION);
 
-
-            
             throw new IllegalArgumentException(message);
         }
 
@@ -247,7 +264,6 @@ public class BudgetService {
         budget.setCreatedAt(now);
         budget.setRemainingAmount(request.getTotalAmount().subtract(budget.getFeeAmount()));
         Budget savedBudget = budgetRepository.save(budget);
-
 
         // Create envelopes using EnvelopeService
         List<Envelope> envelopes = new ArrayList<>();
@@ -289,41 +305,14 @@ public class BudgetService {
             refundLog.setBudgetId(savedBudget.getId());
             refundLog.setAmount(unallocatedAmount);
             refundLog.setTransactionType(BUDGET_UNALLOCATED_REFUNDED);
+            refundLog.setStatus(TransactionStatus.SUCCESS);
             refundLog.setCreatedAt(now);
+
+            // 👇 ADD THIS LINE (Generate a unique reference)
+            refundLog.setReference("REF-" + System.currentTimeMillis() + "-" + user.getId());
+
             transactionLogRepository.save(refundLog);
         }
-
-//        // Log transactions
-//        TransactionLog budgetLog = new TransactionLog();
-//        budgetLog.setUserId(user.getId());
-//        budgetLog.setBudgetId(savedBudget.getId());
-//        budgetLog.setAmount(allocationSum);
-//        budgetLog.setTransactionType(BUDGET_ALLOCATION);
-//        budgetLog.setCreatedAt(now);
-//        transactionLogRepository.save(budgetLog);
-//
-//        TransactionLog feeLog = new TransactionLog();
-//        feeLog.setUserId(user.getId());
-//        feeLog.setBudgetId(savedBudget.getId());
-//        feeLog.setAmount(fee);
-//        feeLog.setTransactionType(BUDGET_CREATION_FEE);
-//        feeLog.setCreatedAt(now);
-//        transactionLogRepository.save(feeLog);
-//
-//        RevenueLog revenueLog = new RevenueLog();
-//        revenueLog.setUserId(revenueWalletUserId);
-//        revenueLog.setType("budget_creation_fee");
-//        revenueLog.setAmount(fee);
-//        revenueLog.setDescription("Budget fee for " + durationDays + " days");
-//        revenueLog.setCreatedAt(now);
-//        revenueLogRepository.save(revenueLog);
-//
-//        // Send notification
-//        String message = String.format(
-//                "Budget '%s' created! ₦%.2f allocated (₦%.2f fee applied, ₦%.2f refunded to wallet).",
-//                savedBudget.getName(), allocationSum, fee, unallocatedAmount
-//        );
-//        notificationService.sendNotification(user.getId().toString(), message, NotificationType.BUDGET_CREATION);
 
         // ——————— TRANSACTION LOGS ———————
         // 1. Budget allocation deduction
@@ -333,7 +322,11 @@ public class BudgetService {
         allocationLog.setAmount(allocationSum.negate());  // Negative = money left wallet
         allocationLog.setFee(BigDecimal.ZERO);
         allocationLog.setTransactionType(BUDGET_ALLOCATION);
+        // 👇 ADD THIS
+        allocationLog.setReference("BUD-ALL-" + savedBudget.getId() + "-" + System.currentTimeMillis());
+
         allocationLog.setDescription("Allocated to budget envelopes");
+        allocationLog.setStatus(TransactionStatus.COMPLETED);
         allocationLog.setCreatedAt(now);
         transactionLogRepository.save(allocationLog);
 
@@ -344,26 +337,35 @@ public class BudgetService {
         feeLog.setAmount(fee.negate());  // ← NEGATIVE = deduction
         feeLog.setFee(BigDecimal.ZERO);
         feeLog.setTransactionType(BUDGET_CREATION_FEE);
+        // 👇 ADD THIS
+        feeLog.setReference("BUD-FEE-" + savedBudget.getId() + "-" + System.currentTimeMillis());
+
         feeLog.setDescription("Budget creation fee");
+        feeLog.setStatus(TransactionStatus.COMPLETED);
         feeLog.setCreatedAt(now);
         transactionLogRepository.save(feeLog);
 
         // 3. Unallocated amount refunded (if any)
-        if (unallocatedAmount.compareTo(BigDecimal.ZERO) > 0) {
-            TransactionLog refundLog = new TransactionLog();
-            refundLog.setUserId(user.getId());
-            refundLog.setBudgetId(savedBudget.getId());
-            refundLog.setAmount(unallocatedAmount);  // Positive = money back
-            refundLog.setFee(BigDecimal.ZERO);
-            refundLog.setTransactionType(BUDGET_UNALLOCATED_REFUNDED);
-            refundLog.setDescription("Unallocated amount refunded to wallet");
-            refundLog.setCreatedAt(now);
-            transactionLogRepository.save(refundLog);
-        }
+//        if (unallocatedAmount.compareTo(BigDecimal.ZERO) > 0) {
+//            TransactionLog refundLog = new TransactionLog();
+//            refundLog.setUserId(user.getId());
+//            refundLog.setBudgetId(savedBudget.getId());
+//            refundLog.setAmount(unallocatedAmount);  // Positive = money back
+//            refundLog.setFee(BigDecimal.ZERO);
+//            refundLog.setTransactionType(BUDGET_UNALLOCATED_REFUNDED);
+//            refundLog.setDescription("Unallocated amount refunded to wallet");
+//            refundLog.setStatus(TransactionStatus.COMPLETED);
+//            refundLog.setCreatedAt(now);
+//            transactionLogRepository.save(refundLog);
+//        }
 
         // ——————— REVENUE LOG ———————
         RevenueLog revenueLog = new RevenueLog();
-        revenueLog.setUserId(revenueWalletUserId);
+
+        // ✅ GOOD: Uses the actual ID from the database wallet we fetched earlier
+        revenueLog.setUserId(revenueWallet.getUser().getId());
+
+//        revenueLog.setUserId(revenueWalletUserId);
         revenueLog.setType("budget_creation_fee");
         revenueLog.setAmount(fee);
         revenueLog.setDescription("Budget fee for " + durationDays + " days");
@@ -385,7 +387,11 @@ public class BudgetService {
         notificationService.sendNotification(
                 user.getId().toString(),
                 message,
-                NotificationType.BUDGET_CREATION
+                NotificationType.BUDGET_CREATION,
+                savedBudget.getId(),
+                null,
+                "VIEW_BUDGET",                                      // <--- The Command
+                "/budgets/" + budget.getId() + "/envelopes" // Navigation URL
         );
 
         return new BudgetResponse(
@@ -480,9 +486,6 @@ public class BudgetService {
         budgetRepository.delete(budget);
     }
 
-    private String getCurrentUserEmail() {
-        return ((UserDetails) SecurityContextHolder.getContext().getAuthentication().getPrincipal()).getUsername();
-    }
 
     // New: Fetch all Budgets for a user
     public List<BudgetResponse> getBudgets(String email) {
@@ -614,31 +617,6 @@ public class BudgetService {
         );
         transactionLog.setCreatedAt(now);
         transactionLogRepository.save(transactionLog);
-    }
-
-    // 13/04/2025 -----> New: Check Budget end date
-    public void checkBudgetEnd(Long budgetId) {
-        Budget budget = budgetRepository.findById(budgetId)
-                .orElseThrow(() -> new IllegalArgumentException("Budget not found with ID: " + budgetId));
-        LocalDate today = LocalDate.now();
-        LocalDate endDate = budget.getEndDate();
-
-        // Check if Budget has ended
-        if (today.isAfter(endDate)) {
-            System.out.println("Budget ID " + budgetId + " has ended on " + endDate + ". Current status: " + budget.getStatus());
-            if (budget.getStatus() != BudgetStatus.COMPLETED) {
-                budget.setStatus(BudgetStatus.COMPLETED);
-                budgetRepository.save(budget);
-                System.out.println("Updated Budget ID " + budgetId + " status to ENDED");
-                // Roll back strict_lock funds if any
-                rollbackStrictLock(budgetId, budget.getUser().getEmail());
-            }
-        } else if (today.plusDays(3).isAfter(endDate) && today.isBefore(endDate.plusDays(1))) {
-            // Warn if Budget is ending within 3 days
-            System.out.println("Budget ID " + budgetId + " is nearing its end date (" + endDate + "). Consider extending.");
-        } else {
-            System.out.println("Budget ID " + budgetId + " is active until " + endDate);
-        }
     }
 
     // New: Extend Budget
@@ -815,155 +793,6 @@ public class BudgetService {
         );
     }
 
-    private void creditRevenueAccount(BigDecimal amount, String description) {
-        logger.info("Mock: Credited revenue account with ₦{} for {}", amount, description);
-    }
-
-    @Transactional
-    public Map<String, Object> spendEnvelope(SpendEnvelopeRequest request, String email) {
-        User user = userService.findByEmail(email);
-        Envelope envelope = envelopeRepository.findById(request.getEnvelopeId())
-                .orElseThrow(() -> new IllegalArgumentException("Envelope not found: " + request.getEnvelopeId()));
-        Budget budget = budgetRepository.findById(envelope.getBudget().getId())
-                .orElseThrow(() -> new IllegalArgumentException("Budget not found"));
-
-        // Verify ownership
-        if (!budget.getUser().getId().equals(user.getId())) {
-            throw new IllegalArgumentException("Unauthorized access to envelope");
-        }
-
-        BigDecimal amount = request.getAmount();
-        if (amount.compareTo(BigDecimal.ZERO) <= 0) {
-            throw new IllegalArgumentException("Spend amount must be positive");
-        }
-
-        BigDecimal fee = BigDecimal.ZERO;
-        Map<String, Object> conditions = envelope.getConditions();
-        String conditionType = (String) conditions.get("type");
-
-        // Validate conditions
-        LocalDateTime now = LocalDateTime.now();
-        switch (conditionType) {
-            case "emergency":
-                Boolean used = (Boolean) conditions.getOrDefault("used", false);
-                if (used) {
-                    notificationService.sendNotification(user.getId().toString(), "Emergency funds already used!", NotificationType.GENERAL);
-                    throw new IllegalArgumentException("Emergency funds can only be used once");
-                }
-                if (envelope.getRemainingAmount().compareTo(amount) < 0) {
-                    String message = String.format("Insufficient emergency funds: ₦%.2f needed, ₦%.2f available", amount, envelope.getRemainingAmount());
-                    notificationService.sendNotification(user.getId().toString(), message, NotificationType.INSUFFICIENT_BALANCE);
-                    throw new IllegalArgumentException(message);
-                }
-                fee = amount.multiply(new BigDecimal("0.05")); // 5% fee
-                conditions.put("used", true);
-                break;
-
-            case "daily":
-                BigDecimal dailyLimit = new BigDecimal(conditions.get("limit").toString());
-                LocalDateTime lastAccessed = envelope.getLastAccessed() != null ? envelope.getLastAccessed() : LocalDateTime.ofEpochSecond(0, 0, ZoneOffset.UTC);
-                if (lastAccessed.toLocalDate().equals(now.toLocalDate())) {
-                    notificationService.sendNotification(user.getId().toString(), "Daily limit already used today!", NotificationType.GENERAL);
-                    throw new IllegalArgumentException("Daily limit already used today");
-                }
-                if (amount.compareTo(dailyLimit) > 0) {
-                    String message = String.format("Amount exceeds daily limit: ₦%.2f requested, ₦%.2f allowed", amount, dailyLimit);
-                    notificationService.sendNotification(user.getId().toString(), message, NotificationType.GENERAL);
-                    throw new IllegalArgumentException(message);
-                }
-                if (envelope.getRemainingAmount().compareTo(amount) < 0) {
-                    String message = String.format("Insufficient funds: ₦%.2f needed, ₦%.2f available", amount, envelope.getRemainingAmount());
-                    notificationService.sendNotification(user.getId().toString(), message, NotificationType.INSUFFICIENT_BALANCE);
-                    throw new IllegalArgumentException(message);
-                }
-                break;
-
-            case "weekly":
-                BigDecimal weeklyLimit = new BigDecimal(conditions.get("limit").toString());
-                LocalDateTime weekStart = now.minusDays(now.getDayOfWeek().getValue() - 1);
-                if (envelope.getLastAccessed() != null && envelope.getLastAccessed().isAfter(weekStart)) {
-                    notificationService.sendNotification(user.getId().toString(), "Weekly limit already used this week!", NotificationType.GENERAL);
-                    throw new IllegalArgumentException("Weekly limit already used this week");
-                }
-                if (amount.compareTo(weeklyLimit) > 0) {
-                    String message = String.format("Amount exceeds weekly limit: ₦%.2f requested, ₦%.2f allowed", amount, weeklyLimit);
-                    notificationService.sendNotification(user.getId().toString(), message, NotificationType.GENERAL);
-                    throw new IllegalArgumentException(message);
-                }
-                if (envelope.getRemainingAmount().compareTo(amount) < 0) {
-                    String message = String.format("Insufficient funds: ₦%.2f needed, ₦%.2f available", amount, envelope.getRemainingAmount());
-                    notificationService.sendNotification(user.getId().toString(), message, NotificationType.GENERAL);
-                    throw new IllegalArgumentException(message);
-                }
-                break;
-
-            default:
-                throw new IllegalArgumentException("Spending not supported for condition: " + conditionType);
-        }
-
-        // Deduct amount + fee
-        BigDecimal totalDeduction = amount.add(fee);
-        if (envelope.getRemainingAmount().compareTo(totalDeduction) < 0) {
-            String message = String.format("Insufficient funds including fee: ₦%.2f needed, ₦%.2f available", totalDeduction, envelope.getRemainingAmount());
-            notificationService.sendNotification(user.getId().toString(), message, NotificationType.GENERAL);
-            throw new IllegalArgumentException(message);
-        }
-
-        envelope.setRemainingAmount(envelope.getRemainingAmount().subtract(totalDeduction));
-        envelope.setLastAccessed(now);
-        envelope.setConditions(conditions); // Update emergency.used
-        envelopeRepository.save(envelope);
-
-        // Log spend
-        TransactionLog spendLog = new TransactionLog();
-        spendLog.setUserId(user.getId());
-        spendLog.setBudgetId(budget.getId());
-        spendLog.setSourceEnvelopeId(envelope.getId());
-        spendLog.setAmount(amount);
-        spendLog.setFee(fee);
-        spendLog.setTransactionType(ENVELOPE_DISBURSEMENT);
-        spendLog.setCreatedAt(now);
-        transactionLogRepository.save(spendLog);
-
-        // Log fee (if any)
-        if (fee.compareTo(BigDecimal.ZERO) > 0) {
-            TransactionLog feeLog = new TransactionLog();
-            feeLog.setUserId(user.getId());
-            feeLog.setBudgetId(budget.getId());
-            feeLog.setSourceEnvelopeId(envelope.getId());
-            feeLog.setAmount(fee.negate());  // ← CORRECT — negative = deduction.setAmount(fee);
-            feeLog.setFee(BigDecimal.ZERO);
-            feeLog.setTransactionType(ENVELOPE_DISBURSEMENT);
-            feeLog.setCreatedAt(now);
-            feeLog.setDescription("Budget creation fee");
-            transactionLogRepository.save(feeLog);
-
-            RevenueLog revenueLog = new RevenueLog();
-            revenueLog.setUserId(user.getId());
-            revenueLog.setType("spend_fee");
-            revenueLog.setAmount(fee);
-            revenueLog.setDescription("Emergency withdrawal fee for envelope " + envelope.getName());
-            revenueLog.setCreatedAt(now);
-            revenueLogRepository.save(revenueLog);
-        }
-
-        // Notify
-        String message = String.format("₦%.2f withdrawn from %s envelope! %s", amount, envelope.getName(),
-                fee.compareTo(BigDecimal.ZERO) > 0 ? String.format("₦%.2f fee applied.", fee) : "");
-        notificationService.sendNotification(user.getId().toString(), message, NotificationType.GENERAL);
-
-        // Return Map for consistency with BudgetController
-        Map<String, Object> response = new HashMap<>();
-        response.put("id", envelope.getId());
-        response.put("budgetId", budget.getId());
-        response.put("name", envelope.getName());
-        response.put("amount", envelope.getAmount());
-        response.put("remainingAmount", envelope.getRemainingAmount());
-        response.put("conditions", envelope.getConditions());
-        response.put("createdAt", envelope.getCreatedAt());
-        response.put("lastDisbursedAt", envelope.getLastDisbursedAt());
-        return response;
-    }
     private BudgetResponse mapToResponse(Budget budget) {
         BudgetResponse response = new BudgetResponse(
                 budget.getId(),

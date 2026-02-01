@@ -9,6 +9,7 @@ import org.springframework.stereotype.Repository;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 
 @Repository
 
@@ -28,4 +29,7 @@ public interface PendingDisbursementRepository extends JpaRepository<PendingDisb
     // Existing method for refundExpiredPendingDisbursements
     @Query("SELECT pd FROM PendingDisbursement pd WHERE pd.expiresAt <= :expiresAt AND pd.notifiedUser = true")
     List<PendingDisbursement> findByExpiresAtBeforeAndNotifiedUserTrue(@Param("expiresAt") LocalDateTime expiresAt);
+
+    // Add this line
+    Optional<PendingDisbursement> findFirstByEnvelopeIdAndStatus(Long envelopeId, Status status);
 }

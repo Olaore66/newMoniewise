@@ -33,7 +33,7 @@ public class TransactionController {
 
         Long userId = getUserIdFromUserDetails(userDetails);
 
-        System.out.println("Authenticated userId: " + userId);
+//        System.out.println("Authenticated userId: " + userId);
 
         Page<TransactionListResponse> result =
                 transactionService.getTransactionsForUser(userId, page, size);

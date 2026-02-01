@@ -74,12 +74,18 @@ public class JwtUtil {
     }
 
     // Generate token with proper expiration
-    public String generateToken(UserDetails userDetails) {
+    public String generateToken(UserDetails userDetails, String sessionId) {
         Map<String, Object> claims = new HashMap<>();
         claims.put("role", userDetails.getAuthorities().stream()
                 .map(grantedAuthority -> grantedAuthority.getAuthority())
                 .collect(Collectors.joining(",")));
+        claims.put("sessionId", sessionId);
         return createToken(claims, userDetails.getUsername());
+    }
+
+    // 👇 ADD THIS METHOD TO JwtUtil.java
+    public String extractSessionId(String token) {
+        return extractClaim(token, claims -> claims.get("sessionId", String.class));
     }
 
     private String createToken(Map<String, Object> claims, String subject) {

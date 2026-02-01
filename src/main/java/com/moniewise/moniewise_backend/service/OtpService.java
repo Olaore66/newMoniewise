@@ -21,10 +21,12 @@ public class OtpService {
     private static final int OTP_EXPIRY_MINUTES = 5;
 
     private final UserRepository userRepository;
+    private final NotificationService notificationService;
 
-    public OtpService(OtpRepository otpRepository, UserRepository userRepository) {
+    public OtpService(OtpRepository otpRepository, UserRepository userRepository, NotificationService notificationService) {
         this.otpRepository = otpRepository;
         this.userRepository = userRepository;
+        this.notificationService = notificationService;
     }
 
     @Transactional
@@ -49,9 +51,13 @@ public class OtpService {
         Otp otp = new Otp(userId, otpCode, now, now.plusMinutes(OTP_EXPIRY_MINUTES));
         otpRepository.save(otp);
 
-        // TODO: For future Twilio integration
-        // Send OTP via Twilio SMS API: POST /v1/Messages
-        // Example: TwilioClient.sendSms(userPhone, "Your Moniewise OTP is: " + otpCode);
+        // 4. SEND THE EMAIL (This was missing!) 🚀
+        try {
+            notificationService.sendOtpEmail(user.getEmail(), otpCode);
+        } catch (Exception e) {
+            // Log error but don't fail the transaction
+            System.err.println("Failed to trigger OTP email: " + e.getMessage());
+        }
 
         return otpCode;
     }

@@ -159,21 +159,19 @@ public class BudgetController {
         }
     }
 
-
-    // 12/04/2025 --->// New: Move money between Envelopes
-
     @Data
     public static class TransferExternalRequest {
         private ExternalAccount externalAccount;
         private Double amount;
+        private String withdrawalReason;
     }
 
     @Data
     public static class ExternalAccount {
         private String accountNumber;
-        private String bankCode;
-        private String recipientName;
-        private String bankName; // Optional
+        private String bankCode; // e.g., "058" for GTB
+        private String bankName; // "GTBank"
+        private String recipientName; // "Emeka..."
     }
 
     // 12/04/2025 --->// New: Top-up Budget
@@ -225,16 +223,6 @@ public class BudgetController {
     }
 
     // 14/04/2025
-    @PostMapping("/envelopes/spend")
-    public ResponseEntity<List<Map<String, Object>>> spendEnvelope(@RequestBody SpendEnvelopeRequest request, Authentication authentication) {
-        try {
-            Map<String, Object> response = budgetService.spendEnvelope(request, authentication.getName());
-            return ResponseEntity.ok(List.of(response));
-        } catch (Exception e) {
-            return ResponseEntity.badRequest().body(List.of(Map.of("error", e.getMessage())));
-        }
-    }
-
     @ExceptionHandler(TncAcceptanceRequiredException.class)
     public ResponseEntity<?> handleTncAcceptanceRequired(TncAcceptanceRequiredException ex) {
         return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of(

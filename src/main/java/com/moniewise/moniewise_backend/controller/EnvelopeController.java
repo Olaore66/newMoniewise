@@ -1,5 +1,7 @@
 package com.moniewise.moniewise_backend.controller;
 import com.moniewise.moniewise_backend.dto.request.EnvelopeRequest;
+import com.moniewise.moniewise_backend.dto.request.ExternalTransferRequest;
+import com.moniewise.moniewise_backend.dto.request.P2PTransferRequest;
 import com.moniewise.moniewise_backend.dto.response.EnvelopeResponse;
 
 import com.moniewise.moniewise_backend.repository.BudgetRepository;
@@ -10,6 +12,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.web.bind.annotation.*;
 
 
@@ -35,7 +39,9 @@ public class EnvelopeController {
             String email = authentication.getName();
             Long targetId = Long.valueOf(requestBody.get("target_envelope_id").toString());
             Double amount = Double.valueOf(requestBody.get("amount").toString());
-            envelopeService.moveMoney(id, targetId, amount, email);
+            String withdrawalReason = (String) requestBody.getOrDefault("withdrawalReason", null);
+
+            envelopeService.moveMoney(id, targetId, amount, email, withdrawalReason);
             return ResponseEntity.ok("Money moved successfully");
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(e.getMessage());
@@ -52,13 +58,19 @@ public class EnvelopeController {
             @PathVariable Long id,
             @RequestBody BudgetController.TransferExternalRequest request,
             Authentication authentication) {
+
         Logger logger = LoggerFactory.getLogger(BudgetController.class);
         logger.info("POST /envelopes/{}/transfer-external called with payload: {}", id, request);
+
         try {
             String email = authentication.getName();
+            // CORRECT:
             validateTransferRequest(request);
-            envelopeService.transferToExternal(id, request.getExternalAccount(), request.getAmount(), email);
+
+            String withdrawalReason = request.getWithdrawalReason();
+            envelopeService.transferToExternal(id, request.getExternalAccount(), request.getAmount(), email, withdrawalReason);
             return ResponseEntity.ok("Transfer to external account initiated successfully");
+
         } catch (IllegalArgumentException e) {
             logger.warn("Invalid transfer request for envelope {}: {}", id, e.getMessage());
             return ResponseEntity.badRequest().body(e.getMessage());
@@ -96,15 +108,15 @@ public class EnvelopeController {
 
            // Create an envelope
            // Create Envelope
-           @PostMapping
-           public ResponseEntity<EnvelopeResponse> createEnvelope(
-                   @RequestBody EnvelopeRequest request,
-                   Authentication authentication
-           ) {
-               String email = authentication.getName();
-               EnvelopeResponse response = envelopeService.createEnvelope(request, email);
-               return new ResponseEntity<>(response, HttpStatus.CREATED);
-           }
+   @PostMapping
+   public ResponseEntity<EnvelopeResponse> createEnvelope(
+           @RequestBody EnvelopeRequest request,
+           Authentication authentication
+   ) {
+       String email = authentication.getName();
+       EnvelopeResponse response = envelopeService.createEnvelope(request, email);
+       return new ResponseEntity<>(response, HttpStatus.CREATED);
+   }
 
     // Get Envelope
     @GetMapping("/{envelopeId}")
@@ -139,5 +151,83 @@ public class EnvelopeController {
         envelopeService.deleteEnvelope(envelopeId, email);
         return ResponseEntity.noContent().build();
     }
+
+    // ================== PERSON TO EXTERNAL TRANSFER =====================
+    @PostMapping("/transfer/external")
+    public ResponseEntity<?> transferToExternalBank(
+            @RequestBody ExternalTransferRequest request,
+            @AuthenticationPrincipal String email
+    ) {
+        // 1. Map the DTO to the Inner Class your Service expects
+        // (Assuming your Service still uses BudgetController.ExternalAccount)
+        BudgetController.ExternalAccount beneficiary = new BudgetController.ExternalAccount();
+        beneficiary.setAccountNumber(request.getAccountNumber());
+        beneficiary.setBankCode(request.getBankCode());
+        beneficiary.setBankName(request.getBankName());
+        beneficiary.setRecipientName(request.getRecipientName());
+
+        // 2. Call the Service
+        envelopeService.transferToExternal(
+                request.getSourceEnvelopeId(),
+                beneficiary,
+                request.getAmount().doubleValue(), // Convert BigDecimal to Double if your service demands Double
+                email,
+                request.getWithdrawalReason()
+        );
+
+        return ResponseEntity.ok(Map.of(
+                "status", "success",
+                "message", "Transfer processed successfully",
+                "amount", request.getAmount()
+        ));
+    }
+
+
+   // ================== PERSON TO PERSON TRANSFER =====================
+    @PostMapping("/transfer/p2p")
+    public ResponseEntity<?> p2pTransfer(
+            @RequestBody P2PTransferRequest request,
+            Authentication authentication // Or however you get current user email
+    ) {
+        String email = authentication.getName(); // <--- Get email safely here
+        envelopeService.transferToMonieWiseUser(request, email);
+        return ResponseEntity.ok(Map.of(
+                "status", "success",
+                "message", "Transfer successful"
+        ));
+    }
+
+    // ================== DISBURSEMENT (THE CLAIM FLOW) =====================
+
+    // 1. Check if there is money to claim (Frontend calls this when page loads)
+    @GetMapping("/{id}/disbursement/pending")
+    public ResponseEntity<?> getPendingDisbursement(
+            @PathVariable Long id,
+            Authentication authentication
+    ) {
+        // You will need to add this simple lookup method to EnvelopeService
+        // It returns the PendingDisbursement object if one exists and isn't expired
+        var pending = envelopeService.findPendingDisbursementByEnvelopeId(id);
+
+        if (pending == null) {
+            return ResponseEntity.noContent().build(); // No button needed
+        }
+        return ResponseEntity.ok(pending); // Return ID, Amount, ExpiresAt
+    }
+
+    // 2. The Trigger: User clicks "Claim"
+    @PostMapping("/disbursements/{disbursementId}/claim")
+    public ResponseEntity<?> claimDisbursement(
+            @PathVariable Long disbursementId,
+            Authentication authentication
+    ) {
+        String email = authentication.getName();
+        envelopeService.claimDisbursement(disbursementId, email);
+        return ResponseEntity.ok(Map.of(
+                "status", "success",
+                "message", "Funds unlocked! You can now spend."
+        ));
+    }
+
     }
 

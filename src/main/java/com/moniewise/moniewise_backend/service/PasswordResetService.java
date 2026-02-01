@@ -1,23 +1,15 @@
 package com.moniewise.moniewise_backend.service;
 
 import com.moniewise.moniewise_backend.entity.PasswordResetToken;
-import com.moniewise.moniewise_backend.entity.User;
 import com.moniewise.moniewise_backend.repository.PasswordResetTokenRepository;
 import com.moniewise.moniewise_backend.repository.UserRepository;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.http.HttpStatus;
-import org.springframework.http.ResponseEntity;
-import org.springframework.mail.SimpleMailMessage;
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
 import java.security.SecureRandom;
 import java.time.LocalDateTime;
-import java.util.Base64;
-import java.util.HashMap;
-import java.util.Map;
-import java.util.Optional;
 
 @Service
 public class PasswordResetService {
@@ -26,9 +18,7 @@ public class PasswordResetService {
     public PasswordResetTokenRepository tokenRepository;
 
     private final UserRepository userRepository;
-
     private final PasswordEncoder passwordEncoder;
-
     private final JavaMailSender mailSender;
 
     public PasswordResetService(UserRepository userRepository, PasswordEncoder passwordEncoder, JavaMailSender mailSender) {
@@ -36,17 +26,18 @@ public class PasswordResetService {
         this.passwordEncoder = passwordEncoder;
         this.mailSender = mailSender;
     }
+
     public PasswordResetToken createResetToken(String email) {
-
+        // ✅ REFACTOR: Generate 6-Digit OTP
         SecureRandom secureRandom = new SecureRandom();
-        byte[] tokenBytes = new byte[32];
-        secureRandom.nextBytes(tokenBytes);
-        String token = Base64.getUrlEncoder().withoutPadding().encodeToString(tokenBytes);
+        int otpCode = 100000 + secureRandom.nextInt(900000);
+        String token = String.valueOf(otpCode);
 
+        // Save to DB
         PasswordResetToken resetToken = new PasswordResetToken();
         resetToken.setEmail(email);
-        resetToken.setToken(token);
-        resetToken.setExpiresAt(LocalDateTime.now().plusMinutes(10)); // expiry time 10 mins
+        resetToken.setToken(token); // Stores "123456"
+        resetToken.setExpiresAt(LocalDateTime.now().plusMinutes(10)); // 10 min expiry
 
         return tokenRepository.save(resetToken);
     }
@@ -64,22 +55,13 @@ public class PasswordResetService {
         });
     }
 
-    public void updateUserPassword(String email, String newPassword) {
-        userRepository.findByEmail(email).ifPresent(user -> {
-            user.setPassword(passwordEncoder.encode(newPassword));
-            userRepository.save(user);
+    // Overloaded method to support finding by Token directly (used in AuthController)
+    public void updateUserPassword(String token, String newPassword) {
+        tokenRepository.findByToken(token).ifPresent(resetToken -> {
+            userRepository.findByEmail(resetToken.getEmail()).ifPresent(user -> {
+                user.setPassword(passwordEncoder.encode(newPassword));
+                userRepository.save(user);
+            });
         });
     }
-
-    public void sendEmail(String to, String subject, String body) {
-        SimpleMailMessage message = new SimpleMailMessage();
-        message.setTo(to);
-        message.setSubject(subject);
-        message.setText(body);
-        message.setFrom("assist@moniewise.com");
-        mailSender.send(message);
-    }
 }
-
-
-

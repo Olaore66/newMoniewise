@@ -1,5 +1,6 @@
 package com.moniewise.moniewise_backend.security;
 
+import com.moniewise.moniewise_backend.entity.User; // Import your User entity
 import com.moniewise.moniewise_backend.service.UserService;
 import io.jsonwebtoken.ExpiredJwtException;
 import org.slf4j.Logger;
@@ -17,55 +18,6 @@ import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
 
-//@Component
-//public class JwtAuthenticationFilter extends OncePerRequestFilter {
-//
-//    private final JwtUtil jwtUtil;
-//    private final UserService userService;
-//
-//    public JwtAuthenticationFilter(JwtUtil jwtUtil, UserService userService) {
-//        this.jwtUtil = jwtUtil;
-//        this.userService = userService;
-//    }
-//
-//    @Override
-//    protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
-//            throws ServletException, IOException {
-//        String header = request.getHeader("Authorization");
-//        String token = null;
-//        String email = null;
-//
-//        if (header != null && header.startsWith("Bearer ")) {
-//            token = header.substring(7);
-//            try {
-//                email = jwtUtil.extractEmail(token);
-//            } catch (ExpiredJwtException e) {
-//                response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
-//                response.getWriter().write("{\"message\": \"Token expired\", \"status\": 401}");
-//                response.setContentType("application/json");
-//                return;
-//            } catch (Exception e) {
-//                response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
-//                response.getWriter().write("{\"message\": \"Invalid token\", \"status\": 401}");
-//                response.setContentType("application/json");
-//                return;
-//            }
-//        }
-//
-//        if (email != null && SecurityContextHolder.getContext().getAuthentication() == null) {
-//            UserDetails userDetails = userService.loadUserByUsername(email); // Now works!
-//            if (jwtUtil.validateToken(token, userDetails)) {
-//                UsernamePasswordAuthenticationToken auth = new UsernamePasswordAuthenticationToken(
-//                        userDetails, null, userDetails.getAuthorities());
-//                auth.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
-//                SecurityContextHolder.getContext().setAuthentication(auth);
-//            }
-//        }
-//        chain.doFilter(request, response);
-//    }
-//
-//}
-
 @Component
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
@@ -76,6 +28,13 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     public JwtAuthenticationFilter(JwtUtil jwtUtil, UserService userService) {
         this.jwtUtil = jwtUtil;
         this.userService = userService;
+    }
+
+    @Override
+    protected boolean shouldNotFilter(HttpServletRequest request) throws ServletException {
+        String path = request.getServletPath();
+        // Skip the filter for these specific paths
+        return path.startsWith("/auth/google");
     }
 
     @Override
@@ -98,16 +57,31 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         }
 
         if (email != null && SecurityContextHolder.getContext().getAuthentication() == null) {
+            // 1. Load standard UserDetails (for Spring Security)
             UserDetails userDetails = userService.loadUserByUsername(email);
-            if (jwtUtil.validateToken(token, userDetails)) {
+
+            // 2. Load your custom User entity (to check the Session ID)
+            User user = userService.findByEmail(email);
+
+            // 3. Extract Session ID from the incoming Token
+            String tokenSessionId = jwtUtil.extractSessionId(token);
+
+            // 4. THE CRITICAL CHECK: Does Token ID match Database ID?
+            // If user.getCurrentSessionId() is null, it means no valid session exists.
+            boolean isSessionValid = tokenSessionId != null &&
+                    tokenSessionId.equals(user.getCurrentSessionId());
+
+            if (jwtUtil.validateToken(token, userDetails) && isSessionValid) {
                 UsernamePasswordAuthenticationToken auth = new UsernamePasswordAuthenticationToken(
                         userDetails, null, userDetails.getAuthorities());
                 auth.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
                 SecurityContextHolder.getContext().setAuthentication(auth);
                 log.debug("Set authentication for: {}", email);
+            } else if (!isSessionValid) {
+                log.warn("Session Mismatch: User {} tried to use an old token/device.", email);
             }
         }
 
-        chain.doFilter(request, response); // ← ALWAYS
+        chain.doFilter(request, response);
     }
 }

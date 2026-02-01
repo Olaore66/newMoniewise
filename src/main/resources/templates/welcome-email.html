@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"> <title>Welcome to Wisemonie</title>
+    <style>
+        /* BASE STYLES (Desktop) */
+        body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; background-color: #f4f4f7; margin: 0; padding: 0; -webkit-text-size-adjust: none; }
+
+        .container {
+            width: 100%;
+            max-width: 600px; /* Limits width on desktop */
+            margin: 0 auto;
+            background-color: #ffffff;
+            border-radius: 8px;
+            overflow: hidden;
+            margin-top: 40px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+        }
+
+        .header { background-color: #F66C23; padding: 30px; text-align: center; }
+        .header h1 { color: #ffffff; margin: 0; font-size: 24px; letter-spacing: 1px; }
+
+        .content { padding: 40px; color: #51545E; line-height: 1.6; }
+
+        .account-box {
+            background-color: #fff5f0; /* Softer orange background */
+            border: 2px dashed #F66C23;
+            border-radius: 8px;
+            padding: 25px;
+            text-align: center;
+            margin: 25px 0;
+        }
+
+        .account-box h2 { margin: 0; color: #F66C23; font-size: 32px; letter-spacing: 1px; font-weight: 800; }
+        .account-box p { margin: 5px 0 0; color: #888; font-size: 14px; text-transform: uppercase; font-weight: 600; }
+
+        .btn {
+            display: inline-block;
+            background-color: #F66C23;
+            color: #ffffff;
+            text-decoration: none;
+            padding: 14px 35px;
+            border-radius: 6px;
+            font-weight: bold;
+            font-size: 16px;
+            margin-top: 10px;
+        }
+
+        .footer { background-color: #f4f4f7; padding: 20px; text-align: center; font-size: 12px; color: #a8aaaf; }
+
+        /* 📱 MOBILE OPTIMIZATIONS */
+        @media only screen and (max-width: 600px) {
+            .container {
+                width: 100% !important;
+                margin-top: 0 !important;
+                border-radius: 0 !important;
+            }
+
+            .content {
+                padding: 20px !important; /* Less padding on mobile */
+            }
+
+            .header {
+                padding: 20px !important;
+            }
+
+            .account-box h2 {
+                font-size: 24px !important; /* Smaller text for small screens */
+            }
+
+            .btn {
+                display: block !important; /* Full width button on mobile */
+                width: 100% !important;
+                text-align: center !important;
+                box-sizing: border-box !important;
+            }
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div class="header">
+        <h1>Wisemonie</h1>
+    </div>
+
+    <div class="content">
+        <p>Hello,</p>
+        <p>Welcome to the future of Smart Budgeting & Spending! 🚀 We are thrilled to have you on board. Your secure wallet has been created and is ready for use.</p>
+
+        <p>Here are your account details:</p>
+
+        <div class="account-box">
+            <h2 th:text="${accountNumber}">8551234567</h2>
+            <p th:text="${bankName}">Wema Bank</p>
+        </div>
+
+        <p style="text-align: center;">
+            <a href="https://wisemonie.com/login" class="btn">Fund My Wallet</a>
+        </p>
+
+        <p>You can fund this account via any bank app. Your balance will update instantly.</p>
+    </div>
+
+    <div class="footer">
+        <p>&copy; 2026 OLX Digital Services. All rights reserved.</p>
+        <p>Ibadan, Nigeria</p>
+    </div>
+</div>
+
+</body>
+</html>

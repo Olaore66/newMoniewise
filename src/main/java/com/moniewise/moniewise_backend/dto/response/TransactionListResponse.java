@@ -9,12 +9,12 @@ import java.time.LocalDateTime;
 public record TransactionListResponse(
         Long id,
         String title,
-        String description,
-        BigDecimal amount,           // negative if outgoing
-        BigDecimal fee,
-        TransactionType transactionType,
+        String subtitle,          // Changed from 'description' to 'subtitle' for UI clarity
+        BigDecimal amount,        // Signed (+/-)
+        String formattedAmount,   // e.g., "- ₦5,000.00" (Optional, if you want backend formatting)
+        String iconType,          // "BANK", "USER", "WALLET", "BUDGET"
+        String direction,         // "IN" or "OUT" (For coloring: Green/Red)
+        String path,              // Deep link: "/transactions/105"
         LocalDateTime createdAt,
-        TransactionMeta meta
-) {
-    // Optional: you can add a compact constructor if needed later
-}
+        TransactionType type      // Keep enum for filters
+) {}

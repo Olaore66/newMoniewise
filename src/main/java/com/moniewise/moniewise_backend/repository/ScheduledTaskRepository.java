@@ -2,8 +2,10 @@ package com.moniewise.moniewise_backend.repository;
 
 import com.moniewise.moniewise_backend.entity.ScheduledTask;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -14,6 +16,8 @@ public interface ScheduledTaskRepository extends JpaRepository<ScheduledTask, Lo
 
     void deleteByEnvelopeId(Long envelopeId);
 
+    @Modifying
+    @Transactional
     @Query("DELETE FROM ScheduledTask st WHERE st.triggerTime < :threshold")
     void deleteByTriggerTimeBefore(LocalDateTime threshold);
 
@@ -30,4 +34,5 @@ public interface ScheduledTaskRepository extends JpaRepository<ScheduledTask, Lo
     List<ScheduledTask> findNextDisbursementTask(Long envelopeId, LocalDateTime now);
 
 
+    void deleteByEnvelopeIdAndTaskType(Long id, String disbursement);
 }

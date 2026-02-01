@@ -23,7 +23,10 @@ import java.util.Map;
 @NoArgsConstructor
 @AllArgsConstructor
 @TypeDef(name = "jsonb", typeClass = JsonBinaryType.class)
-@Table(name = "users")
+@Table(name = "users", indexes = {
+        @Index(name = "idx_email", columnList = "email"),
+        @Index(name = "idx_phone", columnList = "phone")
+})
 public class User {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -31,6 +34,9 @@ public class User {
 
     @Column(nullable = false, unique = true)
     private String email;
+
+    @Column(name = "is_deleted")
+    private boolean isDeleted = false;
 
     @Column(name = "is_verified", nullable = false)
     private boolean isVerified = false; // Default to false
@@ -71,6 +77,40 @@ public class User {
 
     @Column(name = "last_login")
     private Instant lastLogin;
+
+    @Column(name = "profile_image_url")
+    private String profileImageUrl;
+
+    @Column(name = "current_session_id")
+    private String currentSessionId;
+
+    // Inside User.java
+
+    // ADD THIS FIELD
+    @Lob // Tells DB this is a Large Object
+    @Type(type = "org.hibernate.type.BinaryType") // Critical for PostgreSQL to save as bytea, not OID
+    @Column(name = "profile_image")
+    private byte[] profileImage;
+
+    @Column(name = "transaction_pin")
+    private String transactionPin; // Stores the BCrypt Hash (e.g. $2a$10$...)
+
+    // Helper method for the UI (so we don't send the actual hash)
+    public boolean hasTransactionPin() {
+        return this.transactionPin != null && !this.transactionPin.isEmpty();
+    }
+
+    public boolean isDeleted() { return isDeleted; }
+    public void setDeleted(boolean deleted) { isDeleted = deleted; }
+    // Getter and Setter
+    public byte[] getProfileImage() {
+        return profileImage;
+    }
+
+    public void setProfileImage(byte[] profileImage) {
+        this.profileImage = profileImage;
+    }
+
 
     // For JwtUtil compatibility (pass email as token subject)
     public String getUsername() {

@@ -116,8 +116,6 @@ import org.springframework.security.config.annotation.web.configuration.EnableWe
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.security.core.userdetails.UserDetailsService;
-import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
-import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.oauth2.client.oidc.userinfo.OidcUserService;
 import org.springframework.security.oauth2.core.oidc.user.DefaultOidcUser;
 import org.springframework.security.web.SecurityFilterChain;
@@ -170,11 +168,15 @@ public class SecurityConfig {
                         "/users/otp/generate",  // Add this
                         "/users/otp/verify",
                         "/auth/forgot-password",
-                        "/auth/reset-password"// Add this
+                        "/auth/verify-reset-otp",  // <--- NEW: Verify OTP
+                        "/auth/reset-password",    // <--- NEW: Set New Password
+                        "/auth/google"
                 ).permitAll()
-                .antMatchers("/webhooks/paystack").permitAll() // Open for Paystack
+//                .antMatchers("/webhooks/paystack").permitAll() // Open for Paystack
 
-                .antMatchers("/auth/logout", "/auth/refresh").authenticated()
+                .antMatchers("/api/webhooks/monnify").permitAll()
+
+                .antMatchers("/auth/logout", "/auth/refresh", "/auth/delete").authenticated()
 //              .antMatchers("/tnc/**").authenticated()
                 .antMatchers("/users/**").authenticated()
                 .antMatchers("/notifications/**").authenticated()
@@ -186,6 +188,10 @@ public class SecurityConfig {
                 .antMatchers("/budgets/**").authenticated()
                 .antMatchers("/envelopes/**").authenticated()
                 .antMatchers("/wallets/**").authenticated()
+                .antMatchers("/transactions/pin/**").authenticated()
+
+                .antMatchers("/beneficiaries/**").authenticated()
+
                 .antMatchers(HttpMethod.PATCH, "/users/tnc").authenticated() // Explicitly secure TNC
                 .anyRequest().authenticated()
                 .and()
@@ -196,9 +202,25 @@ public class SecurityConfig {
                 .successHandler((request, response, authentication) -> {
                     DefaultOidcUser oidcUser = (DefaultOidcUser) authentication.getPrincipal();
                     String email = oidcUser.getEmail();
-                    User user = userService.findOrCreateOAuthUser(email);
+
+                    // 1. Extract Name from OIDC User
+                    String name = oidcUser.getFullName(); // or oidcUser.getAttribute("name");
+
+                    // 2. Pass Name to Service (Fixes the compile error)
+                    User user = userService.findOrCreateOAuthUser(email, name);
                     UserDetails userDetails = userService.loadUserByUsername(email);
-                    String token = jwtUtil.generateToken(userDetails);
+
+                    // 2. [NEW] Generate & Save Session ID (The Single Device Logic)
+                    String sessionId = java.util.UUID.randomUUID().toString();
+                    user.setCurrentSessionId(sessionId);
+
+                    // Note: You might need to expose a save method in UserService or use the Repository directly here
+                    // userService.save(user); OR userRepository.save(user);
+                    userService.updateUserSession(user); // <--- Make sure this method exists!
+
+                    // 3. [NEW] Generate Token WITH Session ID
+                    String token = jwtUtil.generateToken(userDetails, sessionId);
+
                     response.setContentType("application/json");
                     response.getWriter().write("{\"token\":\"" + token + "\"}");
                 })

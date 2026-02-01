@@ -1,10 +1,6 @@
 package com.moniewise.moniewise_backend.enums;
 
 public enum TransactionType {
-    DEPOSIT,
-    WITHDRAWAL,
-    TRANSFER,
-    DISBURSEMENT,
     BUDGET_COMPLETION_REFUND,
     WALLET_DEPOSIT,
     WALLET_DEDUCTION,
@@ -17,6 +13,13 @@ public enum TransactionType {
     BUDGET_CREATION_FEE,
     ENVELOPE_TO_ENVELOPE,
     ENVELOPE_TO_EXTERNAL,
-    ENVELOPE_DISBURSEMENT_PENDING,
-    FAILED
-}
+    FAILED,
+    USER_TO_USER,
+    WALLET_TO_BUDGET,
+    WALLET_TO_EXTERNAL,
+    WALLET_TO_USER,
+    ENVELOPE_TO_USER,
+    USER_TO_ENVELOPE,
+    ROLLOVER_REFUND,
+    WALLET_WITHDRAWAL
+    }
