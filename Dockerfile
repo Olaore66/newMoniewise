@@ -1,5 +1,5 @@
 # -------------------------------------------------
-# BUILD STAGE – Maven 3.9.9 + JDK 17 (TLS-safe)
+# BUILD STAGE – Maven 3.9.9 + JDK 17
 # -------------------------------------------------
 FROM maven:3.9.9-eclipse-temurin-17 AS build
 
@@ -14,7 +14,7 @@ RUN --mount=type=cache,target=/root/.m2/repository \
     mvn -B clean package -DskipTests
 
 # -------------------------------------------------
-# RUNTIME STAGE – Tiny JDK 17 JRE (Alpine)
+# RUNTIME STAGE – JDK 17 JRE
 # -------------------------------------------------
 FROM eclipse-temurin:17-jre-alpine
 
