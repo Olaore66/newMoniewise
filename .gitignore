@@ -31,3 +31,9 @@ build/
 
 ### VS Code ###
 .vscode/
+
+# Firebase
+src/main/resources/serviceAccountKey.json
+
+# Spring secrets
+src/main/resources/application.properties
