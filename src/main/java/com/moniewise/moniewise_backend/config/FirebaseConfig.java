@@ -7,7 +7,6 @@ import com.google.firebase.messaging.FirebaseMessaging;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
-import javax.annotation.PostConstruct;
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
@@ -16,38 +15,48 @@ import java.nio.charset.StandardCharsets;
 @Configuration
 public class FirebaseConfig {
 
-    @PostConstruct
-    public void initialize() {
+    @Bean
+    public FirebaseApp firebaseApp() {
+        if (!FirebaseApp.getApps().isEmpty()) {
+            return FirebaseApp.getInstance();
+        }
+
         try {
-            if (FirebaseApp.getApps().isEmpty()) {
+            String firebaseConfig = System.getenv("FIREBASE_SERVICE_ACCOUNT");
+            InputStream serviceAccount;
 
-                String firebaseConfig = System.getenv("FIREBASE_SERVICE_ACCOUNT");
-
-                if (firebaseConfig == null) {
-                    throw new IllegalStateException("FIREBASE_SERVICE_ACCOUNT env variable not set");
-                }
-
-                InputStream serviceAccount =
-                        new ByteArrayInputStream(firebaseConfig.getBytes(StandardCharsets.UTF_8));
-
-                FirebaseOptions options = FirebaseOptions.builder()
-                        .setCredentials(GoogleCredentials.fromStream(serviceAccount))
-                        .build();
-
-                FirebaseApp.initializeApp(options);
-                System.out.println("✅ Firebase initialized successfully!");
+            if (firebaseConfig != null && !firebaseConfig.isEmpty()) {
+                serviceAccount = new ByteArrayInputStream(firebaseConfig.getBytes(StandardCharsets.UTF_8));
+            } else {
+                // Fallback to local file if Env Var is missing
+                serviceAccount = getClass().getClassLoader().getResourceAsStream("serviceAccountKey.json");
             }
+
+            if (serviceAccount == null) {
+                System.err.println("❌ Firebase credentials not found. Notification features will be disabled.");
+                return null;
+            }
+
+            FirebaseOptions options = FirebaseOptions.builder()
+                    .setCredentials(GoogleCredentials.fromStream(serviceAccount))
+                    .build();
+
+            return FirebaseApp.initializeApp(options);
         } catch (Exception e) {
-            e.printStackTrace();
+            System.err.println("❌ Failed to initialize Firebase: " + e.getMessage());
+            return null;
         }
     }
 
     @Bean
-    public FirebaseMessaging firebaseMessaging() {
-        return FirebaseMessaging.getInstance();
+    public FirebaseMessaging firebaseMessaging(FirebaseApp firebaseApp) {
+        if (firebaseApp == null) {
+            // This prevents the "DEFAULT app doesn't exist" crash
+            return null;
+        }
+        return FirebaseMessaging.getInstance(firebaseApp);
     }
 }
-
 
 
 //LOCAL DEVELOPMENT

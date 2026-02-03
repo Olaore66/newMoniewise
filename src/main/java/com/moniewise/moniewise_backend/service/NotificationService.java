@@ -1,7 +1,6 @@
 package com.moniewise.moniewise_backend.service;
 
 import com.google.firebase.messaging.*;
-import com.moniewise.moniewise_backend.entity.Notification;
 import com.moniewise.moniewise_backend.entity.User;
 import com.moniewise.moniewise_backend.enums.NotificationPriority;
 import com.moniewise.moniewise_backend.enums.NotificationType;
@@ -94,16 +93,12 @@ public class NotificationService {
         // 1. FILTER: Check Priority
         NotificationPriority priority = getPriority(type);
 
-        if (priority == NotificationPriority.LOW) {
-            logger.info("Skipping LOW priority notification: {}", type);
-            return;
-        }
 
         try {
             Long uId = Long.valueOf(userId);
 
             // 2. SAVE TO DB (Entity Notification)
-            Notification notification = new Notification();
+            com.moniewise.moniewise_backend.entity.Notification notification = new com.moniewise.moniewise_backend.entity.Notification();
             notification.setUserId(uId);
             notification.setMessage(message);
             notification.setType(type);
@@ -132,6 +127,17 @@ public class NotificationService {
         } catch (Exception e) {
             logger.error("Notification error for user {}: {}", userId, e.getMessage());
         }
+
+        if (priority == NotificationPriority.LOW) {
+            logger.info("Skipping LOW priority notification: {}", type);
+            return;
+        }
+
+        if (firebaseMessaging == null) {
+            System.out.println("⚠️ Skipping notification: Firebase is not initialized.");
+            return;
+        }
+
     }
 
     // Helper to generate dynamic, engaging titles based on the event type
