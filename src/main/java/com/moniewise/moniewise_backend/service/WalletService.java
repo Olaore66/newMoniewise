@@ -331,11 +331,28 @@ public class WalletService {
                 transactionLogRepository.save(transactionLog);
 
                 // 6. Notify
-                notificationService.sendNotification(
-                        user.getId().toString(),
-                        "Wallet funded with ₦" + amountPaid,
-                        NotificationType.WALLET_FUNDED
-                );
+//                notificationService.sendNotification(
+//                        user.getId().toString(),
+//                        "Wallet funded with ₦" + amountPaid,
+//                        NotificationType.WALLET_FUNDED
+//                );
+
+                // 6. Notify (FIX: Run Async + Add Route)
+                CompletableFuture.runAsync(() -> {
+                    try {
+                        notificationService.sendNotification(
+                                user.getId().toString(),
+                                String.format("Wallet funded with ₦%.2f", amountPaid),
+                                NotificationType.WALLET_FUNDED,
+                                null,
+                                null,
+                                "VIEW_WALLET", // Ensure the app knows where to go
+                                "/wallet"
+                        );
+                    } catch (Exception e) {
+                        logger.error("Failed to send webhook notification async", e);
+                    }
+                });
 
                 logger.info("✅ Wallet Funded Successfully!");
             }

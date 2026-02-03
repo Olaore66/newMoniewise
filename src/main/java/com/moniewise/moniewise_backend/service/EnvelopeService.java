@@ -598,28 +598,108 @@ public class EnvelopeService {
         );
     }
 
+//    private EnvelopeResponse toResponse(Envelope envelope) {
+//        BigDecimal visibleBalance = getSpendableBalance(envelope);
+//        return new EnvelopeResponse(
+//                envelope.getId(),
+//                envelope.getBudget().getId(),
+//                envelope.getName(),
+//
+//                // Legacy
+//                envelope.getAmount(),
+//                visibleBalance,// amount
+//                envelope.getRemainingAmount(),           // remainingAmount
+//
+//                // New
+//                envelope.getAmount(),                    // initialAmount
+//                envelope.getTotalRemainingAmount(),
+//                visibleBalance,
+//
+//                envelope.getRemainingAmount(),           // periodRemaining
+//                getPeriodLimit(envelope.getConditions()), // periodLimit
+//                budgetService.getUsedThisPeriod(envelope),             // usedThisPeriod
+//
+//                envelope.getConditions(),
+//                envelope.getCreatedAt(),
+//                envelope.getLastDisbursedAt(),
+//                envelope.getNextDisbursementAt()
+//        );
+//    }
+
     private EnvelopeResponse toResponse(Envelope envelope) {
+        // 1. Calculate "Visible" Balance (Returns 0.00 if locked)
+        BigDecimal visibleBalance = getSpendableBalance(envelope);
+
         return new EnvelopeResponse(
                 envelope.getId(),
                 envelope.getBudget().getId(),
                 envelope.getName(),
 
-                // Legacy
+                // Legacy Fields
                 envelope.getAmount(),                    // amount
-                envelope.getRemainingAmount(),           // remainingAmount
+                visibleBalance,                          // remainingAmount (Use visibleBalance!)
 
-                // New
+                // New Fields
                 envelope.getAmount(),                    // initialAmount
                 envelope.getTotalRemainingAmount(),      // totalRemaining
-                envelope.getRemainingAmount(),           // periodRemaining
+                visibleBalance,                          // periodRemaining (Use visibleBalance!)
+
                 getPeriodLimit(envelope.getConditions()), // periodLimit
-                budgetService.getUsedThisPeriod(envelope),             // usedThisPeriod
+                budgetService.getUsedThisPeriod(envelope), // usedThisPeriod
 
                 envelope.getConditions(),
                 envelope.getCreatedAt(),
                 envelope.getLastDisbursedAt(),
                 envelope.getNextDisbursementAt()
         );
+    }
+
+    // 👇 NEW HELPER METHOD FOR STRICT VISIBILITY
+    private BigDecimal getSpendableBalance(Envelope envelope) {
+        LocalDateTime now = fetchCurrentDateTimeFromDatabase();
+        Map<String, Object> conditions = envelope.getConditions();
+        String type = (String) conditions.getOrDefault("type", "");
+
+        // Graceful Start: Always show money on creation day
+        boolean createdToday = envelope.getCreatedAt().toLocalDate().isEqual(now.toLocalDate());
+
+        try {
+            if ("daily".equals(type)) {
+                if (conditions.containsKey("disbursementTime")) {
+                    LocalTime startTime = LocalTime.parse((String) conditions.get("disbursementTime"));
+                    // STRICT: If not created today AND time is early -> HIDE MONEY
+                    if (!createdToday && now.toLocalTime().isBefore(startTime)) {
+                        return BigDecimal.ZERO;
+                    }
+                }
+            }
+            else if ("dynamic".equals(type)) {
+                // 1. Day Check
+                List<String> rawDays = (List<String>) conditions.getOrDefault("days", List.of());
+                if (rawDays != null && !rawDays.isEmpty()) {
+                    List<String> allowedDays = rawDays.stream().map(String::toUpperCase).collect(Collectors.toList());
+                    String currentDay = now.getDayOfWeek().name();
+
+                    if (!allowedDays.contains(currentDay)) {
+                        return BigDecimal.ZERO; // Wrong Day -> HIDE MONEY
+                    }
+                }
+
+                // 2. Time Check
+                if (conditions.containsKey("disbursementTime")) {
+                    LocalTime startTime = LocalTime.parse((String) conditions.get("disbursementTime"));
+                    // If not created today AND time is early -> HIDE MONEY
+                    if (!createdToday && now.toLocalTime().isBefore(startTime)) {
+                        return BigDecimal.ZERO;
+                    }
+                }
+            }
+        } catch (Exception e) {
+            logger.error("Error calculating spendable balance for envelope {}", envelope.getId(), e);
+        }
+
+        // Default: If rules pass (or it's Weekly/Emergency), show the actual pocket money
+        return envelope.getRemainingAmount();
     }
 
     private void validateEnvelopeConditions(EnvelopeRequest request, BigDecimal allocatedAmount) {
