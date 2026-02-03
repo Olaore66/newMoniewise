@@ -37,3 +37,5 @@ src/main/resources/serviceAccountKey.json
 
 # Spring secrets
 src/main/resources/application.properties
+
+src/main/resources/.env

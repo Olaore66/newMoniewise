@@ -1,25 +1,22 @@
 # -------------------------------------------------
-# BUILD STAGE – Maven 3.9.9 + JDK 17
+# BUILD STAGE
 # -------------------------------------------------
 FROM maven:3.9.9-eclipse-temurin-17 AS build
-
 WORKDIR /app
-
 COPY pom.xml .
-RUN --mount=type=cache,target=/root/.m2/repository \
-    mvn -B dependency:go-offline
-
+RUN mvn -B dependency:go-offline
 COPY src ./src
-RUN --mount=type=cache,target=/root/.m2/repository \
-    mvn -B clean package -DskipTests
+RUN mvn -B clean package -DskipTests
 
 # -------------------------------------------------
-# RUNTIME STAGE – JDK 17 JRE
+# RUNTIME STAGE
 # -------------------------------------------------
 FROM eclipse-temurin:17-jre-alpine
-
 WORKDIR /app
+# Ensure this matches your actual JAR name from pom.xml
 COPY --from=build /app/target/moniewise-backend-0.0.1-SNAPSHOT.jar app.jar
 
+# Render injects a $PORT environment variable automatically.
+# We tell Spring Boot to listen to whatever Render provides.
 EXPOSE 8080
-ENTRYPOINT ["sh", "-c", "java -jar app.jar --server.port=${PORT:-8080}"]
+ENTRYPOINT ["java", "-jar", "app.jar", "--server.port=${PORT}"]
