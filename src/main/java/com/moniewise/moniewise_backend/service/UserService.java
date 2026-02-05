@@ -9,20 +9,18 @@ import com.moniewise.moniewise_backend.entity.Wallet;
 import com.moniewise.moniewise_backend.enums.Role;
 import com.moniewise.moniewise_backend.repository.PasswordResetTokenRepository;
 import com.moniewise.moniewise_backend.repository.UserRepository;
-
 import com.moniewise.moniewise_backend.repository.WalletRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
-import org.springframework.transaction.annotation.Transactional; // ✅ CORRECT ONE
 import java.io.IOException;
 import java.time.Instant;
 import java.time.LocalDateTime;
@@ -116,6 +114,48 @@ public class UserService implements UserDetailsService {
 
 
     //================= SEARCH FOR USERS ===========================
+//    public List<UserSummaryResponse> searchUsers(String query, String currentEmail) {
+//        if (query == null || query.trim().isEmpty()) {
+//            return Collections.emptyList();
+//        }
+//
+//        return userRepository.searchUsers(query.trim())
+//                .stream()
+//                .filter(u -> !u.getEmail().equals(currentEmail))
+//                .map(u -> {
+//                    // 1. Generate Handle
+//                    String handle = "@" + u.getEmail().split("@")[0];
+//
+//                    // 2. Try to get Real Name
+//                    String displayName = "Unknown"; // Default
+//                    if (u.getProfileData() != null) {
+//                        Object nameObj = u.getProfileData().getOrDefault("fullName", u.getProfileData().get("name"));
+//                        if (nameObj != null && !nameObj.toString().trim().isEmpty()) {
+//                            displayName = nameObj.toString();
+//                        }
+//                    }
+//
+//                    // 3. THE FIX: If still "Unknown", use the Handle instead
+//                    if (displayName.equals("Unknown")) {
+//                        // Turn "@olaore66" -> "Olaore66"
+//                        String cleanName = handle.substring(1);
+//                        displayName = cleanName.substring(0, 1).toUpperCase() + cleanName.substring(1);
+//                    }
+//
+//                    return new UserSummaryResponse(
+//                            displayName,
+//                            handle,
+//                            u.getProfileImageUrl(),
+//                            u.getEmail()
+//                    );
+//                })
+//                .limit(10)
+//                .collect(Collectors.toList());
+//    }
+
+
+
+    //================= SEARCH FOR USERS ===========================
     public List<UserSummaryResponse> searchUsers(String query, String currentEmail) {
         if (query == null || query.trim().isEmpty()) {
             return Collections.emptyList();
@@ -123,13 +163,14 @@ public class UserService implements UserDetailsService {
 
         return userRepository.searchUsers(query.trim())
                 .stream()
-                .filter(u -> !u.getEmail().equals(currentEmail))
+                // 🛑 FIX: Use ignoreCase to ensure strict exclusion of self
+                .filter(u -> !u.getEmail().equalsIgnoreCase(currentEmail))
                 .map(u -> {
                     // 1. Generate Handle
                     String handle = "@" + u.getEmail().split("@")[0];
 
                     // 2. Try to get Real Name
-                    String displayName = "Unknown"; // Default
+                    String displayName = "Unknown";
                     if (u.getProfileData() != null) {
                         Object nameObj = u.getProfileData().getOrDefault("fullName", u.getProfileData().get("name"));
                         if (nameObj != null && !nameObj.toString().trim().isEmpty()) {
@@ -137,9 +178,8 @@ public class UserService implements UserDetailsService {
                         }
                     }
 
-                    // 3. THE FIX: If still "Unknown", use the Handle instead
+                    // 3. Fallback: Use Handle if name is missing
                     if (displayName.equals("Unknown")) {
-                        // Turn "@olaore66" -> "Olaore66"
                         String cleanName = handle.substring(1);
                         displayName = cleanName.substring(0, 1).toUpperCase() + cleanName.substring(1);
                     }
@@ -154,7 +194,12 @@ public class UserService implements UserDetailsService {
                 .limit(10)
                 .collect(Collectors.toList());
     }
+//==============================================================
+
     //==============================================================
+
+
+
 
     // ================== TRANSACTION PIN MANAGEMENT ==================
 

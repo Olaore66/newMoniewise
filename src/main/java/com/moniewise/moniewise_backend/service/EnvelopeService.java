@@ -1178,35 +1178,37 @@ public class EnvelopeService {
             throw new IllegalStateException("This envelope is locked until " + sourceEnvelope.getMaturedAt().toLocalDate());
         }
 
-        // 🛑 FIX: SWAP THESE TWO LINES 👇
+        // =====================================================================
+        // 🛑 FIX: SYNC MEMORY WITH DATABASE CALCULATION
+        // =====================================================================
 
-        // 1. Calculate and Fill the Pocket (Lazy Auto-Deposit)
-        BigDecimal limitAvailable = getRemainingLimit(request.getSourceEnvelopeId(), senderEmail);
+        // 1. Calculate the authoritative limit (This updates the DB behind the scenes)
+        BigDecimal authoritativeBalance = getRemainingLimit(request.getSourceEnvelopeId(), senderEmail);
 
-        // 2. NOW fetch the updated balance (It will now be correct)
-        BigDecimal pocketBalance = sourceEnvelope.getRemainingAmount();
+        // 2. CRITICAL: Update the local object to match the authoritative balance
+        // If we don't do this, sourceEnvelope.getRemainingAmount() returns the OLD value
+        sourceEnvelope.setRemainingAmount(authoritativeBalance);
 
-        // 🛑 OPTIONAL: CLEAN UP THE ERROR MESSAGE FORMATTING
-        if (amount.compareTo(limitAvailable) > 0) {
-            String cleanLimit = String.format("%,.2f", limitAvailable); // Fixes the "1.09E-13" error
+        // 3. Now perform the check using the SYNCED balance
+        if (amount.compareTo(sourceEnvelope.getRemainingAmount()) > 0) {
+            String cleanLimit = String.format("%,.2f", sourceEnvelope.getRemainingAmount());
             throw new IllegalStateException("Transfer exceeds your spending limit. Available: ₦" + cleanLimit);
         }
 
-        // Check 2: Actual Cash (Vault) - Safety Net
+        // Check 4: Actual Cash (Vault) - Safety Net
         if (amount.compareTo(sourceEnvelope.getTotalRemainingAmount()) > 0) {
             throw new IllegalStateException("Insufficient funds in vault.");
         }
 
-        // Check 3: Actual Pocket (Wallet) - Critical
-        if (amount.compareTo(pocketBalance) > 0) {
-            throw new IllegalStateException("Insufficient funds in pocket. Available: ₦" + pocketBalance);
-        }
-
-        // 🛑 FIX: Subtract from Actual Balance, NOT Limit
+        // 4. Subtract from the SYNCED balance
         sourceEnvelope.setTotalRemainingAmount(sourceEnvelope.getTotalRemainingAmount().subtract(amount));
         sourceEnvelope.setRemainingAmount(sourceEnvelope.getRemainingAmount().subtract(amount));
 
         envelopeRepository.save(sourceEnvelope);
+
+        // =====================================================================
+        // END FIX
+        // =====================================================================
 
         // Names & Logs
         String senderName = getSafeName(sender);
@@ -1258,6 +1260,112 @@ public class EnvelopeService {
 
         try { beneficiaryService.addBeneficiary(sender.getId(), recipient.getEmail(), recipientName); } catch (Exception e) {}
     }
+//    @Transactional(rollbackFor = Exception.class)
+//    public void transferToMonieWiseUser(P2PTransferRequest request, String senderEmail) {
+//        BigDecimal amount = request.getAmount();
+//
+//        if (amount.compareTo(BigDecimal.ZERO) <= 0) {
+//            throw new IllegalArgumentException("Amount must be positive");
+//        }
+//
+//        User sender = userService.findByEmail(senderEmail);
+//        User recipient = userService.findByEmailOrPhone(request.getRecipientIdentity())
+//                .orElseThrow(() -> new EntityNotFoundException("Recipient not found"));
+//
+//        if (sender.getId().equals(recipient.getId())) {
+//            throw new IllegalArgumentException("You cannot transfer to yourself.");
+//        }
+//
+//        Envelope sourceEnvelope = envelopeRepository.findByIdAndBudget_UserEmail(request.getSourceEnvelopeId(), senderEmail)
+//                .orElseThrow(() -> new EntityNotFoundException("Envelope not found"));
+//
+//        LocalDateTime now = LocalDateTime.now();
+//        validateTransferRules(sourceEnvelope, sourceEnvelope.getBudget(), now);
+//
+//        if (sourceEnvelope.getMaturedAt() != null && sourceEnvelope.getMaturedAt().isAfter(now)) {
+//            throw new IllegalStateException("This envelope is locked until " + sourceEnvelope.getMaturedAt().toLocalDate());
+//        }
+//
+//        // 🛑 FIX: SWAP THESE TWO LINES 👇
+//
+//        // 1. Calculate and Fill the Pocket (Lazy Auto-Deposit)
+//        BigDecimal limitAvailable = getRemainingLimit(request.getSourceEnvelopeId(), senderEmail);
+//
+//        // 2. NOW fetch the updated balance (It will now be correct)
+//        BigDecimal pocketBalance = sourceEnvelope.getRemainingAmount();
+//
+//        // 🛑 OPTIONAL: CLEAN UP THE ERROR MESSAGE FORMATTING
+//        if (amount.compareTo(limitAvailable) > 0) {
+//            String cleanLimit = String.format("%,.2f", limitAvailable); // Fixes the "1.09E-13" error
+//            throw new IllegalStateException("Transfer exceeds your spending limit. Available: ₦" + cleanLimit);
+//        }
+//
+//        // Check 2: Actual Cash (Vault) - Safety Net
+//        if (amount.compareTo(sourceEnvelope.getTotalRemainingAmount()) > 0) {
+//            throw new IllegalStateException("Insufficient funds in vault.");
+//        }
+//
+//        // Check 3: Actual Pocket (Wallet) - Critical
+//        if (amount.compareTo(pocketBalance) > 0) {
+//            throw new IllegalStateException("Insufficient funds in pocket. Available: ₦" + pocketBalance);
+//        }
+//
+//        // 🛑 FIX: Subtract from Actual Balance, NOT Limit
+//        sourceEnvelope.setTotalRemainingAmount(sourceEnvelope.getTotalRemainingAmount().subtract(amount));
+//        sourceEnvelope.setRemainingAmount(sourceEnvelope.getRemainingAmount().subtract(amount));
+//
+//        envelopeRepository.save(sourceEnvelope);
+//
+//        // Names & Logs
+//        String senderName = getSafeName(sender);
+//        String recipientName = getSafeName(recipient);
+//        walletService.fundWallet(recipient.getId(), amount, null, true);
+//
+//        String baseRef = UUID.randomUUID().toString();
+//        String description = "Transfer to " + recipientName;
+//        String type = (String) sourceEnvelope.getConditions().getOrDefault("type", "");
+//        if ("emergency".equalsIgnoreCase(type) && request.getWithdrawalReason() != null) {
+//            description = "EMERGENCY: " + request.getWithdrawalReason();
+//        } else if (request.getNote() != null) {
+//            description = request.getNote();
+//        }
+//
+//        // Log Sender
+//        TransactionLog senderLog = TransactionLog.builder()
+//                .userId(sender.getId())
+//                .budgetId(sourceEnvelope.getBudget().getId())
+//                .sourceEnvelopeId(sourceEnvelope.getId())
+//                .counterpartyUserId(recipient.getId())
+//                .amount(amount.negate())
+//                .fee(BigDecimal.ZERO)
+//                .transactionType(TransactionType.ENVELOPE_TO_USER)
+//                .status(TransactionStatus.COMPLETED)
+//                .reference("P2P-DB-" + baseRef)
+//                .description(description)
+//                .createdAt(now)
+//                .build();
+//        transactionLogRepository.save(senderLog);
+//
+//        // Log Recipient
+//        TransactionLog recipientLog = TransactionLog.builder()
+//                .userId(recipient.getId())
+//                .counterpartyUserId(sender.getId())
+//                .amount(amount)
+//                .fee(BigDecimal.ZERO)
+//                .transactionType(TransactionType.USER_TO_ENVELOPE)
+//                .status(TransactionStatus.COMPLETED)
+//                .reference("P2P-CR-" + baseRef)
+//                .description("Received from " + senderName)
+//                .createdAt(now)
+//                .build();
+//        transactionLogRepository.save(recipientLog);
+//
+//        // Notifications
+//        notificationService.sendNotification(sender.getId().toString(), "Sent ₦" + amount + " to " + recipientName, NotificationType.ENVELOPE_TRANSFER, sourceEnvelope.getBudget().getId(), sourceEnvelope.getId(), "VIEW_ENVELOPE", "/envelopes/" + sourceEnvelope.getId());
+//        notificationService.sendNotification(recipient.getId().toString(), senderName + " sent you ₦" + amount, NotificationType.WALLET_DEPOSIT, null, null, "VIEW_WALLET", "/dashboard");
+//
+//        try { beneficiaryService.addBeneficiary(sender.getId(), recipient.getEmail(), recipientName); } catch (Exception e) {}
+//    }
 
 // =================================================================================
     // HELPER METHOD (Add this to the bottom of your Service Class)
