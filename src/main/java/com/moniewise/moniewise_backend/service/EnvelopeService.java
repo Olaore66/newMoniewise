@@ -894,7 +894,16 @@ public class EnvelopeService {
         // Safety check: Don't go below zero
         remainingLimit = remainingLimit.compareTo(BigDecimal.ZERO) < 0 ? BigDecimal.ZERO : remainingLimit;
 
-        // Apply the fix
+        // =================================================================================
+        // 🛑 NEW FIX: Cap the Limit at the Total Vault Amount
+        // You cannot have ₦1,800 available if the Vault only has ₦900.
+        // =================================================================================
+        BigDecimal vaultBalance = envelope.getTotalRemainingAmount();
+        if (remainingLimit.compareTo(vaultBalance) > 0) {
+            remainingLimit = vaultBalance;
+        }
+
+        // Apply the fix to DB
         envelope.setRemainingAmount(remainingLimit);
         envelopeRepository.save(envelope);
 
@@ -1179,14 +1188,14 @@ public class EnvelopeService {
         }
 
         // =====================================================================
-        // 🛑 FIX: SYNC MEMORY WITH DATABASE CALCULATION
+        // 🛑 FIX START: SYNC MEMORY WITH DATABASE CALCULATION
         // =====================================================================
 
         // 1. Calculate the authoritative limit (This updates the DB behind the scenes)
         BigDecimal authoritativeBalance = getRemainingLimit(request.getSourceEnvelopeId(), senderEmail);
 
         // 2. CRITICAL: Update the local object to match the authoritative balance
-        // If we don't do this, sourceEnvelope.getRemainingAmount() returns the OLD value
+        // This ensures 'sourceEnvelope' knows the REAL balance before we do math.
         sourceEnvelope.setRemainingAmount(authoritativeBalance);
 
         // 3. Now perform the check using the SYNCED balance
@@ -1200,14 +1209,16 @@ public class EnvelopeService {
             throw new IllegalStateException("Insufficient funds in vault.");
         }
 
-        // 4. Subtract from the SYNCED balance
-        sourceEnvelope.setTotalRemainingAmount(sourceEnvelope.getTotalRemainingAmount().subtract(amount));
+        // 4. Subtract from the SYNCED balance (Pocket)
         sourceEnvelope.setRemainingAmount(sourceEnvelope.getRemainingAmount().subtract(amount));
+
+        // 5. Subtract from the Vault
+        sourceEnvelope.setTotalRemainingAmount(sourceEnvelope.getTotalRemainingAmount().subtract(amount));
 
         envelopeRepository.save(sourceEnvelope);
 
         // =====================================================================
-        // END FIX
+        // 🛑 FIX END
         // =====================================================================
 
         // Names & Logs
@@ -1260,6 +1271,7 @@ public class EnvelopeService {
 
         try { beneficiaryService.addBeneficiary(sender.getId(), recipient.getEmail(), recipientName); } catch (Exception e) {}
     }
+
 //    @Transactional(rollbackFor = Exception.class)
 //    public void transferToMonieWiseUser(P2PTransferRequest request, String senderEmail) {
 //        BigDecimal amount = request.getAmount();
