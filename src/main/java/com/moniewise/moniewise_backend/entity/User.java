@@ -3,10 +3,10 @@ package com.moniewise.moniewise_backend.entity;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.moniewise.moniewise_backend.enums.Role;
 import com.vladmihalcea.hibernate.type.json.JsonBinaryType;
-import lombok.Getter;
-import lombok.Setter;
-import lombok.NoArgsConstructor;
 import lombok.AllArgsConstructor;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import lombok.Setter;
 import org.hibernate.annotations.Type;
 import org.hibernate.annotations.TypeDef;
 import org.springframework.data.jpa.convert.threeten.Jsr310JpaConverters;
@@ -14,6 +14,7 @@ import org.springframework.data.jpa.convert.threeten.Jsr310JpaConverters;
 import javax.persistence.*;
 import java.time.Instant;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.Map;
 
 @Entity
@@ -65,6 +66,9 @@ public class User {
 
     @Column(unique = true)
     private String bvn;
+
+    @Column(nullable = false)
+    private String timezone = "Africa/Lagos";
 
     @Column(nullable = false)
     @Enumerated(EnumType.STRING)
@@ -123,5 +127,9 @@ public class User {
             return (String) profileData.get("name");
         }
         return null;
+    }
+
+    public ZoneId getZoneId() {
+        return ZoneId.of(this.timezone);
     }
 }
