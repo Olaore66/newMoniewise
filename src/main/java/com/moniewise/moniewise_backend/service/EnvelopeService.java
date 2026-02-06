@@ -773,6 +773,143 @@ public class EnvelopeService {
         }
     }
 
+//    public BigDecimal getRemainingLimit(Long envelopeId, String email) {
+//
+//        LocalDateTime now = fetchCurrentDateTimeFromDatabase();
+//
+//        Envelope envelope = envelopeRepository.findByIdAndBudget_UserEmail(envelopeId, email)
+//                .orElseThrow(() -> new EntityNotFoundException("Envelope not found or not accessible: " + envelopeId));
+//
+//        Map<String, Object> conditions = envelope.getConditions();
+//
+//        if (conditions == null || !conditions.containsKey("type") || !conditions.containsKey("limit")) {
+//            throw new IllegalArgumentException("Envelope conditions must include 'type' and 'limit'");
+//        }
+//
+//        String type = conditions.get("type").toString();
+//        Object limitObj = conditions.get("limit");
+//
+//        if (!(limitObj instanceof Number)) {
+//            throw new IllegalArgumentException("Invalid limit type for envelope " + envelopeId + ": " + limitObj);
+//        }
+//
+//        BigDecimal limit;
+//        if (limitObj instanceof Number) {
+//            limit = new BigDecimal(limitObj.toString()); // Use toString for precision
+//        } else {
+//            limit = BigDecimal.ZERO;
+//        }
+//        LocalDateTime periodStart;
+//        LocalDateTime periodEnd;
+//
+//        // 🛑 NEW: Check for "Graceful Start" (Created Today?)
+//        boolean createdToday = envelope.getCreatedAt().toLocalDate().isEqual(now.toLocalDate());
+//
+//        switch (type) {
+//            case "daily":
+//                if (conditions.containsKey("disbursementTime")) {
+//                    String timeStr = (String) conditions.get("disbursementTime");
+//                    try {
+//                        LocalTime startTime = LocalTime.parse(timeStr);
+//
+//                        // FIX: If NOT created today, and time hasn't reached, limit is ZERO.
+//                        if (!createdToday && now.toLocalTime().isBefore(startTime)) {
+//                            return BigDecimal.ZERO;
+//                        }
+//                    } catch (DateTimeParseException e) {
+//                        logger.error("Invalid time format", e);
+//                    }
+//                }
+//                periodStart = now.toLocalDate().atStartOfDay();
+//                periodEnd = periodStart.plusDays(1);
+//                break;
+//
+//            case "weekly":
+//                // Weekly usually doesn't have a time restriction, just date.
+//                // It starts on Monday (or created day).
+//                LocalDate weekStart = now.toLocalDate().minusDays(now.toLocalDate().getDayOfWeek().getValue() - 1);
+//                periodStart = weekStart.atStartOfDay();
+//                periodEnd = periodStart.plusDays(7);
+//                break;
+//            case "dynamic":
+//                // 1. Validate Days (Case Insensitive)
+//                @SuppressWarnings("unchecked")
+//                List<String> rawDays = (List<String>) conditions.getOrDefault("days", List.of());
+//                List<String> allowedDays = rawDays.stream()
+//                        .map(String::toUpperCase)
+//                        .toList();
+//
+//                String currentDay = now.getDayOfWeek().name();
+//
+//                // If today is not in the list, balance is 0.
+//                if (!allowedDays.contains(currentDay)) {
+//                    return BigDecimal.ZERO;
+//                }
+//
+//                // 2. Parse Time
+//                String timeStr = (String) conditions.getOrDefault("disbursementTime", "08:00");
+//                LocalTime targetTime;
+//                try {
+//                    targetTime = LocalTime.parse(timeStr);
+//                } catch (DateTimeParseException e) {
+//                    throw new IllegalArgumentException("Invalid disbursementTime format");
+//                }
+//
+//                // 3. UX Check: Is it too early?
+//                LocalTime nowTime = now.toLocalTime();
+//
+//                // 3. THE FIX: Remove 'isAfter' check
+//                // Only hide the money if it is TOO EARLY. Never hide it if it's "too late".
+//                if (now.toLocalTime().isBefore(targetTime)) {
+//                    return BigDecimal.ZERO;
+//                }
+//
+//                // 4. Set Calculation Window (Start Time -> Midnight)
+//                periodStart = now.toLocalDate().atTime(targetTime);
+//                periodEnd = now.toLocalDate().atTime(23, 59, 59);
+//                break;
+//            case "safe_lock":
+//            case "strict_lock":
+//            case "emergency":
+//                periodStart = now.minusYears(1);
+//                periodEnd = now.plusYears(1);
+//                return envelope.getRemainingAmount(); // Use stored value for these types
+//            default:
+//                throw new IllegalArgumentException("Unsupported envelope type: " + type);
+//        }
+//        BigDecimal spentAmount = transactionLogRepository.findBySourceEnvelopeIdAndTimeRange(envelopeId, periodStart, periodEnd)
+//                .stream().filter(t -> {
+//                    String typeTxn = t.getTransactionType().toString().toUpperCase(); // Handle Enum or String safely
+//                    return List.of(
+//                            "ENVELOPE_TO_ENVELOPE",
+//                            "ENVELOPE_TO_EXTERNAL",
+//                            "ENVELOPE_TO_USER"
+//                    ).contains(typeTxn);
+//                })
+//                .map(TransactionLog::getAmount)
+//                .reduce(BigDecimal.ZERO, BigDecimal::add);
+//
+//        BigDecimal remainingLimit = limit.subtract(spentAmount);
+//
+//        // Safety check: Don't go below zero
+//        remainingLimit = remainingLimit.compareTo(BigDecimal.ZERO) < 0 ? BigDecimal.ZERO : remainingLimit;
+//
+//        // =================================================================================
+//        // 🛑 NEW FIX: Cap the Limit at the Total Vault Amount
+//        // You cannot have ₦1,800 available if the Vault only has ₦900.
+//        // =================================================================================
+//        BigDecimal vaultBalance = envelope.getTotalRemainingAmount();
+//        if (remainingLimit.compareTo(vaultBalance) > 0) {
+//            remainingLimit = vaultBalance;
+//        }
+//
+//        // Apply the fix to DB
+//        envelope.setRemainingAmount(remainingLimit);
+//        envelopeRepository.save(envelope);
+//
+//        return envelope.getRemainingAmount();
+//    }
+
     public BigDecimal getRemainingLimit(Long envelopeId, String email) {
 
         LocalDateTime now = fetchCurrentDateTimeFromDatabase();
@@ -795,14 +932,13 @@ public class EnvelopeService {
 
         BigDecimal limit;
         if (limitObj instanceof Number) {
-            limit = new BigDecimal(limitObj.toString()); // Use toString for precision
+            limit = new BigDecimal(limitObj.toString());
         } else {
             limit = BigDecimal.ZERO;
         }
         LocalDateTime periodStart;
         LocalDateTime periodEnd;
 
-        // 🛑 NEW: Check for "Graceful Start" (Created Today?)
         boolean createdToday = envelope.getCreatedAt().toLocalDate().isEqual(now.toLocalDate());
 
         switch (type) {
@@ -811,8 +947,6 @@ public class EnvelopeService {
                     String timeStr = (String) conditions.get("disbursementTime");
                     try {
                         LocalTime startTime = LocalTime.parse(timeStr);
-
-                        // FIX: If NOT created today, and time hasn't reached, limit is ZERO.
                         if (!createdToday && now.toLocalTime().isBefore(startTime)) {
                             return BigDecimal.ZERO;
                         }
@@ -825,14 +959,11 @@ public class EnvelopeService {
                 break;
 
             case "weekly":
-                // Weekly usually doesn't have a time restriction, just date.
-                // It starts on Monday (or created day).
                 LocalDate weekStart = now.toLocalDate().minusDays(now.toLocalDate().getDayOfWeek().getValue() - 1);
                 periodStart = weekStart.atStartOfDay();
                 periodEnd = periodStart.plusDays(7);
                 break;
             case "dynamic":
-                // 1. Validate Days (Case Insensitive)
                 @SuppressWarnings("unchecked")
                 List<String> rawDays = (List<String>) conditions.getOrDefault("days", List.of());
                 List<String> allowedDays = rawDays.stream()
@@ -841,12 +972,10 @@ public class EnvelopeService {
 
                 String currentDay = now.getDayOfWeek().name();
 
-                // If today is not in the list, balance is 0.
                 if (!allowedDays.contains(currentDay)) {
                     return BigDecimal.ZERO;
                 }
 
-                // 2. Parse Time
                 String timeStr = (String) conditions.getOrDefault("disbursementTime", "08:00");
                 LocalTime targetTime;
                 try {
@@ -855,16 +984,10 @@ public class EnvelopeService {
                     throw new IllegalArgumentException("Invalid disbursementTime format");
                 }
 
-                // 3. UX Check: Is it too early?
-                LocalTime nowTime = now.toLocalTime();
-
-                // 3. THE FIX: Remove 'isAfter' check
-                // Only hide the money if it is TOO EARLY. Never hide it if it's "too late".
                 if (now.toLocalTime().isBefore(targetTime)) {
                     return BigDecimal.ZERO;
                 }
 
-                // 4. Set Calculation Window (Start Time -> Midnight)
                 periodStart = now.toLocalDate().atTime(targetTime);
                 periodEnd = now.toLocalDate().atTime(23, 59, 59);
                 break;
@@ -873,13 +996,14 @@ public class EnvelopeService {
             case "emergency":
                 periodStart = now.minusYears(1);
                 periodEnd = now.plusYears(1);
-                return envelope.getRemainingAmount(); // Use stored value for these types
+                return envelope.getRemainingAmount();
             default:
                 throw new IllegalArgumentException("Unsupported envelope type: " + type);
         }
+
         BigDecimal spentAmount = transactionLogRepository.findBySourceEnvelopeIdAndTimeRange(envelopeId, periodStart, periodEnd)
                 .stream().filter(t -> {
-                    String typeTxn = t.getTransactionType().toString().toUpperCase(); // Handle Enum or String safely
+                    String typeTxn = t.getTransactionType().toString().toUpperCase();
                     return List.of(
                             "ENVELOPE_TO_ENVELOPE",
                             "ENVELOPE_TO_EXTERNAL",
@@ -891,7 +1015,7 @@ public class EnvelopeService {
 
         BigDecimal remainingLimit = limit.subtract(spentAmount);
 
-        // Safety check: Don't go below zero
+        // 1. Safety Check: Don't go below zero
         remainingLimit = remainingLimit.compareTo(BigDecimal.ZERO) < 0 ? BigDecimal.ZERO : remainingLimit;
 
         // =================================================================================
@@ -910,6 +1034,119 @@ public class EnvelopeService {
         return envelope.getRemainingAmount();
     }
 
+
+    @Transactional(rollbackFor = Exception.class)
+    public void transferToMonieWiseUser(P2PTransferRequest request, String senderEmail) {
+        BigDecimal amount = request.getAmount();
+
+        if (amount.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new IllegalArgumentException("Amount must be positive");
+        }
+
+        User sender = userService.findByEmail(senderEmail);
+        User recipient = userService.findByEmailOrPhone(request.getRecipientIdentity())
+                .orElseThrow(() -> new EntityNotFoundException("Recipient not found"));
+
+        if (sender.getId().equals(recipient.getId())) {
+            throw new IllegalArgumentException("You cannot transfer to yourself.");
+        }
+
+        // 1. Initial Load
+        Envelope sourceEnvelope = envelopeRepository.findByIdAndBudget_UserEmail(request.getSourceEnvelopeId(), senderEmail)
+                .orElseThrow(() -> new EntityNotFoundException("Envelope not found"));
+
+        LocalDateTime now = LocalDateTime.now();
+        validateTransferRules(sourceEnvelope, sourceEnvelope.getBudget(), now);
+
+        if (sourceEnvelope.getMaturedAt() != null && sourceEnvelope.getMaturedAt().isAfter(now)) {
+            throw new IllegalStateException("This envelope is locked until " + sourceEnvelope.getMaturedAt().toLocalDate());
+        }
+
+        // =====================================================================
+        // 🛑 STEP 1: FORCE DATABASE UPDATE OF LIMIT
+        // =====================================================================
+        // This calculates the daily/weekly limit and updates the DB.
+        getRemainingLimit(request.getSourceEnvelopeId(), senderEmail);
+
+        // =====================================================================
+        // 🛑 STEP 2: RE-FETCH TO GET FRESH DATA (THE FIX)
+        // =====================================================================
+        // We reload the object to ensure we have the balance calculated in Step 1.
+        sourceEnvelope = envelopeRepository.findById(sourceEnvelope.getId())
+                .orElseThrow(() -> new EntityNotFoundException("Envelope not found during refresh"));
+
+        // =====================================================================
+        // 🛑 STEP 3: VALIDATE & SUBTRACT
+        // =====================================================================
+
+        // Check Pocket (Available Limit)
+        if (amount.compareTo(sourceEnvelope.getRemainingAmount()) > 0) {
+            String cleanLimit = String.format("%,.2f", sourceEnvelope.getRemainingAmount());
+            throw new IllegalStateException("Transfer exceeds your spending limit. Available: ₦" + cleanLimit);
+        }
+
+        // Check Vault (Total Cash)
+        if (amount.compareTo(sourceEnvelope.getTotalRemainingAmount()) > 0) {
+            throw new IllegalStateException("Insufficient funds in vault.");
+        }
+
+        // Subtract from both
+        sourceEnvelope.setTotalRemainingAmount(sourceEnvelope.getTotalRemainingAmount().subtract(amount));
+        sourceEnvelope.setRemainingAmount(sourceEnvelope.getRemainingAmount().subtract(amount));
+
+        // Recalculate future daily limits (keeps the math accurate for tomorrow)
+        recalculateTargetEnvelopeLimit(sourceEnvelope, sourceEnvelope.getBudget());
+
+        envelopeRepository.save(sourceEnvelope);
+
+        // --- Logging & Notification Logic ---
+
+        String senderName = getSafeName(sender);
+        String recipientName = getSafeName(recipient);
+        walletService.fundWallet(recipient.getId(), amount, null, true);
+
+        String baseRef = UUID.randomUUID().toString();
+        String description = "Transfer to " + recipientName;
+        String type = (String) sourceEnvelope.getConditions().getOrDefault("type", "");
+        if ("emergency".equalsIgnoreCase(type) && request.getWithdrawalReason() != null) {
+            description = "EMERGENCY: " + request.getWithdrawalReason();
+        } else if (request.getNote() != null) {
+            description = request.getNote();
+        }
+
+        TransactionLog senderLog = TransactionLog.builder()
+                .userId(sender.getId())
+                .budgetId(sourceEnvelope.getBudget().getId())
+                .sourceEnvelopeId(sourceEnvelope.getId())
+                .counterpartyUserId(recipient.getId())
+                .amount(amount.negate())
+                .fee(BigDecimal.ZERO)
+                .transactionType(TransactionType.ENVELOPE_TO_USER)
+                .status(TransactionStatus.COMPLETED)
+                .reference("P2P-DB-" + baseRef)
+                .description(description)
+                .createdAt(now)
+                .build();
+        transactionLogRepository.save(senderLog);
+
+        TransactionLog recipientLog = TransactionLog.builder()
+                .userId(recipient.getId())
+                .counterpartyUserId(sender.getId())
+                .amount(amount)
+                .fee(BigDecimal.ZERO)
+                .transactionType(TransactionType.USER_TO_ENVELOPE)
+                .status(TransactionStatus.COMPLETED)
+                .reference("P2P-CR-" + baseRef)
+                .description("Received from " + senderName)
+                .createdAt(now)
+                .build();
+        transactionLogRepository.save(recipientLog);
+
+        notificationService.sendNotification(sender.getId().toString(), "Sent ₦" + amount + " to " + recipientName, NotificationType.ENVELOPE_TRANSFER, sourceEnvelope.getBudget().getId(), sourceEnvelope.getId(), "VIEW_ENVELOPE", "/envelopes/" + sourceEnvelope.getId());
+        notificationService.sendNotification(recipient.getId().toString(), senderName + " sent you ₦" + amount, NotificationType.WALLET_DEPOSIT, null, null, "VIEW_WALLET", "/dashboard");
+
+        try { beneficiaryService.addBeneficiary(sender.getId(), recipient.getEmail(), recipientName); } catch (Exception e) {}
+    }
     @Transactional
     public void resetEnvelopeLimits(Envelope envelope) {
         Map<String, Object> conditions = envelope.getConditions();
@@ -1161,117 +1398,6 @@ public class EnvelopeService {
 //}
 //
 
-    @Transactional(rollbackFor = Exception.class)
-    public void transferToMonieWiseUser(P2PTransferRequest request, String senderEmail) {
-        BigDecimal amount = request.getAmount();
-
-        if (amount.compareTo(BigDecimal.ZERO) <= 0) {
-            throw new IllegalArgumentException("Amount must be positive");
-        }
-
-        User sender = userService.findByEmail(senderEmail);
-        User recipient = userService.findByEmailOrPhone(request.getRecipientIdentity())
-                .orElseThrow(() -> new EntityNotFoundException("Recipient not found"));
-
-        if (sender.getId().equals(recipient.getId())) {
-            throw new IllegalArgumentException("You cannot transfer to yourself.");
-        }
-
-        Envelope sourceEnvelope = envelopeRepository.findByIdAndBudget_UserEmail(request.getSourceEnvelopeId(), senderEmail)
-                .orElseThrow(() -> new EntityNotFoundException("Envelope not found"));
-
-        LocalDateTime now = LocalDateTime.now();
-        validateTransferRules(sourceEnvelope, sourceEnvelope.getBudget(), now);
-
-        if (sourceEnvelope.getMaturedAt() != null && sourceEnvelope.getMaturedAt().isAfter(now)) {
-            throw new IllegalStateException("This envelope is locked until " + sourceEnvelope.getMaturedAt().toLocalDate());
-        }
-
-        // =====================================================================
-        // 🛑 FIX START: SYNC MEMORY WITH DATABASE CALCULATION
-        // =====================================================================
-
-        // 1. Calculate the authoritative limit (This updates the DB behind the scenes)
-        BigDecimal authoritativeBalance = getRemainingLimit(request.getSourceEnvelopeId(), senderEmail);
-
-        // 2. CRITICAL: Update the local object to match the authoritative balance
-        // This ensures 'sourceEnvelope' knows the REAL balance before we do math.
-        sourceEnvelope.setRemainingAmount(authoritativeBalance);
-
-        // 3. Now perform the check using the SYNCED balance
-        if (amount.compareTo(sourceEnvelope.getRemainingAmount()) > 0) {
-            String cleanLimit = String.format("%,.2f", sourceEnvelope.getRemainingAmount());
-            throw new IllegalStateException("Transfer exceeds your spending limit. Available: ₦" + cleanLimit);
-        }
-
-        // Check 4: Actual Cash (Vault) - Safety Net
-        if (amount.compareTo(sourceEnvelope.getTotalRemainingAmount()) > 0) {
-            throw new IllegalStateException("Insufficient funds in vault.");
-        }
-
-        // 4. Subtract from the SYNCED balance (Pocket)
-        sourceEnvelope.setRemainingAmount(sourceEnvelope.getRemainingAmount().subtract(amount));
-
-        // 5. Subtract from the Vault
-        sourceEnvelope.setTotalRemainingAmount(sourceEnvelope.getTotalRemainingAmount().subtract(amount));
-
-        envelopeRepository.save(sourceEnvelope);
-
-        // =====================================================================
-        // 🛑 FIX END
-        // =====================================================================
-
-        // Names & Logs
-        String senderName = getSafeName(sender);
-        String recipientName = getSafeName(recipient);
-        walletService.fundWallet(recipient.getId(), amount, null, true);
-
-        String baseRef = UUID.randomUUID().toString();
-        String description = "Transfer to " + recipientName;
-        String type = (String) sourceEnvelope.getConditions().getOrDefault("type", "");
-        if ("emergency".equalsIgnoreCase(type) && request.getWithdrawalReason() != null) {
-            description = "EMERGENCY: " + request.getWithdrawalReason();
-        } else if (request.getNote() != null) {
-            description = request.getNote();
-        }
-
-        // Log Sender
-        TransactionLog senderLog = TransactionLog.builder()
-                .userId(sender.getId())
-                .budgetId(sourceEnvelope.getBudget().getId())
-                .sourceEnvelopeId(sourceEnvelope.getId())
-                .counterpartyUserId(recipient.getId())
-                .amount(amount.negate())
-                .fee(BigDecimal.ZERO)
-                .transactionType(TransactionType.ENVELOPE_TO_USER)
-                .status(TransactionStatus.COMPLETED)
-                .reference("P2P-DB-" + baseRef)
-                .description(description)
-                .createdAt(now)
-                .build();
-        transactionLogRepository.save(senderLog);
-
-        // Log Recipient
-        TransactionLog recipientLog = TransactionLog.builder()
-                .userId(recipient.getId())
-                .counterpartyUserId(sender.getId())
-                .amount(amount)
-                .fee(BigDecimal.ZERO)
-                .transactionType(TransactionType.USER_TO_ENVELOPE)
-                .status(TransactionStatus.COMPLETED)
-                .reference("P2P-CR-" + baseRef)
-                .description("Received from " + senderName)
-                .createdAt(now)
-                .build();
-        transactionLogRepository.save(recipientLog);
-
-        // Notifications
-        notificationService.sendNotification(sender.getId().toString(), "Sent ₦" + amount + " to " + recipientName, NotificationType.ENVELOPE_TRANSFER, sourceEnvelope.getBudget().getId(), sourceEnvelope.getId(), "VIEW_ENVELOPE", "/envelopes/" + sourceEnvelope.getId());
-        notificationService.sendNotification(recipient.getId().toString(), senderName + " sent you ₦" + amount, NotificationType.WALLET_DEPOSIT, null, null, "VIEW_WALLET", "/dashboard");
-
-        try { beneficiaryService.addBeneficiary(sender.getId(), recipient.getEmail(), recipientName); } catch (Exception e) {}
-    }
-
 //    @Transactional(rollbackFor = Exception.class)
 //    public void transferToMonieWiseUser(P2PTransferRequest request, String senderEmail) {
 //        BigDecimal amount = request.getAmount();
@@ -1296,6 +1422,22 @@ public class EnvelopeService {
 //
 //        if (sourceEnvelope.getMaturedAt() != null && sourceEnvelope.getMaturedAt().isAfter(now)) {
 //            throw new IllegalStateException("This envelope is locked until " + sourceEnvelope.getMaturedAt().toLocalDate());
+//        }
+//
+//
+//        // 1. Force the Limit Calculation (Updates DB)
+//        getRemainingLimit(request.getSourceEnvelopeId(), senderEmail);
+//
+//        // 👇👇👇 INSERT THESE LINES 👇👇👇
+//        // 2. REFRESH DATA: Get the fresh balance from DB
+//        sourceEnvelope = envelopeRepository.findById(sourceEnvelope.getId())
+//                .orElseThrow(() -> new EntityNotFoundException("Envelope not found during refresh"));
+//        // 👆👆👆 END INSERT 👆👆👆
+//
+//        // 3. Validation (Now uses FRESH data)
+//        if (amount.compareTo(sourceEnvelope.getRemainingAmount()) > 0) {
+//            String cleanLimit = String.format("%,.2f", sourceEnvelope.getRemainingAmount());
+//            throw new IllegalStateException("Transfer exceeds your spending limit. Available: ₦" + cleanLimit);
 //        }
 //
 //        // 🛑 FIX: SWAP THESE TWO LINES 👇
