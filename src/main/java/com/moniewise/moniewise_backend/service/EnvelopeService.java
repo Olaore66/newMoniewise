@@ -105,138 +105,19 @@ public class EnvelopeService {
     }
 
 
-    @Transactional
-    public void moveMoney(Long sourceId, Long targetId, Double amount, String email, String withdrawalReason) {
-        LocalDateTime now = fetchCurrentDateTimeFromDatabase();
-        if (amount <= 0) throw new IllegalArgumentException("Amount must be positive");
-
-        User user = userService.findByEmail(email);
-
-        // 1. Initial Load (Validation check only)
-        Envelope source = envelopeRepository.findByIdAndBudget_UserEmail(sourceId, email)
-                .orElseThrow(() -> new EntityNotFoundException("Source not found"));
-        Envelope target = envelopeRepository.findByIdAndBudget_UserEmail(targetId, email)
-                .orElseThrow(() -> new EntityNotFoundException("Target not found"));
-        Budget sourceBudget = source.getBudget();
-
-        if (!sourceBudget.getId().equals(target.getBudget().getId())) {
-            throw new IllegalArgumentException("Envelopes must belong to the same budget");
-        }
-        if (sourceBudget.getStatus() != BudgetStatus.ACTIVE) {
-            throw new IllegalArgumentException("Budget must be active");
-        }
-
-        // 2. Validate Time/Cycle Rules
-        validateTransferRules(source, sourceBudget, now);
-
-        // =====================================================================
-        // 🛑 STEP 1: FORCE LIMIT RECALCULATION
-        // =====================================================================
-        // This runs the daily/weekly logic. If the day just changed (00:00),
-        // this method detects it and resets the DB limit instantly.
-        getRemainingLimit(sourceId, email);
-
-        // =====================================================================
-        // 🛑 STEP 2: RE-FETCH FOR FRESH STATE
-        // =====================================================================
-        // We discard the old 'source' object and fetch the one 'getRemainingLimit' just updated.
-        source = envelopeRepository.findById(sourceId)
-                .orElseThrow(() -> new EntityNotFoundException("Source envelope not found during refresh"));
-
-        // =====================================================================
-        // 🛑 STEP 3: CHECK FUNDS (ON FRESH DATA)
-        // =====================================================================
-        BigDecimal transferAmount = BigDecimal.valueOf(amount);
-
-        // Check Pocket (Spendable Limit)
-        if (transferAmount.compareTo(source.getRemainingAmount()) > 0) {
-            throw new IllegalArgumentException("Insufficient spendable limit. Available: ₦" + source.getRemainingAmount());
-        }
-
-        // Check Vault (Real Money)
-        if (transferAmount.compareTo(source.getTotalRemainingAmount()) > 0) {
-            throw new IllegalArgumentException("Insufficient funds in vault.");
-        }
-
-        // =====================================================================
-        // 4. HANDLE SOURCE (SUBTRACT)
-        // =====================================================================
-        BigDecimal newSourceTotal = source.getTotalRemainingAmount().subtract(transferAmount);
-        BigDecimal newSourcePocket = source.getRemainingAmount().subtract(transferAmount);
-
-        source.setTotalRemainingAmount(newSourceTotal);
-        source.setRemainingAmount(newSourcePocket);
-
-        // Update Future Limits for Source (Since vault total changed)
-        recalculateTargetEnvelopeLimit(source, sourceBudget);
-
-        envelopeRepository.save(source);
-        envelopeRepository.flush();
-
-        // =====================================================================
-        // 5. HANDLE TARGET (ADD)
-        // =====================================================================
-        target.setTotalRemainingAmount(target.getTotalRemainingAmount().add(transferAmount));
-        target.setRemainingAmount(target.getRemainingAmount().add(transferAmount));
-
-        // Update Future Limits for Target (Since vault total changed)
-        recalculateTargetEnvelopeLimit(target, sourceBudget);
-
-        envelopeRepository.save(target);
-
-        // =====================================================================
-        // 6. LOGGING & NOTIFICATION
-        // =====================================================================
-        String description;
-        String type = (String) source.getConditions().getOrDefault("type", "");
-
-        if ("emergency".equalsIgnoreCase(type)) {
-            if (withdrawalReason == null || withdrawalReason.trim().isEmpty()) {
-                throw new IllegalArgumentException("Emergency withdrawals require a valid reason.");
-            } else {
-                description = String.format("EMERGENCY WITHDRAWAL: %s (To: %s)",
-                        withdrawalReason, target.getName());
-            }
-        } else {
-            description = String.format("From %s → %s • Moved ₦%.2f",
-                    source.getName(), target.getName(), transferAmount);
-        }
-
-        TransactionLog transactionLog = new TransactionLog(
-                user.getId(), sourceBudget.getId(), sourceId, targetId, transferAmount,
-                TransactionType.ENVELOPE_TO_ENVELOPE, description
-        );
-        transactionLog.setStatus(TransactionStatus.COMPLETED);
-        transactionLog.setReference("ENV-MOV-" + sourceId + "-" + System.currentTimeMillis());
-        transactionLog.setCreatedAt(now);
-        transactionLogRepository.save(transactionLog);
-
-        BigDecimal remainingLimit = newSourcePocket;
-        String period = source.getConditions().getOrDefault("type", "period").toString().equals("daily") ? "today" : "this period";
-
-        notificationService.sendNotification(
-                user.getId().toString(),
-                String.format("Moved ₦%.2f. %s Remaining: ₦%.2f.", transferAmount, period, remainingLimit),
-                NotificationType.ENVELOPE_TRANSFER,
-                sourceBudget.getId(), sourceId, "VIEW_ENVELOPE", "/envelopes/" + sourceId
-        );
-    }
-
 //    @Transactional
 //    public void moveMoney(Long sourceId, Long targetId, Double amount, String email, String withdrawalReason) {
 //        LocalDateTime now = fetchCurrentDateTimeFromDatabase();
 //        if (amount <= 0) throw new IllegalArgumentException("Amount must be positive");
 //
 //        User user = userService.findByEmail(email);
+//
+//        // 1. Initial Load (Validation check only)
 //        Envelope source = envelopeRepository.findByIdAndBudget_UserEmail(sourceId, email)
 //                .orElseThrow(() -> new EntityNotFoundException("Source not found"));
 //        Envelope target = envelopeRepository.findByIdAndBudget_UserEmail(targetId, email)
 //                .orElseThrow(() -> new EntityNotFoundException("Target not found"));
 //        Budget sourceBudget = source.getBudget();
-//
-//        // 1. VALIDATE BUDGET STATUS
-//        // Add this near the top of your method (after fetching the envelope)
-//
 //
 //        if (!sourceBudget.getId().equals(target.getBudget().getId())) {
 //            throw new IllegalArgumentException("Envelopes must belong to the same budget");
@@ -245,17 +126,40 @@ public class EnvelopeService {
 //            throw new IllegalArgumentException("Budget must be active");
 //        }
 //
-//        // 2. 🛑 RESTORED: VALIDATE TIME/CYCLE RULES (Dynamic/Weekly checks)
+//        // 2. Validate Time/Cycle Rules
 //        validateTransferRules(source, sourceBudget, now);
 //
-//        // 3. CHECK FUNDS
+//        // =====================================================================
+//        // 🛑 STEP 1: FORCE LIMIT RECALCULATION
+//        // =====================================================================
+//        // This runs the daily/weekly logic. If the day just changed (00:00),
+//        // this method detects it and resets the DB limit instantly.
+//        getRemainingLimit(sourceId, email);
+//
+//        // =====================================================================
+//        // 🛑 STEP 2: RE-FETCH FOR FRESH STATE
+//        // =====================================================================
+//        // We discard the old 'source' object and fetch the one 'getRemainingLimit' just updated.
+//        source = envelopeRepository.findById(sourceId)
+//                .orElseThrow(() -> new EntityNotFoundException("Source envelope not found during refresh"));
+//
+//        // =====================================================================
+//        // 🛑 STEP 3: CHECK FUNDS (ON FRESH DATA)
+//        // =====================================================================
 //        BigDecimal transferAmount = BigDecimal.valueOf(amount);
+//
+//        // Check Pocket (Spendable Limit)
 //        if (transferAmount.compareTo(source.getRemainingAmount()) > 0) {
 //            throw new IllegalArgumentException("Insufficient spendable limit. Available: ₦" + source.getRemainingAmount());
 //        }
 //
+//        // Check Vault (Real Money)
+//        if (transferAmount.compareTo(source.getTotalRemainingAmount()) > 0) {
+//            throw new IllegalArgumentException("Insufficient funds in vault.");
+//        }
+//
 //        // =====================================================================
-//        // 4. HANDLE SOURCE
+//        // 4. HANDLE SOURCE (SUBTRACT)
 //        // =====================================================================
 //        BigDecimal newSourceTotal = source.getTotalRemainingAmount().subtract(transferAmount);
 //        BigDecimal newSourcePocket = source.getRemainingAmount().subtract(transferAmount);
@@ -263,50 +167,41 @@ public class EnvelopeService {
 //        source.setTotalRemainingAmount(newSourceTotal);
 //        source.setRemainingAmount(newSourcePocket);
 //
-//        // Force DB Update
+//        // Update Future Limits for Source (Since vault total changed)
+//        recalculateTargetEnvelopeLimit(source, sourceBudget);
+//
 //        envelopeRepository.save(source);
 //        envelopeRepository.flush();
 //
 //        // =====================================================================
-//        // 5. HANDLE TARGET
+//        // 5. HANDLE TARGET (ADD)
 //        // =====================================================================
 //        target.setTotalRemainingAmount(target.getTotalRemainingAmount().add(transferAmount));
-//
-//        // Lump Sum Addition (Predictable)
 //        target.setRemainingAmount(target.getRemainingAmount().add(transferAmount));
 //
-//        // Update Future Math
+//        // Update Future Limits for Target (Since vault total changed)
 //        recalculateTargetEnvelopeLimit(target, sourceBudget);
 //
 //        envelopeRepository.save(target);
-//        envelopeRepository.saveAll(List.of(source, target));
 //
 //        // =====================================================================
 //        // 6. LOGGING & NOTIFICATION
 //        // =====================================================================
-//
-//        // 👇 INSERT THIS BLOCK 👇
 //        String description;
 //        String type = (String) source.getConditions().getOrDefault("type", "");
 //
 //        if ("emergency".equalsIgnoreCase(type)) {
-//            // Emergency Description
 //            if (withdrawalReason == null || withdrawalReason.trim().isEmpty()) {
 //                throw new IllegalArgumentException("Emergency withdrawals require a valid reason.");
-//            }else {
+//            } else {
 //                description = String.format("EMERGENCY WITHDRAWAL: %s (To: %s)",
-//                        withdrawalReason != null ? withdrawalReason : "Unspecified",
-//                        target.getName());
+//                        withdrawalReason, target.getName());
 //            }
-//
 //        } else {
-//            // Standard Description
 //            description = String.format("From %s → %s • Moved ₦%.2f",
 //                    source.getName(), target.getName(), transferAmount);
 //        }
-//        // 👆 END INSERT
 //
-//        // Log Transaction
 //        TransactionLog transactionLog = new TransactionLog(
 //                user.getId(), sourceBudget.getId(), sourceId, targetId, transferAmount,
 //                TransactionType.ENVELOPE_TO_ENVELOPE, description
@@ -316,9 +211,7 @@ public class EnvelopeService {
 //        transactionLog.setCreatedAt(now);
 //        transactionLogRepository.save(transactionLog);
 //
-//        // 🛑 FIX: Don't call getRemainingLimit(). Use the value we just calculated!
 //        BigDecimal remainingLimit = newSourcePocket;
-//
 //        String period = source.getConditions().getOrDefault("type", "period").toString().equals("daily") ? "today" : "this period";
 //
 //        notificationService.sendNotification(
@@ -328,6 +221,113 @@ public class EnvelopeService {
 //                sourceBudget.getId(), sourceId, "VIEW_ENVELOPE", "/envelopes/" + sourceId
 //        );
 //    }
+
+    @Transactional
+    public void moveMoney(Long sourceId, Long targetId, Double amount, String email, String withdrawalReason) {
+        LocalDateTime now = fetchCurrentDateTimeFromDatabase();
+        if (amount <= 0) throw new IllegalArgumentException("Amount must be positive");
+
+        User user = userService.findByEmail(email);
+        Envelope source = envelopeRepository.findByIdAndBudget_UserEmail(sourceId, email)
+                .orElseThrow(() -> new EntityNotFoundException("Source not found"));
+        Envelope target = envelopeRepository.findByIdAndBudget_UserEmail(targetId, email)
+                .orElseThrow(() -> new EntityNotFoundException("Target not found"));
+        Budget sourceBudget = source.getBudget();
+
+        // 1. VALIDATE BUDGET STATUS
+        // Add this near the top of your method (after fetching the envelope)
+
+
+        if (!sourceBudget.getId().equals(target.getBudget().getId())) {
+            throw new IllegalArgumentException("Envelopes must belong to the same budget");
+        }
+        if (sourceBudget.getStatus() != BudgetStatus.ACTIVE) {
+            throw new IllegalArgumentException("Budget must be active");
+        }
+
+        // 2. 🛑 RESTORED: VALIDATE TIME/CYCLE RULES (Dynamic/Weekly checks)
+        validateTransferRules(source, sourceBudget, now);
+
+        // 3. CHECK FUNDS
+        BigDecimal transferAmount = BigDecimal.valueOf(amount);
+        if (transferAmount.compareTo(source.getRemainingAmount()) > 0) {
+            throw new IllegalArgumentException("Insufficient spendable limit. Available: ₦" + source.getRemainingAmount());
+        }
+
+        // =====================================================================
+        // 4. HANDLE SOURCE
+        // =====================================================================
+        BigDecimal newSourceTotal = source.getTotalRemainingAmount().subtract(transferAmount);
+        BigDecimal newSourcePocket = source.getRemainingAmount().subtract(transferAmount);
+
+        source.setTotalRemainingAmount(newSourceTotal);
+        source.setRemainingAmount(newSourcePocket);
+
+        // Force DB Update
+        envelopeRepository.save(source);
+        envelopeRepository.flush();
+
+        // =====================================================================
+        // 5. HANDLE TARGET
+        // =====================================================================
+        target.setTotalRemainingAmount(target.getTotalRemainingAmount().add(transferAmount));
+
+        // Lump Sum Addition (Predictable)
+        target.setRemainingAmount(target.getRemainingAmount().add(transferAmount));
+
+        // Update Future Math
+        recalculateTargetEnvelopeLimit(target, sourceBudget);
+
+        envelopeRepository.save(target);
+        envelopeRepository.saveAll(List.of(source, target));
+
+        // =====================================================================
+        // 6. LOGGING & NOTIFICATION
+        // =====================================================================
+
+        // 👇 INSERT THIS BLOCK 👇
+        String description;
+        String type = (String) source.getConditions().getOrDefault("type", "");
+
+        if ("emergency".equalsIgnoreCase(type)) {
+            // Emergency Description
+            if (withdrawalReason == null || withdrawalReason.trim().isEmpty()) {
+                throw new IllegalArgumentException("Emergency withdrawals require a valid reason.");
+            }else {
+                description = String.format("EMERGENCY WITHDRAWAL: %s (To: %s)",
+                        withdrawalReason != null ? withdrawalReason : "Unspecified",
+                        target.getName());
+            }
+
+        } else {
+            // Standard Description
+            description = String.format("From %s → %s • Moved ₦%.2f",
+                    source.getName(), target.getName(), transferAmount);
+        }
+        // 👆 END INSERT
+
+        // Log Transaction
+        TransactionLog transactionLog = new TransactionLog(
+                user.getId(), sourceBudget.getId(), sourceId, targetId, transferAmount,
+                TransactionType.ENVELOPE_TO_ENVELOPE, description
+        );
+        transactionLog.setStatus(TransactionStatus.COMPLETED);
+        transactionLog.setReference("ENV-MOV-" + sourceId + "-" + System.currentTimeMillis());
+        transactionLog.setCreatedAt(now);
+        transactionLogRepository.save(transactionLog);
+
+        // 🛑 FIX: Don't call getRemainingLimit(). Use the value we just calculated!
+        BigDecimal remainingLimit = newSourcePocket;
+
+        String period = source.getConditions().getOrDefault("type", "period").toString().equals("daily") ? "today" : "this period";
+
+        notificationService.sendNotification(
+                user.getId().toString(),
+                String.format("Moved ₦%.2f. %s Remaining: ₦%.2f.", transferAmount, period, remainingLimit),
+                NotificationType.ENVELOPE_TRANSFER,
+                sourceBudget.getId(), sourceId, "VIEW_ENVELOPE", "/envelopes/" + sourceId
+        );
+    }
 
     // 👇 ADD THIS NEW HELPER METHOD TO RESTORE YOUR CHECKS
     // Inside EnvelopeService.java
