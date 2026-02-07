@@ -1550,7 +1550,7 @@ public class EnvelopeService {
         source.setTotalRemainingAmount(newSourceTotal);
         source.setRemainingAmount(newSourcePocket);
 
-        recalculateTargetEnvelopeLimit(source, sourceBudget);
+//        recalculateTargetEnvelopeLimit(source, sourceBudget);
         envelopeRepository.save(source);
         envelopeRepository.flush();
 
@@ -1647,7 +1647,7 @@ public class EnvelopeService {
         sourceEnvelope.setTotalRemainingAmount(sourceEnvelope.getTotalRemainingAmount().subtract(amount));
         sourceEnvelope.setRemainingAmount(sourceEnvelope.getRemainingAmount().subtract(amount));
 
-        recalculateTargetEnvelopeLimit(sourceEnvelope, sourceEnvelope.getBudget());
+//        recalculateTargetEnvelopeLimit(sourceEnvelope, sourceEnvelope.getBudget());
         envelopeRepository.save(sourceEnvelope);
 
         // Credit & Logs
