@@ -9,7 +9,10 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 @Entity
-@Table(name = "transaction_logs")
+// 👇 ADD THIS INDEX. It organizes logs by Envelope + Date for instant lookups.
+@Table(name = "transaction_logs", indexes = {
+        @Index(name = "idx_envelope_date", columnList = "source_envelope_id, created_at")
+})
 public class TransactionLog {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)

@@ -1,9 +1,9 @@
 package com.moniewise.moniewise_backend.controller;
+
 import com.moniewise.moniewise_backend.dto.request.EnvelopeRequest;
 import com.moniewise.moniewise_backend.dto.request.ExternalTransferRequest;
 import com.moniewise.moniewise_backend.dto.request.P2PTransferRequest;
 import com.moniewise.moniewise_backend.dto.response.EnvelopeResponse;
-
 import com.moniewise.moniewise_backend.repository.BudgetRepository;
 import com.moniewise.moniewise_backend.service.EnvelopeService;
 import org.slf4j.Logger;
@@ -13,12 +13,9 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
-import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.web.bind.annotation.*;
 
-
-import javax.validation.Valid;
-import java.util.*;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/envelopes")
@@ -125,6 +122,11 @@ public class EnvelopeController {
             Authentication authentication
     ) {
         String email = authentication.getName();
+
+        // 🛑 FORCE RECALCULATION ON VIEW 🛑
+        // This ensures the user sees the "Vault Cap" corrected balance immediately.
+        envelopeService.getRemainingLimit(envelopeId, email);
+
         EnvelopeResponse response = envelopeService.getEnvelopeById(envelopeId, email);
         return ResponseEntity.ok(response);
     }

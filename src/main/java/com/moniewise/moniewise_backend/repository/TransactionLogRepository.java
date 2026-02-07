@@ -9,6 +9,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Set;
@@ -64,4 +65,15 @@ public interface TransactionLogRepository extends JpaRepository<TransactionLog, 
     );
 
     boolean existsByReference(String transactionReference);
+
+    // 👇 ADD THIS NUCLEAR METHOD 👇
+    @Query("SELECT COALESCE(SUM(t.amount), 0) FROM TransactionLog t " +
+            "WHERE t.sourceEnvelopeId = :envelopeId " +
+            "AND t.createdAt >= :startDate " +
+            "AND t.transactionType IN (:types)")
+    BigDecimal calculateTotalSpent(
+            @Param("envelopeId") Long envelopeId,
+            @Param("startDate") LocalDateTime startDate,
+            @Param("types") List<TransactionType> types
+    );
 }

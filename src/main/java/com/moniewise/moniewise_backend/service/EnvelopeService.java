@@ -1602,13 +1602,14 @@ public class EnvelopeService {
     // =========================================================================
     @Transactional(rollbackFor = Exception.class)
     public void transferToMonieWiseUser(P2PTransferRequest request, String senderEmail) {
-        BigDecimal amount = request.getAmount();
 
+        BigDecimal amount = request.getAmount();
         if (amount.compareTo(BigDecimal.ZERO) <= 0) {
             throw new IllegalArgumentException("Amount must be positive");
         }
 
         User sender = userService.findByEmail(senderEmail);
+
         User recipient = userService.findByEmailOrPhone(request.getRecipientIdentity())
                 .orElseThrow(() -> new EntityNotFoundException("Recipient not found"));
 
@@ -1708,22 +1709,20 @@ public class EnvelopeService {
 
         Map<String, Object> conditions = envelope.getConditions();
 
-        if (conditions == null || !conditions.containsKey("type") || !conditions.containsKey("limit")) {
-            throw new IllegalArgumentException("Envelope conditions must include 'type' and 'limit'");
+        // 1. Handling Emergency Envelopes (No Limit)
+        String type = conditions.getOrDefault("type", "standard").toString();
+        if ("emergency".equalsIgnoreCase(type)) {
+            return envelope.getRemainingAmount();
         }
 
-        String type = conditions.get("type").toString();
-        Object limitObj = conditions.get("limit");
-
-        BigDecimal limit;
-        if (limitObj instanceof Number) {
-            limit = new BigDecimal(limitObj.toString());
-        } else {
-            limit = BigDecimal.ZERO;
+        if (!conditions.containsKey("limit")) {
+            throw new IllegalArgumentException("Limit missing");
         }
+
+        BigDecimal limit = new BigDecimal(conditions.get("limit").toString());
         LocalDateTime periodStart;
-        LocalDateTime periodEnd;
 
+        // 2. Determine the Time Window
         boolean createdToday = envelope.getCreatedAt().toLocalDate().isEqual(now.toLocalDate());
 
         switch (type) {
@@ -1740,13 +1739,10 @@ public class EnvelopeService {
                     }
                 }
                 periodStart = now.toLocalDate().atStartOfDay();
-                periodEnd = periodStart.plusDays(1);
                 break;
 
             case "weekly":
-                LocalDate weekStart = now.toLocalDate().minusDays(now.toLocalDate().getDayOfWeek().getValue() - 1);
-                periodStart = weekStart.atStartOfDay();
-                periodEnd = periodStart.plusDays(7);
+                periodStart = now.toLocalDate().minusDays(now.getDayOfWeek().getValue() - 1).atStartOfDay();
                 break;
             case "dynamic":
                 @SuppressWarnings("unchecked")
@@ -1773,30 +1769,46 @@ public class EnvelopeService {
                     return BigDecimal.ZERO;
                 }
 
-                periodStart = now.toLocalDate().atTime(targetTime);
-                periodEnd = now.toLocalDate().atTime(23, 59, 59);
+//                String timeStr = (String) conditions.getOrDefault("disbursementTime", "08:00");
+                periodStart = now.toLocalDate().atTime(LocalTime.parse(timeStr));
                 break;
             case "safe_lock":
             case "strict_lock":
             case "emergency":
                 periodStart = now.minusYears(1);
-                periodEnd = now.plusYears(1);
+//                periodEnd = now.plusYears(1);
                 return envelope.getRemainingAmount();
             default:
                 throw new IllegalArgumentException("Unsupported envelope type: " + type);
         }
 
-        BigDecimal spentAmount = transactionLogRepository.findBySourceEnvelopeIdAndTimeRange(envelopeId, periodStart, periodEnd)
-                .stream().filter(t -> {
-                    String typeTxn = t.getTransactionType().toString().toUpperCase();
-                    return List.of(
-                            "ENVELOPE_TO_ENVELOPE",
-                            "ENVELOPE_TO_EXTERNAL",
-                            "ENVELOPE_TO_USER"
-                    ).contains(typeTxn);
-                })
-                .map(TransactionLog::getAmount)
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        // 3. 🛑 THE FIX: DEFINE WHAT COUNTS AS SPENDING 🛑
+        // We strictly define: "Money leaving the envelope".
+        // We do NOT include refunds or deposits here.
+        List<TransactionType> spendingTypes = List.of(
+                TransactionType.ENVELOPE_TO_ENVELOPE, // Moving money out
+                TransactionType.ENVELOPE_TO_EXTERNAL, // Sending to Bank
+                TransactionType.ENVELOPE_TO_USER      // P2P Transfer
+        );
+
+//        BigDecimal spentAmount = transactionLogRepository.findBySourceEnvelopeIdAndTimeRange(envelopeId, periodStart, periodEnd)
+//                .stream().filter(t -> {
+//                    String typeTxn = t.getTransactionType().toString().toUpperCase();
+//                    return List.of(
+//                            "ENVELOPE_TO_ENVELOPE",
+//                            "ENVELOPE_TO_EXTERNAL",
+//                            "ENVELOPE_TO_USER"
+//                    ).contains(typeTxn);
+//                })
+//                .map(TransactionLog::getAmount)
+//                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        // 4. 🚀 EXECUTE NUCLEAR QUERY
+        // This asks the DB: "Exactly how much left this envelope since [periodStart]?"
+        BigDecimal spentAmount = transactionLogRepository.calculateTotalSpent(
+                envelopeId,
+                periodStart,
+                spendingTypes
+        );
 
         BigDecimal remainingLimit = limit.subtract(spentAmount);
 

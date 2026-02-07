@@ -1,6 +1,5 @@
 package com.moniewise.moniewise_backend.repository;
 
-import com.moniewise.moniewise_backend.entity.Budget;
 import com.moniewise.moniewise_backend.entity.Envelope;
 import com.moniewise.moniewise_backend.enums.BudgetStatus;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -20,9 +19,6 @@ public interface EnvelopeRepository extends JpaRepository<Envelope, Long> {
     Optional<Envelope> findById(Long id);
 
     Optional<Envelope> findByIdAndBudget_UserEmail(Long id, String email);
-
-    @Query("SELECT e FROM Envelope e")
-    Stream<Envelope> findAllByStream();
 
     @Query("SELECT e FROM Envelope e WHERE e.nextDisbursementAt <= :now AND e.hasMatured = false")
     List<Envelope> findByNextDisbursementAtBeforeAndHasMaturedFalse(@Param("now") LocalDateTime now);
