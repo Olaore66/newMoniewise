@@ -442,6 +442,12 @@ public class BudgetLifeCycleManager {
             return;
         }
 
+        // 🛑 GUARD CLAUSE: Has this already run today/this week?
+        if (isSamePeriod(envelope.getConditions(), fetchCurrentDateTimeFromDatabase(), envelope.getLastDisbursedAt())) {
+            logger.info("Skipping disbursement for envelope {} - already processed for this period.", envelope.getId());
+            return;
+        }
+
         String type = (String) conditions.get("type");
         // FIX: Skip dynamic envelopes to prevent duplicate disbursements
         if ("dynamic".equals(type)) {
@@ -715,34 +721,60 @@ public class BudgetLifeCycleManager {
         return periodStart;
     }
 
+//    private boolean isSamePeriod(Map<String, Object> conditions, LocalDateTime now, LocalDateTime lastDisbursedAt) {
+//        if (lastDisbursedAt == null) return false;
+//        String type = (String) conditions.get("type");
+//        switch (type) {
+//            case "daily":
+//                return now.toLocalDate().equals(lastDisbursedAt.toLocalDate());
+//            case "weekly":
+//                LocalDate weekStartNow = now.toLocalDate().minusDays(now.getDayOfWeek().getValue() - 1);
+//                LocalDate weekStartLast = lastDisbursedAt.toLocalDate().minusDays(lastDisbursedAt.getDayOfWeek().getValue() - 1);
+//                return weekStartNow.equals(weekStartLast);
+//            case "dynamic":
+//                String disbursementTimeStr = (String) conditions.getOrDefault("disbursementTime", "08:00");
+//                LocalTime disbursementTime;
+//                try {
+//                    disbursementTime = LocalTime.parse(disbursementTimeStr);
+//                } catch (DateTimeParseException e) {
+//                    logger.error("Invalid disbursementTime for envelope: {}, defaulting to 08:00", conditions, e);
+//                    disbursementTime = LocalTime.of(8, 0);
+//                }
+//                LocalDateTime periodStartNow = now.toLocalDate().atTime(disbursementTime);
+//                LocalDateTime periodStartLast = lastDisbursedAt.toLocalDate().atTime(disbursementTime);
+//                return now.isAfter(periodStartNow) && now.isBefore(periodStartNow.plusHours(1)) &&
+//                        lastDisbursedAt.isAfter(periodStartLast) && lastDisbursedAt.isBefore(periodStartLast.plusHours(1));
+//            default:
+//                return true;
+//        }
+//    }
+
     private boolean isSamePeriod(Map<String, Object> conditions, LocalDateTime now, LocalDateTime lastDisbursedAt) {
+        // 1. Safety Check: If never disbursed, obviously not same period.
         if (lastDisbursedAt == null) return false;
-        String type = (String) conditions.get("type");
+
+        String type = (String) conditions.getOrDefault("type", "daily");
+        LocalDate today = now.toLocalDate();
+        LocalDate lastRunDate = lastDisbursedAt.toLocalDate();
+
         switch (type) {
+            // 2. DAILY & DYNAMIC: Both just need to ensure they haven't run TODAY.
             case "daily":
-                return now.toLocalDate().equals(lastDisbursedAt.toLocalDate());
-            case "weekly":
-                LocalDate weekStartNow = now.toLocalDate().minusDays(now.getDayOfWeek().getValue() - 1);
-                LocalDate weekStartLast = lastDisbursedAt.toLocalDate().minusDays(lastDisbursedAt.getDayOfWeek().getValue() - 1);
-                return weekStartNow.equals(weekStartLast);
             case "dynamic":
-                String disbursementTimeStr = (String) conditions.getOrDefault("disbursementTime", "08:00");
-                LocalTime disbursementTime;
-                try {
-                    disbursementTime = LocalTime.parse(disbursementTimeStr);
-                } catch (DateTimeParseException e) {
-                    logger.error("Invalid disbursementTime for envelope: {}, defaulting to 08:00", conditions, e);
-                    disbursementTime = LocalTime.of(8, 0);
-                }
-                LocalDateTime periodStartNow = now.toLocalDate().atTime(disbursementTime);
-                LocalDateTime periodStartLast = lastDisbursedAt.toLocalDate().atTime(disbursementTime);
-                return now.isAfter(periodStartNow) && now.isBefore(periodStartNow.plusHours(1)) &&
-                        lastDisbursedAt.isAfter(periodStartLast) && lastDisbursedAt.isBefore(periodStartLast.plusHours(1));
+                return today.isEqual(lastRunDate);
+
+            // 3. WEEKLY: Check if we are in the same ISO Week (Monday start)
+            case "weekly":
+                // Calculate the "Monday" of the current week and the last run week
+                LocalDate thisWeekStart = today.minusDays(today.getDayOfWeek().getValue() - 1);
+                LocalDate lastWeekStart = lastRunDate.minusDays(lastRunDate.getDayOfWeek().getValue() - 1);
+
+                return thisWeekStart.isEqual(lastWeekStart);
+
             default:
-                return true;
+                return false; // Default to "Run It" if type is unknown
         }
     }
-
     @Scheduled(cron = "0 0 2 * * ?", zone = "Africa/Lagos") // FIX: Added zone for consistency
     public void cleanOldTasks() {
         LocalDateTime threshold = fetchCurrentDateTimeFromDatabase().minusDays(30);
