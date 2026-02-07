@@ -2048,8 +2048,13 @@ public class EnvelopeService {
             envelope.setRemainingAmount(startingPocket);
         }
 
+        // 5. Calculate Schedule
         envelope.setNextDisbursementAt(budgetLifeCycleManager.calculateNextDisbursementTime(envelope));
         envelope.setHasMatured(false);
+
+        // 🛑 FIX: Initialize this so the Scheduler knows it started TODAY
+        envelope.setLastDisbursedAt(fetchCurrentDateTimeFromDatabase());
+
         envelopeRepository.save(envelope);
 
         budgetLifeCycleManager.scheduleDynamicTasks(envelope);

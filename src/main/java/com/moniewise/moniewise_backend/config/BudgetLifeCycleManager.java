@@ -442,7 +442,8 @@ public class BudgetLifeCycleManager {
             return;
         }
 
-        // 🛑 GUARD CLAUSE: Has this already run today/this week?
+        // 🛑 1. GUARD CLAUSE: Has this already run?
+        // This stops the infinite loop for daily/weekly envelopes
         if (isSamePeriod(envelope.getConditions(), fetchCurrentDateTimeFromDatabase(), envelope.getLastDisbursedAt())) {
             logger.info("Skipping disbursement for envelope {} - already processed for this period.", envelope.getId());
             return;
@@ -467,6 +468,16 @@ public class BudgetLifeCycleManager {
             case "daily":
             case "weekly":
             case "dynamic":
+                // 🛑 2. SAFETY CHECK FOR NEW ENVELOPES
+                // If lastDisbursedAt is NULL (The Bug), assume it was created "Just Now" and fix the date
+                // WITHOUT refunding/resetting the money.
+                if (envelope.getLastDisbursedAt() == null) {
+                    logger.info("Fixing NULL lastDisbursedAt for envelope {}", envelope.getId());
+                    envelope.setLastDisbursedAt(now);
+                    envelopesToUpdate.add(envelope);
+                    return; // EXIT. Do not refill.
+                }
+
                 // 1. CHECK FOR UNSPENT MONEY (The "Saver's Reward")
                 BigDecimal unspent = envelope.getRemainingAmount();
 
