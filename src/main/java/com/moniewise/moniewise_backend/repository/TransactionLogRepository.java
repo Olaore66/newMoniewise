@@ -67,7 +67,8 @@ public interface TransactionLogRepository extends JpaRepository<TransactionLog, 
     boolean existsByReference(String transactionReference);
 
     // 👇 ADD THIS NUCLEAR METHOD 👇
-    @Query("SELECT COALESCE(SUM(t.amount), 0) FROM TransactionLog t " +
+    // 👇 FIX: Use ABS() to handle both negative and positive log entries correctly
+    @Query("SELECT COALESCE(SUM(ABS(t.amount)), 0) FROM TransactionLog t " +
             "WHERE t.sourceEnvelopeId = :envelopeId " +
             "AND t.createdAt >= :startDate " +
             "AND t.transactionType IN (:types)")

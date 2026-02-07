@@ -1802,8 +1802,7 @@ public class EnvelopeService {
 //                })
 //                .map(TransactionLog::getAmount)
 //                .reduce(BigDecimal.ZERO, BigDecimal::add);
-        // 4. 🚀 EXECUTE NUCLEAR QUERY
-        // This asks the DB: "Exactly how much left this envelope since [periodStart]?"
+        // 4. 🚀 EXECUTE NUCLEAR QUERY (Now returns a POSITIVE total of spending)
         BigDecimal spentAmount = transactionLogRepository.calculateTotalSpent(
                 envelopeId,
                 periodStart,
