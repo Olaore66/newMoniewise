@@ -224,51 +224,65 @@ public class NotificationService {
     }
 
     // =========================================================================
-    // UPDATED FCM LOGIC (Fixed for Java SDK)
+    // UPDATED FCM LOGIC (Golden Payload Implementation)
     // =========================================================================
     private void sendFCMMessage(User user, String title, String body, String actionType, String redirectUrl, NotificationType type) {
         try {
-            // 1. Determine the Shared Key
+            // 1. Determine the Shared Key (For grouping/replacing old alerts)
             String collapseKey = getGroupKey(type);
 
-            // 2. Android Config (Replaces old alerts on Android)
+            // 2. Android Config (The Fix for Pop-ups & Channel Lock)
             AndroidConfig androidConfig = AndroidConfig.builder()
-                    .setTtl(86400 * 1000)
-                    .setPriority(AndroidConfig.Priority.HIGH)
+                    .setTtl(86400 * 1000) // 24 hours
+                    .setPriority(AndroidConfig.Priority.HIGH) // Critical for background delivery
                     .setNotification(AndroidNotification.builder()
+                            .setChannelId("moniewise_alerts_v5") // 👈 CRITICAL: Must match Flutter
+                            .setSound("wisemonie")               // 👈 Android Sound (no extension)
+                            .setDefaultSound(false)              // Force custom sound
+                            .setPriority(AndroidNotification.Priority.MAX) // Heads-up notification
+                            .setVisibility(AndroidNotification.Visibility.PUBLIC)
                             .setClickAction("FLUTTER_NOTIFICATION_CLICK")
-                            .setTag(collapseKey) // Android "Replace" Logic
+                            .setTag(collapseKey)                 // Grouping key
                             .build())
                     .build();
 
-            // 3. iOS Config (The New Part 🍎)
+            // 3. iOS Config (The Fix for Sound)
             ApnsConfig apnsConfig = ApnsConfig.builder()
-                    .putHeader("apns-collapse-id", collapseKey) // <--- iOS "Replace" Logic
+                    .putHeader("apns-collapse-id", collapseKey)
                     .setAps(Aps.builder()
-                            .setSound("default")
-                            .setThreadId(collapseKey) // <--- Also groups them nicely in the UI
+                            .setSound("wisemonie.wav")           // 👈 iOS Sound (needs extension)
+                            .setContentAvailable(true)           // Wakes app for background processing
+                            .setThreadId(collapseKey)
                             .build())
                     .build();
 
-            // 4. Build Notification Payload
+            // 4. Shared Notification Payload (Title/Body)
+            // This ensures the system tray shows the text immediately
             com.google.firebase.messaging.Notification fcmNotification =
                     com.google.firebase.messaging.Notification.builder()
                             .setTitle(title)
                             .setBody(body)
                             .build();
 
-            // 5. Build Final Message
+            // 5. Build Data Map (Navigation Logic)
             Message.Builder messageBuilder = Message.builder()
                     .setToken(user.getFcmToken())
-                    .setNotification(fcmNotification)
-                    .setAndroidConfig(androidConfig)
-                    .setApnsConfig(apnsConfig) // <--- Attach iOS Config
-                    .putData("click_action", "FLUTTER_NOTIFICATION_CLICK");
+                    .setNotification(fcmNotification) // 👈 Includes "notification" block
+                    .setAndroidConfig(androidConfig)  // 👈 Includes Channel ID
+                    .setApnsConfig(apnsConfig);       // 👈 Includes iOS Sound
 
+            // Add Data Fields for Flutter
+            messageBuilder.putData("click_action", "FLUTTER_NOTIFICATION_CLICK");
             if (actionType != null) messageBuilder.putData("actionType", actionType);
             if (redirectUrl != null) messageBuilder.putData("redirectUrl", redirectUrl);
 
+            // Add Title/Body to Data as well (Backup for foreground handling)
+            messageBuilder.putData("title", title);
+            messageBuilder.putData("body", body);
+
+            // 6. Send
             firebaseMessaging.send(messageBuilder.build());
+            logger.info("Sent FCM to user {}: {}", user.getId(), title);
 
         } catch (FirebaseMessagingException e) {
             String errorCode = e.getMessagingErrorCode().toString();
@@ -281,6 +295,61 @@ public class NotificationService {
             }
         }
     }
+//    private void sendFCMMessage(User user, String title, String body, String actionType, String redirectUrl, NotificationType type) {
+//        try {
+//            // 1. Determine the Shared Key
+//            String collapseKey = getGroupKey(type);
+//
+//            // 2. Android Config (Replaces old alerts on Android)
+//            AndroidConfig androidConfig = AndroidConfig.builder()
+//                    .setTtl(86400 * 1000)
+//                    .setPriority(AndroidConfig.Priority.HIGH)
+//                    .setNotification(AndroidNotification.builder()
+//                            .setClickAction("FLUTTER_NOTIFICATION_CLICK")
+//                            .setTag(collapseKey) // Android "Replace" Logic
+//                            .build())
+//                    .build();
+//
+//            // 3. iOS Config (The New Part 🍎)
+//            ApnsConfig apnsConfig = ApnsConfig.builder()
+//                    .putHeader("apns-collapse-id", collapseKey) // <--- iOS "Replace" Logic
+//                    .setAps(Aps.builder()
+//                            .setSound("default")
+//                            .setThreadId(collapseKey) // <--- Also groups them nicely in the UI
+//                            .build())
+//                    .build();
+//
+//            // 4. Build Notification Payload
+//            com.google.firebase.messaging.Notification fcmNotification =
+//                    com.google.firebase.messaging.Notification.builder()
+//                            .setTitle(title)
+//                            .setBody(body)
+//                            .build();
+//
+//            // 5. Build Final Message
+//            Message.Builder messageBuilder = Message.builder()
+//                    .setToken(user.getFcmToken())
+//                    .setNotification(fcmNotification)
+//                    .setAndroidConfig(androidConfig)
+//                    .setApnsConfig(apnsConfig) // <--- Attach iOS Config
+//                    .putData("click_action", "FLUTTER_NOTIFICATION_CLICK");
+//
+//            if (actionType != null) messageBuilder.putData("actionType", actionType);
+//            if (redirectUrl != null) messageBuilder.putData("redirectUrl", redirectUrl);
+//
+//            firebaseMessaging.send(messageBuilder.build());
+//
+//        } catch (FirebaseMessagingException e) {
+//            String errorCode = e.getMessagingErrorCode().toString();
+//            if (errorCode.equals("UNREGISTERED") || errorCode.equals("NOT_FOUND") || errorCode.equals("INVALID_ARGUMENT")) {
+//                logger.warn("🚨 Token for user {} is dead. Removing it.", user.getId());
+//                user.setFcmToken(null);
+//                userRepository.save(user);
+//            } else {
+//                logger.error("Failed to send FCM message: {}", e.getMessage());
+//            }
+//        }
+//    }
     // =========================================================================
 // NEW HELPER: Define Groups
 // =========================================================================
