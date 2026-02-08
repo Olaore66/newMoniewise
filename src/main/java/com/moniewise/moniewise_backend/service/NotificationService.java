@@ -242,13 +242,13 @@ public class NotificationService {
                             .setPriority(AndroidNotification.Priority.MAX) // Heads-up notification
                             .setVisibility(AndroidNotification.Visibility.PUBLIC)
                             .setClickAction("FLUTTER_NOTIFICATION_CLICK")
-                            .setTag(collapseKey)                 // Grouping key
+//                            .setTag(collapseKey)                 // Grouping key
                             .build())
                     .build();
 
             // 3. iOS Config (The Fix for Sound)
             ApnsConfig apnsConfig = ApnsConfig.builder()
-                    .putHeader("apns-collapse-id", collapseKey)
+//                    .putHeader("apns-collapse-id", collapseKey)
                     .setAps(Aps.builder()
                             .setSound("wisemonie.wav")           // 👈 iOS Sound (needs extension)
                             .setContentAvailable(true)           // Wakes app for background processing
