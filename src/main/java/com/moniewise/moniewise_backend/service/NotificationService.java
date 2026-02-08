@@ -236,7 +236,7 @@ public class NotificationService {
                     .setTtl(86400 * 1000) // 24 hours
                     .setPriority(AndroidConfig.Priority.HIGH) // Critical for background delivery
                     .setNotification(AndroidNotification.builder()
-                            .setChannelId("moniewise_alerts_v5") // 👈 CRITICAL: Must match Flutter
+                            .setChannelId("moniewise_alerts_v6") // 👈 CRITICAL: Must match Flutter
                             .setSound("wisemonie")               // 👈 Android Sound (no extension)
                             .setDefaultSound(false)              // Force custom sound
                             .setPriority(AndroidNotification.Priority.MAX) // Heads-up notification
