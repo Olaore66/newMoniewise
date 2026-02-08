@@ -231,6 +231,9 @@ public class NotificationService {
             // 1. Determine the Shared Key (For grouping/replacing old alerts)
             String collapseKey = getGroupKey(type);
 
+            // ⚡ GENERATE UNIQUE TAG (Forces every alert to be separate & noisy)
+            String uniqueTag = collapseKey + "_" + System.currentTimeMillis();
+
             // 2. Android Config (The Fix for Pop-ups & Channel Lock)
             AndroidConfig androidConfig = AndroidConfig.builder()
                     .setTtl(86400 * 1000) // 24 hours
@@ -242,7 +245,7 @@ public class NotificationService {
                             .setPriority(AndroidNotification.Priority.MAX) // Heads-up notification
                             .setVisibility(AndroidNotification.Visibility.PUBLIC)
                             .setClickAction("FLUTTER_NOTIFICATION_CLICK")
-//                            .setTag(collapseKey)                 // Grouping key
+                            .setTag(uniqueTag)                 // Grouping key
                             .build())
                     .build();
 
