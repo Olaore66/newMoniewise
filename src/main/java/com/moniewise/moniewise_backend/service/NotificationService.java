@@ -270,7 +270,7 @@ public class NotificationService {
             // 5. Build Data Map (Navigation Logic)
             Message.Builder messageBuilder = Message.builder()
                     .setToken(user.getFcmToken())
-                    .setNotification(fcmNotification) // 👈 Includes "notification" block
+//                    .setNotification(fcmNotification) // 👈 Includes "notification" block
                     .setAndroidConfig(androidConfig)  // 👈 Includes Channel ID
                     .setApnsConfig(apnsConfig);       // 👈 Includes iOS Sound
 
