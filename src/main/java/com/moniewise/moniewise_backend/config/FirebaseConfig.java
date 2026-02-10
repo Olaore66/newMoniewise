@@ -44,7 +44,7 @@ public class FirebaseConfig {
             FirebaseOptions.Builder builder = FirebaseOptions.builder()
                     .setCredentials(GoogleCredentials.fromStream(serviceAccount));
 
-            builder.setStorageBucket("gs://wisemonie-app.firebasestorage.app");
+            builder.setStorageBucket("wisemonie-app.firebasestorage.app");
 
             FirebaseOptions options = builder.build();
 
