@@ -37,9 +37,16 @@ public class FirebaseConfig {
                 return null;
             }
 
-            FirebaseOptions options = FirebaseOptions.builder()
-                    .setCredentials(GoogleCredentials.fromStream(serviceAccount))
-                    .build();
+//            FirebaseOptions options = FirebaseOptions.builder()
+//                    .setCredentials(GoogleCredentials.fromStream(serviceAccount))
+//                    .build();
+
+            FirebaseOptions.Builder builder = FirebaseOptions.builder()
+                    .setCredentials(GoogleCredentials.fromStream(serviceAccount));
+
+            builder.setStorageBucket("gs://wisemonie-app.firebasestorage.app");
+
+            FirebaseOptions options = builder.build();
 
             return FirebaseApp.initializeApp(options);
         } catch (Exception e) {

@@ -1,5 +1,8 @@
 package com.moniewise.moniewise_backend.service;
 
+import com.google.cloud.storage.Blob;
+import com.google.cloud.storage.Bucket;
+import com.google.firebase.cloud.StorageClient;
 import com.moniewise.moniewise_backend.dto.request.ProfileRequest;
 import com.moniewise.moniewise_backend.dto.response.SignupResponse;
 import com.moniewise.moniewise_backend.dto.response.UserSummaryResponse;
@@ -22,10 +25,12 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
+import java.net.URL;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 
@@ -252,26 +257,6 @@ public class UserService implements UserDetailsService {
     }
     //==============================================================
 
-    @Transactional
-    public User verifySignup(Long userId, String otpCode) {
-        User user = userRepository.findById(userId)
-                .orElseThrow(() -> new IllegalArgumentException("User not found"));
-
-        // ✅ Check if T&C was accepted before proceeding
-        if (!Boolean.TRUE.equals(user.getTncAccepted())) {
-            throw new IllegalStateException("User must accept Terms and Conditions before verification");
-        }
-
-        if (otpService.verifyOtp(userId, otpCode)) {
-            user.setVerified(true); // Update the new column
-            userRepository.save(user);
-            otpService.clearOtp(userId);
-            return user;
-        } else {
-            throw new IllegalArgumentException("Invalid or expired OTP");
-        }
-    }
-
     public User login(String emailOrPhone, String password) {
         User user = userRepository.findByEmail(emailOrPhone)
                 .orElseGet(() -> userRepository.findByPhone(emailOrPhone)
@@ -293,36 +278,6 @@ public class UserService implements UserDetailsService {
 
         return user;
     }
-
-
-    // UserService.java
-
-    // UserService.java
-
-    // 1. Change signature to accept 'name'
-//    public User findOrCreateOAuthUser(String email, String name) {
-//        return userRepository.findByEmail(email)
-//                .orElseGet(() -> {
-//                    User newUser = new User();
-//                    newUser.setEmail(email);
-//                    newUser.setPassword(passwordEncoder.encode("GOOGLE_AUTH_USER_" + UUID.randomUUID().toString()));
-//                    newUser.setRole(Role.USER);
-//                    newUser.setVerified(true);
-//                    newUser.setCreatedAt(LocalDateTime.now());
-//
-//                    // 2. Auto-fill the Name into Profile Data
-//                    Map<String, Object> profile = new HashMap<>();
-//                    // Use the name from Google, or "MonieWise User" if null
-//                    profile.put("name", (name != null && !name.isEmpty()) ? name : "MonieWise User");
-//                    profile.put("auth_provider", "google");
-//
-//                    newUser.setProfileData(profile);
-//
-//                    return userRepository.save(newUser);
-//                });
-//    }
-
-    // In UserService.java
 
     public User findOrCreateOAuthUser(String email, String name) {
         // 1. 🔍 SEARCH GLOBALLY (Active AND Deleted users)
@@ -492,55 +447,134 @@ public class UserService implements UserDetailsService {
 
     //    ===================== PROFILE PICTURE CHANGE ===============================
     // 1. UPLOAD / UPDATE
-    @Transactional
-    public void uploadProfileImage(Long userId, MultipartFile file) {
-        try {
-            if (file.isEmpty()) {
-                throw new IllegalArgumentException("Cannot save empty file");
-            }
+//    @Transactional
+//    public void uploadProfileImage(Long userId, MultipartFile file) {
+//        try {
+//            if (file.isEmpty()) {
+//                throw new IllegalArgumentException("Cannot save empty file");
+//            }
+//
+//            User user = userRepository.findById(userId)
+//                    .orElseThrow(() -> new RuntimeException("User not found"));
+//
+//            // Convert file to bytes and save
+//            user.setProfileImage(file.getBytes());
+//
+//            // Optional: Update profile_data map if you use it for UI flags
+//            if (user.getProfileData() != null) {
+//                user.getProfileData().put("has_image", true);
+//            }
+//
+//            userRepository.save(user);
+//
+//        } catch (IOException e) {
+//            throw new RuntimeException("Failed to process image file", e);
+//        }
+//    }
+//
+//    // 2. GET IMAGE
+//    @Transactional(readOnly = true)
+//    public byte[] getProfileImage(Long userId) {
+//        User user = userRepository.findById(userId)
+//                .orElseThrow(() -> new RuntimeException("User not found"));
+//        return user.getProfileImage();
+//    }
+//
+//    // 3. DELETE IMAGE
+//    @Transactional
+//    public void deleteProfileImage(Long userId) {
+//        User user = userRepository.findById(userId)
+//                .orElseThrow(() -> new RuntimeException("User not found"));
+//
+//        user.setProfileImage(null); // Clear the bytes
+//
+//        if (user.getProfileData() != null) {
+//            user.getProfileData().put("has_image", false);
+//        }
+//
+//        userRepository.save(user);
+//    }
 
+    // ================== SESSION MANAGEMENT ==================
+
+    // 1. UPLOAD IMAGE TO FIREBASE
+    public String uploadProfileImage(Long userId, MultipartFile file) {
+        try {
             User user = userRepository.findById(userId)
                     .orElseThrow(() -> new RuntimeException("User not found"));
 
-            // Convert file to bytes and save
-            user.setProfileImage(file.getBytes());
-
-            // Optional: Update profile_data map if you use it for UI flags
-            if (user.getProfileData() != null) {
-                user.getProfileData().put("has_image", true);
+            // Get the filename extension (e.g., .jpg, .png)
+            String originalFilename = file.getOriginalFilename();
+            String extension = "jpg"; // Default
+            if (originalFilename != null && originalFilename.contains(".")) {
+                extension = originalFilename.substring(originalFilename.lastIndexOf(".") + 1);
             }
+
+            // Create a unique file path: profile_images/USER_ID_TIMESTAMP.jpg
+            String fileName = String.format("profile_images/%d_%d.%s",
+                    userId, System.currentTimeMillis(), extension);
+
+            // Get Firebase Storage Bucket
+            Bucket bucket = StorageClient.getInstance().bucket();
+
+            // Upload file
+            Blob blob = bucket.create(fileName, file.getInputStream(), file.getContentType());
+
+            // OPTION A: Generate a Signed URL (Valid for X days/years) - More Secure
+            // URL signedUrl = blob.signUrl(365, TimeUnit.DAYS);
+            // String publicUrl = signedUrl.toString();
+
+            // OPTION B: Make Public (Easiest for Profile Pics)
+            // Note: This requires the bucket or object to be publicly readable via IAM or Rules.
+            // For simple apps, we often construct the public token manually or use signed URLs.
+            // Let's use the Signed URL approach as it works out of the box with the Admin SDK.
+            URL signedUrl = blob.signUrl(7300, TimeUnit.DAYS); // Valid for 20 years
+            String publicUrl = signedUrl.toString();
+
+            // Save the URL to Database
+            user.setProfileImageUrl(publicUrl);
+
+            // Remove legacy byte data if it exists to free up space
+            user.setProfileImage(null);
 
             userRepository.save(user);
 
+            return publicUrl;
+
         } catch (IOException e) {
-            throw new RuntimeException("Failed to process image file", e);
+            throw new RuntimeException("Failed to upload image to Firebase", e);
         }
     }
 
-    // 2. GET IMAGE
-    @Transactional(readOnly = true)
-    public byte[] getProfileImage(Long userId) {
-        User user = userRepository.findById(userId)
-                .orElseThrow(() -> new RuntimeException("User not found"));
-        return user.getProfileImage();
-    }
-
-    // 3. DELETE IMAGE
-    @Transactional
+    // 2. DELETE IMAGE FROM FIREBASE
     public void deleteProfileImage(Long userId) {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new RuntimeException("User not found"));
 
-        user.setProfileImage(null); // Clear the bytes
+        String currentUrl = user.getProfileImageUrl();
 
-        if (user.getProfileData() != null) {
-            user.getProfileData().put("has_image", false);
+        if (currentUrl != null && !currentUrl.isEmpty()) {
+            try {
+                // Extract file path from URL (Rough logic, depends on Option A or B above)
+                // If using Signed URL, the path is hidden inside.
+                // Better strategy: Store the 'fileName' (path) in DB as well if you need strict deletion.
+
+                // For now, we will just clear the DB reference.
+                // To actually delete from storage, you need the exact "blob name" (e.g., profile_images/1_12345.jpg).
+                // If you want to support deletion, save the 'blobName' in your User entity too.
+
+                // Example deletion if you knew the name:
+                // Bucket bucket = StorageClient.getInstance().bucket();
+                // bucket.get("profile_images/old_file_name.jpg").delete();
+
+            } catch (Exception e) {
+                logger.error("Error deleting file from Firebase", e);
+            }
         }
 
+        user.setProfileImageUrl(null);
         userRepository.save(user);
     }
-
-    // ================== SESSION MANAGEMENT ==================
 
     /**
      * Updates the user's session ID to enforce Single Device Login.

@@ -82,15 +82,15 @@ public class User {
     @Column(name = "last_login")
     private Instant lastLogin;
 
-    @Column(name = "profile_image_url")
-    private String profileImageUrl;
+//    @Column(name = "profile_image_url")
+//    private String profileImageUrl;
 
     @Column(name = "current_session_id")
     private String currentSessionId;
 
     // Inside User.java
 
-    // ADD THIS FIELD
+//    // ADD THIS FIELD
     @Lob // Tells DB this is a Large Object
     @Type(type = "org.hibernate.type.BinaryType") // Critical for PostgreSQL to save as bytea, not OID
     @Column(name = "profile_image")
@@ -107,14 +107,17 @@ public class User {
     public boolean isDeleted() { return isDeleted; }
     public void setDeleted(boolean deleted) { isDeleted = deleted; }
     // Getter and Setter
-    public byte[] getProfileImage() {
-        return profileImage;
-    }
+//    public byte[] getProfileImage() {
+//        return profileImage;
+//    }
+//
+//    public void setProfileImage(byte[] profileImage) {
+//        this.profileImage = profileImage;
+//    }
 
-    public void setProfileImage(byte[] profileImage) {
-        this.profileImage = profileImage;
-    }
-
+    // 2. ENSURE this exists (You already have it) 👇
+    @Column(name = "profile_image_url")
+    private String profileImageUrl;
 
     // For JwtUtil compatibility (pass email as token subject)
     public String getUsername() {

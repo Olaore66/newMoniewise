@@ -1,6 +1,8 @@
 package com.moniewise.moniewise_backend.controller;
 
-import com.moniewise.moniewise_backend.dto.request.*;
+import com.moniewise.moniewise_backend.dto.request.OtpGenerateRequest;
+import com.moniewise.moniewise_backend.dto.request.ProfileRequest;
+import com.moniewise.moniewise_backend.dto.request.TncRequest;
 import com.moniewise.moniewise_backend.dto.response.OtpResponse;
 import com.moniewise.moniewise_backend.dto.response.OtpVerifyRequest;
 import com.moniewise.moniewise_backend.dto.response.UserResponse;
@@ -14,12 +16,10 @@ import com.moniewise.moniewise_backend.service.OtpService;
 import com.moniewise.moniewise_backend.service.UserService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
-import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.core.context.SecurityContextHolder;
-import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -149,41 +149,75 @@ public class UserController {
 
     // 1. UPLOAD or UPDATE IMAGE (POST)
     // Key: "file", Value: [Select Image]
+//    @PostMapping("/image")
+//    public ResponseEntity<?> uploadProfileImage(
+//            @RequestParam("file") MultipartFile file,
+//            Authentication authentication
+//    ) {
+//        String email = authentication.getName();
+//        // Assuming you have a helper to get ID from email, or fetch user first
+//        // For now, let's fetch user to get ID
+//        // (Optimized: Your UserDetails might already have the ID)
+//        User user = userService.findByEmail(email);
+//
+//        userService.uploadProfileImage(user.getId(), file);
+//
+//        return ResponseEntity.ok(Map.of(
+//                "status", "success",
+//                "message", "Profile image updated successfully"
+//        ));
+//    }
+//    @GetMapping("/image")
+//    public ResponseEntity<byte[]> getProfileImage(Authentication authentication) {
+//        String email = authentication.getName();
+//        User user = userService.findByEmail(email);
+//
+//        byte[] imageData = userService.getProfileImage(user.getId());
+//
+//        if (imageData == null || imageData.length == 0) {
+//            return ResponseEntity.notFound().build(); // Return 404 if no image
+//        }
+//
+//        return ResponseEntity.ok()
+//                .contentType(MediaType.IMAGE_JPEG) // We assume JPEG/PNG. Browsers handle both fine.
+//                .body(imageData);
+//    }
+
+    // 1. UPLOAD IMAGE
     @PostMapping("/image")
     public ResponseEntity<?> uploadProfileImage(
             @RequestParam("file") MultipartFile file,
             Authentication authentication
     ) {
         String email = authentication.getName();
-        // Assuming you have a helper to get ID from email, or fetch user first
-        // For now, let's fetch user to get ID
-        // (Optimized: Your UserDetails might already have the ID)
         User user = userService.findByEmail(email);
 
-        userService.uploadProfileImage(user.getId(), file);
+        // Call service and get the new URL
+        String imageUrl = userService.uploadProfileImage(user.getId(), file);
 
         return ResponseEntity.ok(Map.of(
                 "status", "success",
-                "message", "Profile image updated successfully"
+                "message", "Profile image updated successfully",
+                "imageUrl", imageUrl // Return URL to frontend immediately
         ));
     }
 
-    // 2. VIEW IMAGE (GET)
-    // This URL goes into your Flutter NetworkImage()
+    // 2. GET IMAGE (Simpler now)
+    // You might not even need this endpoint if the Frontend already has the URL
+    // from the /me or /profile endpoints.
     @GetMapping("/image")
-    public ResponseEntity<byte[]> getProfileImage(Authentication authentication) {
+    public ResponseEntity<?> getProfileImage(Authentication authentication) {
         String email = authentication.getName();
         User user = userService.findByEmail(email);
 
-        byte[] imageData = userService.getProfileImage(user.getId());
+        String imageUrl = user.getProfileImageUrl();
 
-        if (imageData == null || imageData.length == 0) {
-            return ResponseEntity.notFound().build(); // Return 404 if no image
+        if (imageUrl == null) {
+            return ResponseEntity.notFound().build();
         }
 
-        return ResponseEntity.ok()
-                .contentType(MediaType.IMAGE_JPEG) // We assume JPEG/PNG. Browsers handle both fine.
-                .body(imageData);
+        // Just return the URL string
+        return ResponseEntity.ok(Map.of("imageUrl", imageUrl));
     }
 
     // 3. DELETE IMAGE (DELETE)
