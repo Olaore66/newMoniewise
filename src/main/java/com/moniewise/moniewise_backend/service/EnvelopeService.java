@@ -1403,6 +1403,7 @@ package com.moniewise.moniewise_backend.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.moniewise.moniewise_backend.config.BudgetLifeCycleManager;
+import com.moniewise.moniewise_backend.config.GenericNotificationEvent;
 import com.moniewise.moniewise_backend.controller.BudgetController;
 import com.moniewise.moniewise_backend.dto.request.EnvelopeRequest;
 import com.moniewise.moniewise_backend.dto.request.P2PTransferRequest;
@@ -1415,6 +1416,7 @@ import com.moniewise.moniewise_backend.repository.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -1423,16 +1425,11 @@ import org.springframework.transaction.annotation.Transactional;
 import javax.annotation.PostConstruct;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
-import java.time.DayOfWeek;
-import java.time.LocalDate;
-import java.time.LocalDateTime;
-import java.time.LocalTime;
+import java.time.*;
 import java.time.format.DateTimeParseException;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.stream.Collectors;
-import java.time.ZonedDateTime;
-import java.time.ZoneId;
 
 @Service
 public class EnvelopeService {
@@ -1444,7 +1441,8 @@ public class EnvelopeService {
     private final UserService userService;
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final TransactionLogRepository transactionLogRepository;
-    private final NotificationService notificationService;
+//    private final NotificationService notificationService;
+    private final ApplicationEventPublisher eventPublisher;
     private final WalletService walletService;
     private final ScheduledTaskRepository scheduledTaskRepository;
     private final BudgetLifeCycleManager budgetLifeCycleManager;
@@ -1467,7 +1465,7 @@ public class EnvelopeService {
             UserService userService,
             TransactionLogRepository transactionLogRepository,
             NotificationService notificationService,
-            WalletService walletService,
+            ApplicationEventPublisher eventPublisher, WalletService walletService,
             ScheduledTaskRepository scheduledTaskRepository,
             @Lazy BudgetLifeCycleManager budgetLifeCycleManager,
             BudgetService budgetService, PendingDisbursementRepository pendingDisbursementRepository,
@@ -1477,7 +1475,8 @@ public class EnvelopeService {
         this.revenueLogRepository = revenueLogRepository;
         this.userService = userService;
         this.transactionLogRepository = transactionLogRepository;
-        this.notificationService = notificationService;
+        this.eventPublisher = eventPublisher;
+//        this.notificationService = notificationService;
         this.walletService = walletService;
         this.scheduledTaskRepository = scheduledTaskRepository;
         this.budgetLifeCycleManager = budgetLifeCycleManager;
@@ -1589,12 +1588,28 @@ public class EnvelopeService {
         BigDecimal remainingLimit = newSourcePocket;
         String period = source.getConditions().getOrDefault("type", "period").toString().equals("daily") ? "today" : "this period";
 
-        notificationService.sendNotification(
-                user.getId().toString(),
-                String.format("Moved ₦%.2f. %s Remaining: ₦%.2f.", transferAmount, period, remainingLimit),
-                NotificationType.ENVELOPE_TRANSFER,
-                sourceBudget.getId(), sourceId, "VIEW_ENVELOPE", "/envelopes/" + sourceId
+//        notificationService.sendNotification(
+//                user.getId().toString(),
+//                String.format("Moved ₦%.2f. %s Remaining: ₦%.2f.", transferAmount, period, remainingLimit),
+//                NotificationType.ENVELOPE_TRANSFER,
+//                sourceBudget.getId(), sourceId, "VIEW_ENVELOPE", "/envelopes/" + sourceId
+//        );
+        // ✅ ADD THIS NEW BLOCK
+        Map<String, Object> params = Map.of(
+                "amount", String.format("%,.2f", transferAmount),
+                "period", source.getConditions().getOrDefault("type", "period").equals("daily") ? "today" : "this period",
+                "remaining", String.format("%,.2f", newSourcePocket)
         );
+
+        eventPublisher.publishEvent(new GenericNotificationEvent(
+                this,
+                user.getId().toString(),
+                NotificationType.ENVELOPE_TRANSFER,
+                params,
+                sourceBudget.getId(),
+                sourceId,
+                "/envelopes/" + sourceId
+        ));
     }
 
     // =========================================================================
@@ -1692,9 +1707,42 @@ public class EnvelopeService {
                 .build();
         transactionLogRepository.save(recipientLog);
 
-        notificationService.sendNotification(sender.getId().toString(), "Sent ₦" + amount + " to " + recipientName, NotificationType.ENVELOPE_TRANSFER, sourceEnvelope.getBudget().getId(), sourceEnvelope.getId(), "VIEW_ENVELOPE", "/envelopes/" + sourceEnvelope.getId());
-        notificationService.sendNotification(recipient.getId().toString(), senderName + " sent you ₦" + amount, NotificationType.WALLET_DEPOSIT, null, null, "VIEW_WALLET", "/dashboard");
+//        notificationService.sendNotification(sender.getId().toString(), "Sent ₦" + amount + " to " + recipientName, NotificationType.ENVELOPE_TRANSFER, sourceEnvelope.getBudget().getId(), sourceEnvelope.getId(), "VIEW_ENVELOPE", "/envelopes/" + sourceEnvelope.getId());
+//        notificationService.sendNotification(recipient.getId().toString(), senderName + " sent you ₦" + amount, NotificationType.WALLET_DEPOSIT, null, null, "VIEW_WALLET", "/dashboard");
 
+        // ✅ ADD NEW EVENT: Sender Notification
+        Map<String, Object> senderParams = Map.of(
+                "amount", String.format("%,.2f", amount),
+                "recipient", recipientName,
+                "period", "today", // or logic to determine period
+                "remaining", String.format("%,.2f", sourceEnvelope.getRemainingAmount())
+        );
+
+        eventPublisher.publishEvent(new GenericNotificationEvent(
+                this,
+                sender.getId().toString(),
+                NotificationType.ENVELOPE_TRANSFER,
+                senderParams,
+                sourceEnvelope.getBudget().getId(),
+                sourceEnvelope.getId(),
+                "/envelopes/" + sourceEnvelope.getId()
+        ));
+
+        // ✅ ADD NEW EVENT: Recipient Notification
+        Map<String, Object> recipientParams = Map.of(
+                "amount", String.format("%,.2f", amount),
+                "senderName", senderName
+        );
+
+        eventPublisher.publishEvent(new GenericNotificationEvent(
+                this,
+                recipient.getId().toString(),
+                NotificationType.WALLET_DEPOSIT, // Or P2P_RECEIVED if you have it
+                recipientParams,
+                null, // No budget context for recipient usually
+                null,
+                "/dashboard"
+        ));
         try { beneficiaryService.addBeneficiary(sender.getId(), recipient.getEmail(), recipientName); } catch (Exception e) {}
     }
 
@@ -1967,15 +2015,30 @@ public class EnvelopeService {
             );
             txn.setStatus(TransactionStatus.COMPLETED);
             transactionLogRepository.save(txn);
-            notificationService.sendNotification(
+//            notificationService.sendNotification(
+//                    user.getId().toString(),
+//                    "Sent ₦" + amount + " to " + resolvedName,
+//                    NotificationType.EXTERNAL_TRANSFER,
+//                    source.getBudget().getId(),
+//                    sourceId,
+//                    "VIEW_ENVELOPE",
+//                    "/envelopes/" + sourceId
+//            );
+            // ✅ ADD NEW EVENT
+            Map<String, Object> params = Map.of(
+                    "amount", String.format("%,.2f", amount),
+                    "recipient", resolvedName
+            );
+
+            eventPublisher.publishEvent(new GenericNotificationEvent(
+                    this,
                     user.getId().toString(),
-                    "Sent ₦" + amount + " to " + resolvedName,
                     NotificationType.EXTERNAL_TRANSFER,
+                    params,
                     source.getBudget().getId(),
                     sourceId,
-                    "VIEW_ENVELOPE",
                     "/envelopes/" + sourceId
-            );
+            ));
         } catch (Exception e) {
             logger.error("External transfer failed: {}", e.getMessage());
             throw new RuntimeException("Transfer failed: " + e.getMessage());
@@ -2058,12 +2121,28 @@ public class EnvelopeService {
 
         budgetLifeCycleManager.scheduleDynamicTasks(envelope);
 
-        notificationService.sendNotification(
-                budget.getUser().getId().toString(),
-                String.format("Created envelope '%s' with ₦%.2f in budget '%s'.",
-                        envelope.getName(), amount, budget.getName()),
-                NotificationType.ENVELOPE_CREATED
+//        notificationService.sendNotification(
+//                budget.getUser().getId().toString(),
+//                String.format("Created envelope '%s' with ₦%.2f in budget '%s'.",
+//                        envelope.getName(), amount, budget.getName()),
+//                NotificationType.ENVELOPE_CREATED
+//        );
+        // ✅ ADD NEW EVENT
+        Map<String, Object> params = Map.of(
+                "amount", String.format("%,.2f", amount),
+                "envelopeName", envelope.getName(),
+                "budgetName", budget.getName()
         );
+
+        eventPublisher.publishEvent(new GenericNotificationEvent(
+                this,
+                budget.getUser().getId().toString(),
+                NotificationType.ENVELOPE_CREATED, // Make sure you handle this TYPE in NotificationService!
+                params,
+                budget.getId(),
+                envelope.getId(),
+                "/envelopes/" + envelope.getId()
+        ));
         return toResponse(envelope);
     }
 
@@ -2082,12 +2161,27 @@ public class EnvelopeService {
         envelope.setRemainingAmount(getPeriodLimit(request.getConditions()));
         envelopeRepository.save(envelope);
 
-        notificationService.sendNotification(
-                envelope.getBudget().getUser().getId().toString(),
-                String.format("Updated conditions for envelope '%s' in budget '%s'.",
-                        envelope.getName(), envelope.getBudget().getName()),
-                NotificationType.ENVELOPE_UPDATED
+//        notificationService.sendNotification(
+//                envelope.getBudget().getUser().getId().toString(),
+//                String.format("Updated conditions for envelope '%s' in budget '%s'.",
+//                        envelope.getName(), envelope.getBudget().getName()),
+//                NotificationType.ENVELOPE_UPDATED
+//        );
+        // ✅ ADD NEW EVENT
+        Map<String, Object> params = Map.of(
+                "envelopeName", envelope.getName(),
+                "budgetName", envelope.getBudget().getName()
         );
+
+        eventPublisher.publishEvent(new GenericNotificationEvent(
+                this,
+                envelope.getBudget().getUser().getId().toString(),
+                NotificationType.ENVELOPE_UPDATED,
+                params,
+                envelope.getBudget().getId(),
+                envelope.getId(),
+                "/envelopes/" + envelope.getId()
+        ));
         return toResponse(envelope);
     }
 
@@ -2111,16 +2205,31 @@ public class EnvelopeService {
         pd.setProcessedAt(now);
         pendingDisbursementRepository.save(pd);
 
-        notificationService.sendNotification(
-                email,
-                String.format("₦%.2f unlocked! You can now spend from your '%s' envelope.",
-                        pd.getAmount(), envelope.getName()),
+//        notificationService.sendNotification(
+//                email,
+//                String.format("₦%.2f unlocked! You can now spend from your '%s' envelope.",
+//                        pd.getAmount(), envelope.getName()),
+//                NotificationType.DISBURSEMENT_SUCCESS,
+//                envelope.getBudget().getId(),
+//                envelope.getId(),
+//                "VIEW_ENVELOPE",
+//                "/envelopes/" + envelope.getId()
+//        );
+        // ✅ ADD NEW EVENT
+        Map<String, Object> params = Map.of(
+                "amount", String.format("%,.2f", pd.getAmount()),
+                "envelopeName", envelope.getName()
+        );
+
+        eventPublisher.publishEvent(new GenericNotificationEvent(
+                this,
+                email, // assuming email acts as user identifier or fetch userId
                 NotificationType.DISBURSEMENT_SUCCESS,
+                params,
                 envelope.getBudget().getId(),
                 envelope.getId(),
-                "VIEW_ENVELOPE",
                 "/envelopes/" + envelope.getId()
-        );
+        ));
     }
 
     public void deleteEnvelope(Long envelopeId, String email) {
@@ -2131,12 +2240,27 @@ public class EnvelopeService {
         }
         envelopeRepository.delete(envelope);
 
-        notificationService.sendNotification(
-                envelope.getBudget().getUser().getId().toString(),
-                String.format("Deleted envelope '%s' from budget '%s'.",
-                        envelope.getName(), envelope.getBudget().getName()),
-                NotificationType.ENVELOPE_DELETED
+//        notificationService.sendNotification(
+//                envelope.getBudget().getUser().getId().toString(),
+//                String.format("Deleted envelope '%s' from budget '%s'.",
+//                        envelope.getName(), envelope.getBudget().getName()),
+//                NotificationType.ENVELOPE_DELETED
+//        );
+        // ✅ ADD NEW EVENT
+        Map<String, Object> params = Map.of(
+                "envelopeName", envelope.getName(),
+                "budgetName", envelope.getBudget().getName()
         );
+
+        eventPublisher.publishEvent(new GenericNotificationEvent(
+                this,
+                envelope.getBudget().getUser().getId().toString(),
+                NotificationType.ENVELOPE_DELETED,
+                params,
+                envelope.getBudget().getId(),
+                null, // Envelope is deleted, no ID to link
+                "/budgets/" + envelope.getBudget().getId()
+        ));
     }
 
     private EnvelopeResponse toResponse(Envelope envelope) {

@@ -2,6 +2,7 @@ package com.moniewise.moniewise_backend.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.moniewise.moniewise_backend.config.BudgetLifeCycleManager;
+import com.moniewise.moniewise_backend.config.GenericNotificationEvent;
 import com.moniewise.moniewise_backend.dto.request.BudgetRequest;
 import com.moniewise.moniewise_backend.dto.request.EnvelopeRequest;
 import com.moniewise.moniewise_backend.dto.response.BudgetResponse;
@@ -16,6 +17,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -51,6 +53,8 @@ public class BudgetService {
 
     private final BudgetLifeCycleManager budgetLifeCycleManager;
 
+    private final ApplicationEventPublisher eventPublisher;
+
 
     @Value("${moniewise.revenue.wallet.user-id}")
     private Long revenueWalletUserId;
@@ -62,7 +66,7 @@ public class BudgetService {
             WalletRepository walletRepository, UserService userService,
             TransactionLogRepository transactionLogRepository,
             NotificationService notificationService,
-            WalletService walletService, ScheduledTaskRepository scheduledTaskRepository, @Lazy EnvelopeService envelopeService, BudgetLifeCycleManager budgetLifeCycleManager) {
+            WalletService walletService, ScheduledTaskRepository scheduledTaskRepository, @Lazy EnvelopeService envelopeService, BudgetLifeCycleManager budgetLifeCycleManager, ApplicationEventPublisher eventPublisher) {
         this.envelopeRepository = envelopeRepository;
         this.budgetRepository = budgetRepository;
         this.revenueLogRepository = revenueLogRepository;
@@ -74,6 +78,7 @@ public class BudgetService {
         this.scheduledTaskRepository = scheduledTaskRepository;
         this.envelopeService = envelopeService;
         this.budgetLifeCycleManager = budgetLifeCycleManager;
+        this.eventPublisher = eventPublisher;
     }
 
     // Helper method to fetch current date/time from Postgres
@@ -225,9 +230,6 @@ public class BudgetService {
 
         // ADD THIS LOOP: VALIDATE EACH ENVELOPE LIMIT
         for (EnvelopeRequest envelopeRequest : request.getEnvelopes()) {
-//            BigDecimal envelopeAmount = actualBudgetAmount
-//                    .multiply(envelopeRequest.getPercentage())
-//                    .divide(new BigDecimal("100"), 2, RoundingMode.HALF_UP);
             BigDecimal envelopeAmount = finalAmounts.get(envelopeRequest); // ← THIS IS NOW GUARANTEED TO SUM CORRECTLY
 
             validateEnvelopeLimit(envelopeRequest, envelopeAmount, request.getStartDate(), request.getEndDate());
@@ -237,15 +239,14 @@ public class BudgetService {
         BigDecimal walletBalance = walletService.checkBalance(user.getId());
         if (walletBalance.compareTo(allocationSum) < 0) {
             String message = String.format(
-                    "Transaction failed: Your wallet has insufficient funds. At least ₦%.2f is required for allocation, but your current balance is ₦%.2f. Please fund your wallet.",
+                    "Transaction failed: Your wallet has insufficient funds. At least ₦%.2f is required, but you have ₦%.2f.",
                     allocationSum, walletBalance
             );
 
-            notificationService.sendNotification(user.getId().toString(), message, NotificationType.BUDGET_CREATION);
-
+            // ❌ DO NOT PUBLISH SUCCESS EVENT HERE
+            // ✅ DO THROW THE EXCEPTION
             throw new IllegalArgumentException(message);
         }
-
         // Charge the fee
         deductBudgetCreationFee(user.getId());
 
@@ -345,20 +346,6 @@ public class BudgetService {
         feeLog.setCreatedAt(now);
         transactionLogRepository.save(feeLog);
 
-        // 3. Unallocated amount refunded (if any)
-//        if (unallocatedAmount.compareTo(BigDecimal.ZERO) > 0) {
-//            TransactionLog refundLog = new TransactionLog();
-//            refundLog.setUserId(user.getId());
-//            refundLog.setBudgetId(savedBudget.getId());
-//            refundLog.setAmount(unallocatedAmount);  // Positive = money back
-//            refundLog.setFee(BigDecimal.ZERO);
-//            refundLog.setTransactionType(BUDGET_UNALLOCATED_REFUNDED);
-//            refundLog.setDescription("Unallocated amount refunded to wallet");
-//            refundLog.setStatus(TransactionStatus.COMPLETED);
-//            refundLog.setCreatedAt(now);
-//            transactionLogRepository.save(refundLog);
-//        }
-
         // ——————— REVENUE LOG ———————
         RevenueLog revenueLog = new RevenueLog();
 
@@ -373,26 +360,47 @@ public class BudgetService {
         revenueLogRepository.save(revenueLog);
 
         // ——————— NOTIFICATION ———————
-        String message = String.format(
-                "Budget '%s' created successfully! " +
-                        "₦%.2f allocated • ₦%.2f fee deducted%s",
-                savedBudget.getName(),
-                allocationSum,
-                fee,
-                unallocatedAmount.compareTo(BigDecimal.ZERO) > 0
-                        ? " • ₦" + unallocatedAmount + " refunded to wallet"
-                        : ""
-        );
+//        String message = String.format(
+//                "Budget '%s' created successfully! " +
+//                        "₦%.2f allocated • ₦%.2f fee deducted%s",
+//                savedBudget.getName(),
+//                allocationSum,
+//                fee,
+//                unallocatedAmount.compareTo(BigDecimal.ZERO) > 0
+//                        ? " • ₦" + unallocatedAmount + " refunded to wallet"
+//                        : ""
+//        );
+//
+//        notificationService.sendNotification(
+//                user.getId().toString(),
+//                message,
+//                NotificationType.BUDGET_CREATION,
+//                savedBudget.getId(),
+//                null,
+//                "VIEW_BUDGET",                                      // <--- The Command
+//                "/budgets/" + budget.getId() + "/envelopes" // Navigation URL
+//        );
 
-        notificationService.sendNotification(
+        // 🛑 FIXED: PUBLISH SUCCESS EVENT HERE (AT THE VERY END)
+        Map<String, Object> params = new HashMap<>();
+        params.put("budgetName", savedBudget.getName());
+        params.put("allocated", String.format("%,.2f", allocationSum));
+        params.put("fee", String.format("%,.2f", fee));
+
+        if (unallocatedAmount.compareTo(BigDecimal.ZERO) > 0) {
+            params.put("refunded", String.format("%,.2f", unallocatedAmount));
+        }
+
+        // Publish the event!
+        eventPublisher.publishEvent(new GenericNotificationEvent(
+                this,
                 user.getId().toString(),
-                message,
                 NotificationType.BUDGET_CREATION,
+                params,
                 savedBudget.getId(),
                 null,
-                "VIEW_BUDGET",                                      // <--- The Command
-                "/budgets/" + budget.getId() + "/envelopes" // Navigation URL
-        );
+                "/budgets/" + savedBudget.getId()
+        ));
 
         return new BudgetResponse(
                 savedBudget.getId(),
@@ -1017,11 +1025,25 @@ public class BudgetService {
         revenueLogRepository.save(revenueLog);
 
         // 4. Notify user
-        notificationService.sendNotification(
-                userId.toString(),
-                "₦200 budget creation fee deducted from your wallet.",
-                NotificationType.BUDGET_CREATION_FEE
+//        notificationService.sendNotification(
+//                userId.toString(),
+//                "₦200 budget creation fee deducted from your wallet.",
+//                NotificationType.BUDGET_CREATION_FEE
+//        );
+
+        // ✅ Event for Fee Deduction
+        Map<String, Object> feeParams = Map.of(
+                "amount", String.format("%,.2f", fee),
+                "reason", "Budget Creation Fee"
         );
+
+        eventPublisher.publishEvent(new GenericNotificationEvent(
+                this,
+                userId.toString(),
+                NotificationType.BUDGET_CREATION_FEE,
+                feeParams,
+                null, null, null
+        ));
 
         logger.info("₦200 budget creation fee collected from user {} → platform revenue", userId);
     }
