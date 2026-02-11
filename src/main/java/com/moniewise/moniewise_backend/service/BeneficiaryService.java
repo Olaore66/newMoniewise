@@ -8,8 +8,9 @@ import com.moniewise.moniewise_backend.repository.BeneficiaryRepository;
 import com.moniewise.moniewise_backend.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
-
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -24,7 +25,7 @@ public class BeneficiaryService {
     // =========================================================================
     // 1. ADD BENEFICIARY (Write Operation - Safety First)
     // =========================================================================
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void addBeneficiary(Long currentUserId, String targetEmail, String alias) {
         // 1. Validation
         User target = userService.findByEmail(targetEmail); // Loads full user (Acceptable for single write)
