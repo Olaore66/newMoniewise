@@ -36,6 +36,7 @@ public interface UserRepository extends JpaRepository<User, Long> {
 
     // ✅ THE SAFE SEARCH (Lightweight DTO)
     // Note: We cast JSONB fields to string to prevent PSQLException
+    // ✅ FIXED: Optimized Search Query (Uses JPQL Cast instead of native functions)
     @Query("SELECT u.id as id, " +
             "cast(u.profileData['firstName'] as string) as firstName, " +
             "cast(u.profileData['lastName'] as string) as lastName, " +
@@ -47,10 +48,11 @@ public interface UserRepository extends JpaRepository<User, Long> {
             "lower(cast(u.profileData['firstName'] as string)) LIKE lower(concat('%', :query, '%'))")
     List<UserSummary> searchUsers(@Param("query") String query, Pageable pageable);
 
-    // ✅ OPTIMIZED: Fetch only the token string, nothing else.
+    // ✅ OPTIMIZED: Fetch only the token string (For Notifications)
     @Query("SELECT u.fcmToken FROM User u WHERE u.id = :id")
     String findFcmTokenById(@Param("id") Long id);
 
+    // ✅ NEW: Clear dead tokens
     @Modifying
     @Transactional
     @Query("UPDATE User u SET u.fcmToken = NULL WHERE u.id = :id")
