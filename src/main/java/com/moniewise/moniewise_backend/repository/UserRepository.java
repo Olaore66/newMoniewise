@@ -17,26 +17,9 @@ import java.util.Optional;
 public interface UserRepository extends JpaRepository<User, Long> {
     Optional<User> findByEmail(String email);
     Optional<User> findByPhone(String phone);
-
-    // Inside UserRepository interface
     Optional<User> findByEmailOrPhone(String email, String phone);
-
-    @Query("SELECT u FROM User u WHERE " +
-            "(LOWER(u.email) LIKE LOWER(CONCAT('%', :query, '%')) " +
-            "OR LOWER(u.phone) LIKE LOWER(CONCAT('%', :query, '%')) " + // <--- Added Phone Check
-            "OR function('jsonb_extract_path_text', u.profileData, 'fullName') LIKE LOWER(CONCAT('%', :query, '%')) " +
-            "OR function('jsonb_extract_path_text', u.profileData, 'name') LIKE LOWER(CONCAT('%', :query, '%')))")
-    List<User> searchUsers(@Param("query") String query);
-
-    // Custom query to find ANY user (Active or Deleted)
     @Query(value = "SELECT * FROM users WHERE email = :email", nativeQuery = true)
     Optional<User> findGlobalByEmail(@Param("email") String email);
-
-    // Inside UserRepository.java
-
-    // ✅ THE SAFE SEARCH (Lightweight DTO)
-    // Note: We cast JSONB fields to string to prevent PSQLException
-    // ✅ FIXED: Optimized Search Query (Uses JPQL Cast instead of native functions)
     @Query("SELECT u.id as id, " +
             "cast(u.profileData['firstName'] as string) as firstName, " +
             "cast(u.profileData['lastName'] as string) as lastName, " +
@@ -47,12 +30,10 @@ public interface UserRepository extends JpaRepository<User, Long> {
             "lower(u.email) LIKE lower(concat('%', :query, '%')) OR " +
             "lower(cast(u.profileData['firstName'] as string)) LIKE lower(concat('%', :query, '%'))")
     List<UserSummary> searchUsers(@Param("query") String query, Pageable pageable);
-
-    // ✅ OPTIMIZED: Fetch only the token string (For Notifications)
     @Query("SELECT u.fcmToken FROM User u WHERE u.id = :id")
     String findFcmTokenById(@Param("id") Long id);
 
-    // ✅ NEW: Clear dead tokens
+    // ✅ Notification Optimization: Clear dead tokens
     @Modifying
     @Transactional
     @Query("UPDATE User u SET u.fcmToken = NULL WHERE u.id = :id")
