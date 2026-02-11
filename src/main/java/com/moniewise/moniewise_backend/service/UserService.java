@@ -8,6 +8,7 @@ import com.moniewise.moniewise_backend.dto.response.SignupResponse;
 import com.moniewise.moniewise_backend.dto.response.UserSummaryResponse;
 import com.moniewise.moniewise_backend.entity.PasswordResetToken;
 import com.moniewise.moniewise_backend.entity.User;
+import com.moniewise.moniewise_backend.entity.UserSummary;
 import com.moniewise.moniewise_backend.entity.Wallet;
 import com.moniewise.moniewise_backend.enums.Role;
 import com.moniewise.moniewise_backend.repository.PasswordResetTokenRepository;
@@ -15,6 +16,7 @@ import com.moniewise.moniewise_backend.repository.UserRepository;
 import com.moniewise.moniewise_backend.repository.WalletRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.security.core.userdetails.UserDetailsService;
@@ -117,7 +119,6 @@ public class UserService implements UserDetailsService {
         return userRepository.findByEmailOrPhone(input, input);
     }
 
-
     //================= SEARCH FOR USERS ===========================
 //    public List<UserSummaryResponse> searchUsers(String query, String currentEmail) {
 //        if (query == null || query.trim().isEmpty()) {
@@ -126,13 +127,14 @@ public class UserService implements UserDetailsService {
 //
 //        return userRepository.searchUsers(query.trim())
 //                .stream()
-//                .filter(u -> !u.getEmail().equals(currentEmail))
+//                // 🛑 FIX: Use ignoreCase to ensure strict exclusion of self
+//                .filter(u -> !u.getEmail().equalsIgnoreCase(currentEmail))
 //                .map(u -> {
 //                    // 1. Generate Handle
 //                    String handle = "@" + u.getEmail().split("@")[0];
 //
 //                    // 2. Try to get Real Name
-//                    String displayName = "Unknown"; // Default
+//                    String displayName = "Unknown";
 //                    if (u.getProfileData() != null) {
 //                        Object nameObj = u.getProfileData().getOrDefault("fullName", u.getProfileData().get("name"));
 //                        if (nameObj != null && !nameObj.toString().trim().isEmpty()) {
@@ -140,9 +142,8 @@ public class UserService implements UserDetailsService {
 //                        }
 //                    }
 //
-//                    // 3. THE FIX: If still "Unknown", use the Handle instead
+//                    // 3. Fallback: Use Handle if name is missing
 //                    if (displayName.equals("Unknown")) {
-//                        // Turn "@olaore66" -> "Olaore66"
 //                        String cleanName = handle.substring(1);
 //                        displayName = cleanName.substring(0, 1).toUpperCase() + cleanName.substring(1);
 //                    }
@@ -157,48 +158,6 @@ public class UserService implements UserDetailsService {
 //                .limit(10)
 //                .collect(Collectors.toList());
 //    }
-
-
-
-    //================= SEARCH FOR USERS ===========================
-    public List<UserSummaryResponse> searchUsers(String query, String currentEmail) {
-        if (query == null || query.trim().isEmpty()) {
-            return Collections.emptyList();
-        }
-
-        return userRepository.searchUsers(query.trim())
-                .stream()
-                // 🛑 FIX: Use ignoreCase to ensure strict exclusion of self
-                .filter(u -> !u.getEmail().equalsIgnoreCase(currentEmail))
-                .map(u -> {
-                    // 1. Generate Handle
-                    String handle = "@" + u.getEmail().split("@")[0];
-
-                    // 2. Try to get Real Name
-                    String displayName = "Unknown";
-                    if (u.getProfileData() != null) {
-                        Object nameObj = u.getProfileData().getOrDefault("fullName", u.getProfileData().get("name"));
-                        if (nameObj != null && !nameObj.toString().trim().isEmpty()) {
-                            displayName = nameObj.toString();
-                        }
-                    }
-
-                    // 3. Fallback: Use Handle if name is missing
-                    if (displayName.equals("Unknown")) {
-                        String cleanName = handle.substring(1);
-                        displayName = cleanName.substring(0, 1).toUpperCase() + cleanName.substring(1);
-                    }
-
-                    return new UserSummaryResponse(
-                            displayName,
-                            handle,
-                            u.getProfileImageUrl(),
-                            u.getEmail()
-                    );
-                })
-                .limit(10)
-                .collect(Collectors.toList());
-    }
 //==============================================================
 
     //==============================================================
@@ -256,6 +215,47 @@ public class UserService implements UserDetailsService {
         userRepository.save(user);
     }
     //==============================================================
+
+    // ==============================================================
+    // ✅ SAFE SEARCH (Fixes Memory Crash)
+    // ==============================================================
+    public List<UserSummaryResponse> searchUsers(String query, String currentEmail) {
+        if (query == null || query.trim().isEmpty()) {
+            return Collections.emptyList();
+        }
+
+        // 1. Use the NEW Repository Method (Fetches only name/email/tag)
+        // We limit to 15 results at the DB level, saving massive RAM.
+        List<UserSummary> results = userRepository.searchUsers(query.trim(), PageRequest.of(0, 15));
+
+        return results.stream()
+                // 2. Filter self (Lightweight string check)
+                .filter(u -> !u.getEmail().equalsIgnoreCase(currentEmail))
+                .map(u -> {
+                    // 3. Generate Handle
+                    String handle = (u.getUserTag() != null && !u.getUserTag().isEmpty())
+                            ? u.getUserTag()
+                            : "@" + u.getEmail().split("@")[0];
+
+                    // 4. Generate Display Name
+                    String displayName = "Unknown";
+                    if (u.getFirstName() != null && !u.getFirstName().isEmpty()) {
+                        displayName = u.getFirstName() + " " + u.getLastName();
+                    } else {
+                        // Fallback to handle
+                        String cleanName = handle.startsWith("@") ? handle.substring(1) : handle;
+                        displayName = cleanName.substring(0, 1).toUpperCase() + cleanName.substring(1);
+                    }
+
+                    return new UserSummaryResponse(
+                            displayName,
+                            handle,
+                            u.getProfileImageUrl(),
+                            u.getEmail()
+                    );
+                })
+                .collect(Collectors.toList());
+    }
 
     public User login(String emailOrPhone, String password) {
         User user = userRepository.findByEmail(emailOrPhone)
@@ -444,58 +444,6 @@ public class UserService implements UserDetailsService {
         resetToken.setUsed(true);
         passwordResetTokenRepository.save(resetToken);
     }
-
-    //    ===================== PROFILE PICTURE CHANGE ===============================
-    // 1. UPLOAD / UPDATE
-//    @Transactional
-//    public void uploadProfileImage(Long userId, MultipartFile file) {
-//        try {
-//            if (file.isEmpty()) {
-//                throw new IllegalArgumentException("Cannot save empty file");
-//            }
-//
-//            User user = userRepository.findById(userId)
-//                    .orElseThrow(() -> new RuntimeException("User not found"));
-//
-//            // Convert file to bytes and save
-//            user.setProfileImage(file.getBytes());
-//
-//            // Optional: Update profile_data map if you use it for UI flags
-//            if (user.getProfileData() != null) {
-//                user.getProfileData().put("has_image", true);
-//            }
-//
-//            userRepository.save(user);
-//
-//        } catch (IOException e) {
-//            throw new RuntimeException("Failed to process image file", e);
-//        }
-//    }
-//
-//    // 2. GET IMAGE
-//    @Transactional(readOnly = true)
-//    public byte[] getProfileImage(Long userId) {
-//        User user = userRepository.findById(userId)
-//                .orElseThrow(() -> new RuntimeException("User not found"));
-//        return user.getProfileImage();
-//    }
-//
-//    // 3. DELETE IMAGE
-//    @Transactional
-//    public void deleteProfileImage(Long userId) {
-//        User user = userRepository.findById(userId)
-//                .orElseThrow(() -> new RuntimeException("User not found"));
-//
-//        user.setProfileImage(null); // Clear the bytes
-//
-//        if (user.getProfileData() != null) {
-//            user.getProfileData().put("has_image", false);
-//        }
-//
-//        userRepository.save(user);
-//    }
-
-    // ================== SESSION MANAGEMENT ==================
 
     // 1. UPLOAD IMAGE TO FIREBASE
     public String uploadProfileImage(Long userId, MultipartFile file) {

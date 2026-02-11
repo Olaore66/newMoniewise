@@ -539,9 +539,6 @@ public class BudgetService {
                 .collect(Collectors.toList());
     }
 
-    // REVENUE ACCOUNT ----- 12/04/2025 -->Simulated Moniewise revenue account ID on the payment gateway
-    private static final String MONIEWISE_REVENUE_ACCOUNT = "moniewise_revenue_001";
-
     // 12/04/2025 -----> New: Top-up Budget
     @Transactional
     public void topUpBudget(Long budgetId, Double amount, String email) {
@@ -674,58 +671,6 @@ public class BudgetService {
         transactionLogRepository.save(transactionLog);
     }
 
-    // New: Rollback strict_lock funds to Wallet
-    @Transactional
-    public void rollbackStrictLock(Long budgetId, String email) {
-        User user = userService.findByEmail(email);
-        Budget budget = budgetRepository.findById(budgetId)
-                .orElseThrow(() -> new IllegalArgumentException("Budget not found with ID: " + budgetId));
-        if (!budget.getUser().getId().equals(user.getId())) {
-            throw new SecurityException("You do not have permission to access this budget");
-        }
-
-        List<Envelope> envelopes = envelopeRepository.findByBudgetId(budgetId);
-        BigDecimal totalRollbackAmount = BigDecimal.ZERO;
-
-        for (Envelope envelope : envelopes) {
-            Map<String, Object> conditions = envelope.getConditions();
-            String conditionType = (String) conditions.get("type");
-            if ("strict_lock".equals(conditionType)) {
-                BigDecimal remainingAmount = envelope.getRemainingAmount();
-                if (remainingAmount.compareTo(BigDecimal.ZERO) > 0) {
-                    totalRollbackAmount = totalRollbackAmount.add(remainingAmount);
-                    // Reset envelope
-                    envelope.setRemainingAmount(BigDecimal.ZERO);
-                    envelopeRepository.save(envelope);
-
-                    // P.S: If "user_wallet" is an internal Moniewise wallet (e.g., another envelope),
-                    // use targetEnvelopeId instead of external_account_id
-                    LocalDateTime now = fetchCurrentDateTimeFromDatabase();
-                    TransactionLog transactionLog = new TransactionLog(
-                            user.getId(),
-                            budgetId,
-                            envelope.getId(),
-                            null, // No target envelope
-                            "user_wallet", // Destination is user's wallet (MVP placeholder)
-                            remainingAmount,
-                            BigDecimal.ZERO, // No fee
-                            STRICT_LOCK_ROLLBACK,
-                            "Rollback due to strict lock expiration"
-                    );
-                    transactionLog.setCreatedAt(now);
-
-                    transactionLogRepository.save(transactionLog);
-                }
-            }
-        }
-
-        if (totalRollbackAmount.compareTo(BigDecimal.ZERO) > 0) {
-            // TODO: Integrate with Paystack/Flutterwave to credit 'totalRollbackAmount' to user's Wallet
-            // - Credit wallet: gateway.creditToWallet(user.getWalletId(), totalRollbackAmount)
-            System.out.println("Simulating credit of ₦" + totalRollbackAmount + " from strict_lock envelopes to user's Wallet for Budget ID: " + budgetId);
-        }
-    }
-
     // Placeholder for getTimeBasedGreeting
     private String getTimeBasedGreeting(String name) {
         int hour = LocalDateTime.now().getHour();
@@ -739,7 +684,7 @@ public class BudgetService {
         String name = user.getName() != null ? user.getName() : user.getEmail().split("@")[0];
         String greeting = getTimeBasedGreeting(name);
 
-        List<Budget> budgets = budgetRepository.findByUserId(user.getId());
+        List<Budget> budgets = budgetRepository.findByUserIdWithEnvelopes(user.getId());
         Map<String, List<BudgetResponse>> budgetMap = new HashMap<>();
         budgetMap.put("active", new ArrayList<>());
         budgetMap.put("completed", new ArrayList<>());
@@ -817,10 +762,12 @@ public class BudgetService {
         );
 
         // Map Envelopes to EnvelopeResponse
-        List<EnvelopeResponse> envelopeResponses = budget.getEnvelopes().stream()
+        List<EnvelopeResponse> envelopeResponses = (budget.getEnvelopes() != null)
+                ? budget.getEnvelopes().stream()
                 .map(envelope -> new EnvelopeResponse(
                         envelope.getId(),
-                        envelope.getBudget().getId(),
+                        budget.getId(),
+//                        envelope.getBudget().getId(),
                         envelope.getName(),
                         envelope.getAmount(),
                         envelope.getRemainingAmount(),
@@ -838,7 +785,7 @@ public class BudgetService {
                         envelope.getLastDisbursedAt(),
                         envelope.getNextDisbursementAt()
                 ))
-                .collect(Collectors.toList());
+                .collect(Collectors.toList()): new ArrayList<>();
         response.setEnvelopes(envelopeResponses);
         return response;
     }
@@ -1023,13 +970,6 @@ public class BudgetService {
         );
         revenueLog.setCreatedAt(LocalDateTime.now());
         revenueLogRepository.save(revenueLog);
-
-        // 4. Notify user
-//        notificationService.sendNotification(
-//                userId.toString(),
-//                "₦200 budget creation fee deducted from your wallet.",
-//                NotificationType.BUDGET_CREATION_FEE
-//        );
 
         // ✅ Event for Fee Deduction
         Map<String, Object> feeParams = Map.of(

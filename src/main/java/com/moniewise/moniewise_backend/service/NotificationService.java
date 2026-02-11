@@ -512,8 +512,6 @@ import com.moniewise.moniewise_backend.enums.NotificationType;
 import com.moniewise.moniewise_backend.repository.NotificationRepository;
 import com.moniewise.moniewise_backend.repository.UserRepository;
 import com.twilio.Twilio;
-import com.twilio.rest.api.v2010.account.MessageCreator;
-import com.twilio.type.PhoneNumber;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -618,12 +616,26 @@ public class NotificationService {
 
             // 3. Send FCM (Only for High Priority)
             if (priority == NotificationPriority.HIGH) {
-                User user = userRepository.findById(Long.valueOf(event.getUserId())).orElse(null);
+//                User user = userRepository.findById(Long.valueOf(event.getUserId())).orElse(null);
+                Long userId = Long.valueOf(event.getUserId());
+//                if (user != null && user.getFcmToken() != null && !user.getFcmToken().isEmpty() && !"stub".equals(activeProfile)) {
+//                    if (firebaseMessaging != null) {
+//                        String dynamicTitle = getNotificationTitle(event.getType());
+//                        sendFCMMessage(user, dynamicTitle, message, null, event.getActionUrl(), event.getType());
+//                    } else {
+//                        logger.warn("⚠️ Skipping FCM: Firebase is not initialized.");
+//                    }
+//                }
+//
 
-                if (user != null && user.getFcmToken() != null && !user.getFcmToken().isEmpty() && !"stub".equals(activeProfile)) {
+                // ✅ NEW LIGHTWEIGHT WAY:
+                // ✅ OPTIMIZED: Fetch ONLY the token string
+                String fcmToken = userRepository.findFcmTokenById(userId);
+
+                if (fcmToken != null && !fcmToken.isEmpty() && !"stub".equals(activeProfile)) {
                     if (firebaseMessaging != null) {
                         String dynamicTitle = getNotificationTitle(event.getType());
-                        sendFCMMessage(user, dynamicTitle, message, null, event.getActionUrl(), event.getType());
+                        sendFCMMessage(fcmToken, dynamicTitle, message, null, event.getActionUrl(), event.getType(), userId);
                     } else {
                         logger.warn("⚠️ Skipping FCM: Firebase is not initialized.");
                     }
@@ -702,8 +714,10 @@ public class NotificationService {
 
                 if (user != null && user.getFcmToken() != null && !user.getFcmToken().isEmpty() && !"stub".equals(activeProfile)) {
                     if (firebaseMessaging != null) {
+                        // ✅ FIXED: Use the lightweight query here too
+                        String fcmToken = userRepository.findFcmTokenById(uId);
                         String dynamicTitle = getNotificationTitle(type);
-                        sendFCMMessage(user, dynamicTitle, message, actionType, redirectUrl, type);
+                        sendFCMMessage(fcmToken, dynamicTitle, message, actionType, redirectUrl, type, uId);
                     } else {
                         logger.warn("⚠️ Skipping FCM: Firebase is not initialized.");
                     }
@@ -720,8 +734,7 @@ public class NotificationService {
     // =========================================================================
     // 3. CORE FCM LOGIC
     // =========================================================================
-
-    private void sendFCMMessage(User user, String title, String body, String actionType, String redirectUrl, NotificationType type) {
+    private void sendFCMMessage(String fcmToken, String title, String body, String actionType, String redirectUrl, NotificationType type, Long userId) {
         try {
             String collapseKey = getGroupKey(type);
 
@@ -747,7 +760,7 @@ public class NotificationService {
                     .build();
 
             Message.Builder messageBuilder = Message.builder()
-                    .setToken(user.getFcmToken())
+                    .setToken(fcmToken) // 👈 Use the string directly
                     .setAndroidConfig(androidConfig)
                     .setApnsConfig(apnsConfig);
 
@@ -761,14 +774,18 @@ public class NotificationService {
             messageBuilder.putData("body", body);
 
             firebaseMessaging.send(messageBuilder.build());
-            logger.info("Sent FCM to user {}: {}", user.getId(), title);
+//            logger.info("Sent FCM to user {}: {}", user.getId(), title);
 
         } catch (FirebaseMessagingException e) {
             String errorCode = e.getMessagingErrorCode().toString();
             if (errorCode.equals("UNREGISTERED") || errorCode.equals("NOT_FOUND") || errorCode.equals("INVALID_ARGUMENT")) {
-                logger.warn("🚨 Token for user {} is dead. Removing it.", user.getId());
-                user.setFcmToken(null);
-                userRepository.save(user);
+                logger.warn("🚨 Token for user {} is dead. Removing it.", userId);
+                // ✅ FIXED: Direct DB update instead of fetching User entity
+                try {
+                    userRepository.clearFcmToken(userId);
+                } catch (Exception ex) {
+                    logger.error("Failed to clear dead token for user {}", userId, ex);
+                }
             } else {
                 logger.error("Failed to send FCM message: {}", e.getMessage());
             }
@@ -831,7 +848,6 @@ public class NotificationService {
     // =========================================================================
     // 5. EMAIL & SMS METHODS
     // =========================================================================
-
     @Async
     public void sendWelcomeEmail(String email, String accountNumber, String bankName, BigDecimal balance) {
         if ("stub".equals(activeProfile) || mailSender == null) return;
@@ -856,34 +872,6 @@ public class NotificationService {
             logger.error("Failed to send welcome email to {}: {}", email, e.getMessage());
         }
     }
-
-    @Async
-    public void sendWelcomeSms(String phoneNumber, String accountNumber, String bankName, BigDecimal balance) {
-        String smsContent = String.format(
-                "Moniewise: Wallet created. Acc/%s, Bank/%s. Fund via bank transfer or app.",
-                accountNumber, bankName
-        );
-
-        if ("stub".equals(activeProfile) || "dev".equals(activeProfile) ||
-                twilioAccountSid == null || twilioAuthToken == null ||
-                twilioAccountSid.equals("YOUR_TWILIO_ACCOUNT_SID") ||
-                twilioAuthToken.equals("YOUR_TWILIO_AUTH_TOKEN")) {
-            logger.info("[STUB] SMS to {}: {}", phoneNumber, smsContent);
-            return;
-        }
-
-        try {
-            new MessageCreator(
-                    new PhoneNumber(phoneNumber),
-                    new PhoneNumber(twilioPhoneNumber),
-                    smsContent
-            ).create();
-            logger.info("Sent welcome SMS to {}", phoneNumber);
-        } catch (Exception e) {
-            logger.error("Failed to send welcome SMS to {}: {}", phoneNumber, e.getMessage());
-        }
-    }
-
     @Async
     public void sendOtpEmail(String email, String otpCode) {
         if ("stub".equals(activeProfile) || mailSender == null) return;
@@ -907,35 +895,6 @@ public class NotificationService {
             logger.error("Failed to send OTP email to {}: {}", email, e.getMessage());
         }
     }
-
-    @Async
-    public void sendPasswordResetEmail(String to, String userName, String resetLink) {
-        if ("stub".equals(activeProfile) || mailSender == null) {
-            logger.info("[STUB] Would send Password Reset email to {}", to);
-            return;
-        }
-        try {
-            Context context = new Context();
-            context.setVariable("userName", userName);
-            context.setVariable("resetLink", resetLink);
-
-            String htmlContent = templateEngine.process("reset-password", context);
-
-            MimeMessage mimeMessage = mailSender.createMimeMessage();
-            MimeMessageHelper helper = new MimeMessageHelper(mimeMessage, true);
-
-            helper.setFrom(fromEmail);
-            helper.setTo(to);
-            helper.setSubject("🔒 Reset Your Wisemonie Password");
-            helper.setText(htmlContent, true);
-
-            mailSender.send(mimeMessage);
-            logger.info("✅ Sent password reset email to {}", to);
-        } catch (Exception e) {
-            logger.error("❌ Failed to send password reset email to {}: {}", to, e.getMessage());
-        }
-    }
-
     @Async
     public void sendPasswordResetOtp(String to, String userName, String otpCode) {
         if ("stub".equals(activeProfile) || mailSender == null) {

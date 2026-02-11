@@ -109,6 +109,7 @@
 
 package com.moniewise.moniewise_backend.entity;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.vladmihalcea.hibernate.type.json.JsonBinaryType;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -134,6 +135,7 @@ public class Envelope {
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "budget_id", nullable = false)
+    @JsonIgnore // 👈 ADD THIS. Prevents infinite loop (Envelope -> Budget -> Envelope...)
     private Budget budget;
 
     @Column(nullable = false)

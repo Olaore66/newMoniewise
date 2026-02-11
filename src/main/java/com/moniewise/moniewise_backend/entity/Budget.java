@@ -86,8 +86,12 @@
 
 package com.moniewise.moniewise_backend.entity;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.moniewise.moniewise_backend.enums.BudgetStatus;
-import lombok.*;
+import lombok.AllArgsConstructor;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import lombok.Setter;
 
 import javax.persistence.*;
 import java.math.BigDecimal;
@@ -162,6 +166,7 @@ public class Budget {
     private LocalDateTime lastTopupTime;
 
     @OneToMany(mappedBy = "budget", cascade = CascadeType.ALL, orphanRemoval = true)
+    @JsonIgnore // 👈 ADD THIS. Prevents loading envelopes when just listing budgets.
     private List<Envelope> envelopes = new ArrayList<>();
 
     // SAFE METHODS ONLY

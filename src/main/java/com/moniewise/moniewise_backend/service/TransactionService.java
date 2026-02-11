@@ -248,13 +248,16 @@
 //
 //}
 package com.moniewise.moniewise_backend.service;
+
 import com.moniewise.moniewise_backend.dto.response.TransactionDetailResponse;
 import com.moniewise.moniewise_backend.dto.response.TransactionListResponse;
-import com.moniewise.moniewise_backend.dto.response.TransactionMeta;
-import com.moniewise.moniewise_backend.entity.*;
-import com.moniewise.moniewise_backend.enums.TransactionCategory;
+import com.moniewise.moniewise_backend.entity.Budget;
+import com.moniewise.moniewise_backend.entity.Envelope;
+import com.moniewise.moniewise_backend.entity.TransactionLog;
 import com.moniewise.moniewise_backend.enums.TransactionType;
-import com.moniewise.moniewise_backend.repository.*;
+import com.moniewise.moniewise_backend.repository.BudgetRepository;
+import com.moniewise.moniewise_backend.repository.EnvelopeRepository;
+import com.moniewise.moniewise_backend.repository.TransactionLogRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -263,6 +266,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Map;
 import java.util.Set;
 
 import static com.moniewise.moniewise_backend.enums.TransactionType.*;
@@ -281,26 +287,40 @@ public class TransactionService {
     private BudgetRepository budgetRepo;
 
     private static final Set<TransactionType> USER_VISIBLE_TYPES = Set.of(
-            WALLET_DEPOSIT,
-            WALLET_TO_BUDGET,
-            BUDGET_ALLOCATION,
-            ENVELOPE_TO_ENVELOPE,
-            ENVELOPE_TO_EXTERNAL,
-            ENVELOPE_TO_USER,
-            USER_TO_ENVELOPE,
-            BUDGET_CREATION_FEE,
-            BUDGET_UNALLOCATED_REFUNDED,
-            STRICT_LOCK_ROLLBACK,
-            DISBURSEMENT_REFUNDED
-            // Add more as needed
+            WALLET_DEPOSIT, WALLET_TO_BUDGET, BUDGET_ALLOCATION, ENVELOPE_TO_ENVELOPE,
+            ENVELOPE_TO_EXTERNAL, ENVELOPE_TO_USER, USER_TO_ENVELOPE, BUDGET_CREATION_FEE,
+            BUDGET_UNALLOCATED_REFUNDED, STRICT_LOCK_ROLLBACK, DISBURSEMENT_REFUNDED
     );
 
+    // =========================================================================
+    // ✅ OPTIMIZED: Batch Fetching (Reduces DB calls from ~41 to 3)
+    // =========================================================================
     public Page<TransactionListResponse> getTransactionsForUser(Long userId, int page, int size) {
         size = Math.min(size, 100);
         Pageable pageable = PageRequest.of(page, size);
 
-        return transactionLogRepo.findUserVisibleTransactions(userId, USER_VISIBLE_TYPES, pageable)
-                .map(this::mapToListResponse);
+        // 1. Fetch the Page
+        Page<TransactionLog> transactionPage = transactionLogRepo.findUserVisibleTransactions(userId, USER_VISIBLE_TYPES, pageable);
+
+        // 2. Collect IDs to batch fetch (Prevent N+1 Problem)
+        Set<Long> envelopeIds = new HashSet<>();
+        transactionPage.getContent().forEach(t -> {
+            if (t.getSourceEnvelopeId() != null) envelopeIds.add(t.getSourceEnvelopeId());
+            if (t.getTargetEnvelopeId() != null) envelopeIds.add(t.getTargetEnvelopeId());
+        });
+
+        // 3. Batch Fetch Names into a Map (ID -> Name)
+        // Note: You need a repository method findByIdIn(Set<Long> ids) or similar,
+        // or just use findAllById and map it manually.
+        Map<Long, String> envelopeNames = new HashMap<>();
+        if (!envelopeIds.isEmpty()) {
+            envelopeRepo.findAllById(envelopeIds).forEach(e ->
+                    envelopeNames.put(e.getId(), e.getName())
+            );
+        }
+
+        // 4. Map to Response using the Memory Cache
+        return transactionPage.map(t -> mapToListResponse(t, envelopeNames));
     }
 
     public TransactionDetailResponse getTransactionDetail(Long transactionId, Long userId) {
@@ -314,9 +334,16 @@ public class TransactionService {
         return mapToDetailResponse(log);
     }
 
-    private TransactionListResponse mapToListResponse(TransactionLog t) {
-        String sourceName = getEnvelopeName(t.getSourceEnvelopeId());
-        String targetName = getEnvelopeName(t.getTargetEnvelopeId());
+    // Updated Signature to accept the Cache Map
+    private TransactionListResponse mapToListResponse(TransactionLog t, Map<Long, String> envelopeNameCache) {
+        // Use Cache or Default
+        String sourceName = t.getSourceEnvelopeId() != null
+                ? envelopeNameCache.getOrDefault(t.getSourceEnvelopeId(), "Unknown Envelope")
+                : "System";
+
+        String targetName = t.getTargetEnvelopeId() != null
+                ? envelopeNameCache.getOrDefault(t.getTargetEnvelopeId(), "Unknown Envelope")
+                : "System";
 
         // 1. CALCULATE DIRECTION & AMOUNT
         boolean isOutgoing = isOutgoing(t.getTransactionType(), t.getAmount());
@@ -341,7 +368,7 @@ public class TransactionService {
                 iconType = "USER";
                 break;
             case ENVELOPE_TO_EXTERNAL: // Bank Transfer
-                title = t.getDescription().replace("Transfer to ", ""); // Clean up description
+                title = (t.getDescription() != null) ? t.getDescription().replace("Transfer to ", "") : "Bank Transfer";
                 subtitle = "Bank Transfer";
                 iconType = "BANK";
                 break;
@@ -374,7 +401,7 @@ public class TransactionService {
                 title,
                 subtitle,
                 displayAmount,
-                null, // formattedAmount (let frontend handle currency symbol if you prefer)
+                null,
                 iconType,
                 direction,
                 path,
@@ -385,17 +412,19 @@ public class TransactionService {
 
     // Helper to format "ENVELOPE_TO_ENVELOPE" -> "Envelope To Envelope"
     private String formatEnumName(TransactionType type) {
+        if (type == null) return "Transaction";
         return type.name().charAt(0) + type.name().substring(1).toLowerCase().replace('_', ' ');
     }
 
-    // You need to implement this helper using UserRepository
     private String getCounterpartyName(TransactionLog t) {
         if(t.getDescription() != null && t.getDescription().contains("Transfer to ")) {
             return t.getDescription().replace("Transfer to ", "");
         }
-        return "MonieWise User";
+        return "Wisemonie User";
     }
+
     private TransactionDetailResponse mapToDetailResponse(TransactionLog t) {
+        // For detail view, single queries are fine (no N+1 issue here)
         String sourceName = getEnvelopeName(t.getSourceEnvelopeId());
         String targetName = getEnvelopeName(t.getTargetEnvelopeId());
         String budgetName = getBudgetName(t.getBudgetId());
@@ -447,33 +476,7 @@ public class TransactionService {
                 .orElse("Unknown Budget");
     }
 
-    private TransactionCategory determineCategory(TransactionType type) {
-        return switch (type) {
-            case WALLET_DEPOSIT,
-                    WALLET_DEDUCTION,
-                    BUDGET_ALLOCATION,
-                    BUDGET_UNALLOCATED_REFUNDED,
-                    BUDGET_COMPLETION_REFUND,
-                    ENVELOPE_TO_ENVELOPE,
-                    STRICT_LOCK_ROLLBACK,
-                    DISBURSEMENT_REFUNDED,
-                    BUDGET_CREATION_FEE,
-                    WALLET_TO_BUDGET -> TransactionCategory.INTERNAL;
-
-            case ENVELOPE_TO_EXTERNAL,
-                    WALLET_TO_EXTERNAL -> TransactionCategory.TO_EXTERNAL_BANK;
-
-            case USER_TO_USER,
-                    ENVELOPE_TO_USER,
-                    WALLET_TO_USER,
-                    USER_TO_ENVELOPE -> TransactionCategory.TO_MONIEWISE_USER;
-
-            default -> TransactionCategory.INTERNAL;
-        };
-    }
-
     private boolean isOutgoing(TransactionType type, BigDecimal amount) {
-        // Prefer sign of amount if meaningful
         if (amount != null && amount.compareTo(BigDecimal.ZERO) < 0) {
             return true;
         }

@@ -1839,17 +1839,6 @@ public class EnvelopeService {
                 TransactionType.ENVELOPE_TO_USER      // P2P Transfer
         );
 
-//        BigDecimal spentAmount = transactionLogRepository.findBySourceEnvelopeIdAndTimeRange(envelopeId, periodStart, periodEnd)
-//                .stream().filter(t -> {
-//                    String typeTxn = t.getTransactionType().toString().toUpperCase();
-//                    return List.of(
-//                            "ENVELOPE_TO_ENVELOPE",
-//                            "ENVELOPE_TO_EXTERNAL",
-//                            "ENVELOPE_TO_USER"
-//                    ).contains(typeTxn);
-//                })
-//                .map(TransactionLog::getAmount)
-//                .reduce(BigDecimal.ZERO, BigDecimal::add);
         // 4. 🚀 EXECUTE NUCLEAR QUERY (Now returns a POSITIVE total of spending)
         BigDecimal spentAmount = transactionLogRepository.calculateTotalSpent(
                 envelopeId,
@@ -1933,19 +1922,6 @@ public class EnvelopeService {
         }
     }
 
-    private void checkTimeWindow(LocalDateTime now, String timeStr, String typeName) {
-        try {
-            LocalTime startTime = LocalTime.parse(timeStr);
-            LocalTime endTime = startTime.plusHours(1);
-            LocalTime currentTime = now.toLocalTime();
-            if (currentTime.isBefore(startTime) || currentTime.isAfter(endTime)) {
-                throw new IllegalArgumentException(String.format("%s transfers only allowed between %s and %s", typeName, startTime, endTime));
-            }
-        } catch (DateTimeParseException e) {
-            throw new IllegalArgumentException("Invalid time format in envelope settings: " + timeStr);
-        }
-    }
-
     @Transactional(rollbackFor = Exception.class)
     public void transferToExternal(Long sourceId, BudgetController.ExternalAccount externalAccount, Double amountDouble, String email, String withdrawalReason) {
         BigDecimal amount = BigDecimal.valueOf(amountDouble);
@@ -2015,15 +1991,6 @@ public class EnvelopeService {
             );
             txn.setStatus(TransactionStatus.COMPLETED);
             transactionLogRepository.save(txn);
-//            notificationService.sendNotification(
-//                    user.getId().toString(),
-//                    "Sent ₦" + amount + " to " + resolvedName,
-//                    NotificationType.EXTERNAL_TRANSFER,
-//                    source.getBudget().getId(),
-//                    sourceId,
-//                    "VIEW_ENVELOPE",
-//                    "/envelopes/" + sourceId
-//            );
             // ✅ ADD NEW EVENT
             Map<String, Object> params = Map.of(
                     "amount", String.format("%,.2f", amount),
@@ -2121,12 +2088,6 @@ public class EnvelopeService {
 
         budgetLifeCycleManager.scheduleDynamicTasks(envelope);
 
-//        notificationService.sendNotification(
-//                budget.getUser().getId().toString(),
-//                String.format("Created envelope '%s' with ₦%.2f in budget '%s'.",
-//                        envelope.getName(), amount, budget.getName()),
-//                NotificationType.ENVELOPE_CREATED
-//        );
         // ✅ ADD NEW EVENT
         Map<String, Object> params = Map.of(
                 "amount", String.format("%,.2f", amount),
@@ -2161,12 +2122,6 @@ public class EnvelopeService {
         envelope.setRemainingAmount(getPeriodLimit(request.getConditions()));
         envelopeRepository.save(envelope);
 
-//        notificationService.sendNotification(
-//                envelope.getBudget().getUser().getId().toString(),
-//                String.format("Updated conditions for envelope '%s' in budget '%s'.",
-//                        envelope.getName(), envelope.getBudget().getName()),
-//                NotificationType.ENVELOPE_UPDATED
-//        );
         // ✅ ADD NEW EVENT
         Map<String, Object> params = Map.of(
                 "envelopeName", envelope.getName(),
@@ -2205,16 +2160,6 @@ public class EnvelopeService {
         pd.setProcessedAt(now);
         pendingDisbursementRepository.save(pd);
 
-//        notificationService.sendNotification(
-//                email,
-//                String.format("₦%.2f unlocked! You can now spend from your '%s' envelope.",
-//                        pd.getAmount(), envelope.getName()),
-//                NotificationType.DISBURSEMENT_SUCCESS,
-//                envelope.getBudget().getId(),
-//                envelope.getId(),
-//                "VIEW_ENVELOPE",
-//                "/envelopes/" + envelope.getId()
-//        );
         // ✅ ADD NEW EVENT
         Map<String, Object> params = Map.of(
                 "amount", String.format("%,.2f", pd.getAmount()),
@@ -2264,7 +2209,10 @@ public class EnvelopeService {
     }
 
     private EnvelopeResponse toResponse(Envelope envelope) {
+        // Optimization: Use the entity's stored value for speed.
+        // We only recalculate during specific events (transfers, scheduler).
         BigDecimal visibleBalance = getSpendableBalance(envelope);
+
         return new EnvelopeResponse(
                 envelope.getId(),
                 envelope.getBudget().getId(),
@@ -2273,9 +2221,14 @@ public class EnvelopeService {
                 visibleBalance,
                 envelope.getAmount(),
                 envelope.getTotalRemainingAmount(),
-                visibleBalance,
-                getPeriodLimit(envelope.getConditions()),
-                budgetService.getUsedThisPeriod(envelope),
+                visibleBalance, // Use visible balance for "current pocket"
+                getPeriodLimit(envelope.getConditions()), // Helper calculation (fast, no DB)
+
+                // 🛑 Optimization: Avoid calling external service inside loop if possible.
+                // If you MUST calculate usage, do it using entity data:
+                // Usage = Limit - Pocket (if positive)
+                getPeriodLimit(envelope.getConditions()).subtract(envelope.getRemainingAmount()).max(BigDecimal.ZERO),
+
                 envelope.getConditions(),
                 envelope.getCreatedAt(),
                 envelope.getLastDisbursedAt(),
@@ -2366,10 +2319,6 @@ public class EnvelopeService {
 
     public void triggerRecalculation(Envelope envelope) {
         recalculateTargetEnvelopeLimit(envelope, envelope.getBudget());
-    }
-
-    private BigDecimal getCurrentLimitValue(Envelope e) {
-        return (BigDecimal) e.getConditions().getOrDefault("limit_value", BigDecimal.ZERO);
     }
 
     private String getSafeName(User user) {

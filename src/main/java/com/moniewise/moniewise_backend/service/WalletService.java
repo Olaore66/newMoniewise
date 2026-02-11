@@ -87,7 +87,7 @@ public class WalletService {
                     sysUser.setEmail("revenue@moniewise.com");
 
                     Map<String, Object> profile = new HashMap<>();
-                    profile.put("name", "Moniewise Revenue");
+                    profile.put("name", "Wisemonie Revenue");
                     sysUser.setProfileData(profile);
 
                     sysUser.setPassword("SYSTEM_ACCOUNT_LOCKED");
