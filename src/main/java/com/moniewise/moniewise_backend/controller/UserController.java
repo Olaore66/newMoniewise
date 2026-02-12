@@ -1,20 +1,14 @@
 package com.moniewise.moniewise_backend.controller;
 
-import com.moniewise.moniewise_backend.dto.request.OtpGenerateRequest;
-import com.moniewise.moniewise_backend.dto.request.ProfileRequest;
-import com.moniewise.moniewise_backend.dto.request.TncRequest;
-import com.moniewise.moniewise_backend.dto.response.OtpResponse;
-import com.moniewise.moniewise_backend.dto.response.OtpVerifyRequest;
-import com.moniewise.moniewise_backend.dto.response.UserResponse;
-import com.moniewise.moniewise_backend.dto.response.UserSummaryResponse;
+import com.moniewise.moniewise_backend.dto.request.*;
+import com.moniewise.moniewise_backend.dto.response.*;
 import com.moniewise.moniewise_backend.entity.User;
 import com.moniewise.moniewise_backend.entity.Wallet;
-import com.moniewise.moniewise_backend.exception.OtpVerificationException;
 import com.moniewise.moniewise_backend.repository.UserRepository;
 import com.moniewise.moniewise_backend.repository.WalletRepository;
 import com.moniewise.moniewise_backend.service.OtpService;
 import com.moniewise.moniewise_backend.service.UserService;
-import org.springframework.beans.factory.annotation.Autowired;
+import lombok.RequiredArgsConstructor; // ✅ Added for cleaner code
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
@@ -29,53 +23,97 @@ import java.util.Map;
 
 @RestController
 @RequestMapping("/users")
+@RequiredArgsConstructor // ✅ Autowires everything automatically
 public class UserController {
 
-    @Autowired
-    private UserService userService;
+    private final UserService userService;
+    private final OtpService otpService;
+    private final UserRepository userRepository;
+    private final WalletRepository walletRepository;
 
-    @Autowired
-    private OtpService otpService;
-
-    @Autowired
-    private UserRepository userRepository;
-
-    @Autowired
-    private WalletRepository walletRepository;
-
-//    @GetMapping("/me")
-//    public ResponseEntity<UserDTO> getCurrentUser() {
-//        String email = SecurityContextHolder.getContext().getAuthentication().getName();
-//
-//        User user = userRepository.findByEmail(email)
-//                .orElseThrow(() -> new RuntimeException("User not found"));
-//        // Fetch wallet (might be null)
-//        Wallet wallet = walletRepository.findByUser(user).orElse(null);
-//        return ResponseEntity.ok(new UserDTO(user, wallet));
-//    }
-
+    // =========================================================================
+    // 1. GET CURRENT USER (Updated to ensure Profile Image is included)
+    // =========================================================================
     @GetMapping("/me")
-    public ResponseEntity<UserResponse> getCurrentUser() { // ✅ Return UserResponse
+    public ResponseEntity<UserResponse> getCurrentUser() {
         String email = SecurityContextHolder.getContext().getAuthentication().getName();
 
         User user = userRepository.findByEmail(email)
                 .orElseThrow(() -> new RuntimeException("User not found"));
 
-        // 1. Fetch Wallet (Explicitly handle null)
         Wallet wallet = walletRepository.findByUser(user).orElse(null);
 
-        // 2. Return Response (The Constructor handles the logic)
+        // ✅ UserResponse MUST include 'profileImageUrl' in its constructor/fields
         return ResponseEntity.ok(new UserResponse(user, wallet));
     }
+
+    // =========================================================================
+    // 2. UPLOAD PROFILE IMAGE (Returns New URL Immediately)
+    // =========================================================================
+    @PostMapping("/image")
+    public ResponseEntity<?> uploadProfileImage(
+            @RequestParam("file") MultipartFile file,
+            Authentication authentication
+    ) {
+        // 1. Get the User
+        String email = authentication.getName();
+        User user = userService.findByEmail(email);
+
+        // 2. Upload to Cloud & Save to DB
+        // (Your UserService handles the logic and returns the signed URL)
+        String imageUrl = userService.uploadProfileImage(user.getId(), file);
+
+        // 3. Return the URL so the Frontend can update state instantly
+        return ResponseEntity.ok(Map.of(
+                "status", "success",
+                "message", "Profile image updated successfully",
+                "imageUrl", imageUrl
+        ));
+    }
+
+    // =========================================================================
+    // 3. GET PROFILE IMAGE ONLY (Specific Endpoint)
+    // =========================================================================
+    @GetMapping("/image")
+    public ResponseEntity<?> getProfileImage(Authentication authentication) {
+        String email = authentication.getName();
+        User user = userService.findByEmail(email);
+
+        String imageUrl = user.getProfileImageUrl();
+
+        if (imageUrl == null) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(Map.of("message", "No profile image set"));
+        }
+
+        return ResponseEntity.ok(Map.of("imageUrl", imageUrl));
+    }
+
+    // =========================================================================
+    // 4. DELETE IMAGE
+    // =========================================================================
+    @DeleteMapping("/image")
+    public ResponseEntity<?> deleteProfileImage(Authentication authentication) {
+        String email = authentication.getName();
+        User user = userService.findByEmail(email);
+
+        userService.deleteProfileImage(user.getId());
+
+        return ResponseEntity.ok(Map.of(
+                "status", "success",
+                "message", "Profile image removed"
+        ));
+    }
+
+    // =========================================================================
+    // 5. OTHER EXISTING ENDPOINTS (Kept as is)
+    // =========================================================================
+
     @PostMapping("/otp/generate")
     public ResponseEntity<OtpResponse> generateOtp(@Valid @RequestBody OtpGenerateRequest request) {
-        // Find user by email/phone
         User user = userRepository.findByEmail(request.getEmailOrPhone())
                 .orElseGet(() -> userRepository.findByPhone(request.getEmailOrPhone())
                         .orElseThrow(() -> new RuntimeException("User not found")));
-        // TODO: For future Twilio integration
-        // Send OTP via Twilio SMS API: POST /v1/Messages
-        // TwilioClient.sendSms(user.getPhone(), "Your Moniewise OTP is: " + otpCode);
 
         String otpCode = otpService.generateOtp(user.getId());
         return ResponseEntity.ok(new OtpResponse("OTP generated: " + otpCode));
@@ -89,7 +127,8 @@ public class UserController {
                             .orElseThrow(() -> new RuntimeException("User not found")));
 
             if (!otpService.verifyOtp(user.getId(), request.getOtpCode())) {
-                throw new OtpVerificationException("Invalid OTP");
+                // Using RuntimeException here for simplicity based on your snippet
+                throw new RuntimeException("Invalid OTP");
             }
 
             user.setVerified(true);
@@ -97,20 +136,18 @@ public class UserController {
             otpService.clearOtp(user.getId());
 
             return ResponseEntity.ok(Map.of("message", "OTP verified successfully"));
-        } catch (OtpVerificationException e) {
+        } catch (Exception e) {
             return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                     .body(Map.of("error", e.getMessage()));
         }
     }
 
-    // UserController
     @PostMapping("/profile")
     public ResponseEntity<?> updateProfile(@RequestBody ProfileRequest request, Authentication authentication) {
         try {
             String email = authentication.getName();
-            User updatedUser = userService.updateProfile(email, request);
+            userService.updateProfile(email, request);
             return ResponseEntity.ok(Map.of("message", "Profile updated successfully"));
-
         } catch (Exception e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }
@@ -125,12 +162,14 @@ public class UserController {
     @GetMapping("/search")
     public ResponseEntity<List<UserSummaryResponse>> searchUsers(
             @RequestParam String query,
-            @AuthenticationPrincipal String email
+            @AuthenticationPrincipal String email // Note: Ensure your security config populates this
     ) {
+        // Fallback if AuthenticationPrincipal is null (depends on config)
+        if (email == null) {
+            email = SecurityContextHolder.getContext().getAuthentication().getName();
+        }
         return ResponseEntity.ok(userService.searchUsers(query, email));
     }
-
-    // Inside UserController.java
 
     @PostMapping("/fcm-token")
     public ResponseEntity<?> updateFcmToken(@RequestBody Map<String, String> payload, Authentication authentication) {
@@ -138,100 +177,8 @@ public class UserController {
         if (token == null || token.isEmpty()) {
             return ResponseEntity.badRequest().body(Map.of("error", "Token is required"));
         }
-
         String email = authentication.getName();
         userService.updateFcmToken(email, token);
-
         return ResponseEntity.ok(Map.of("message", "FCM token updated successfully"));
     }
-
-//    ============ PROFILE PICTURE ==============
-
-    // 1. UPLOAD or UPDATE IMAGE (POST)
-    // Key: "file", Value: [Select Image]
-//    @PostMapping("/image")
-//    public ResponseEntity<?> uploadProfileImage(
-//            @RequestParam("file") MultipartFile file,
-//            Authentication authentication
-//    ) {
-//        String email = authentication.getName();
-//        // Assuming you have a helper to get ID from email, or fetch user first
-//        // For now, let's fetch user to get ID
-//        // (Optimized: Your UserDetails might already have the ID)
-//        User user = userService.findByEmail(email);
-//
-//        userService.uploadProfileImage(user.getId(), file);
-//
-//        return ResponseEntity.ok(Map.of(
-//                "status", "success",
-//                "message", "Profile image updated successfully"
-//        ));
-//    }
-//    @GetMapping("/image")
-//    public ResponseEntity<byte[]> getProfileImage(Authentication authentication) {
-//        String email = authentication.getName();
-//        User user = userService.findByEmail(email);
-//
-//        byte[] imageData = userService.getProfileImage(user.getId());
-//
-//        if (imageData == null || imageData.length == 0) {
-//            return ResponseEntity.notFound().build(); // Return 404 if no image
-//        }
-//
-//        return ResponseEntity.ok()
-//                .contentType(MediaType.IMAGE_JPEG) // We assume JPEG/PNG. Browsers handle both fine.
-//                .body(imageData);
-//    }
-
-    // 1. UPLOAD IMAGE
-    @PostMapping("/image")
-    public ResponseEntity<?> uploadProfileImage(
-            @RequestParam("file") MultipartFile file,
-            Authentication authentication
-    ) {
-        String email = authentication.getName();
-        User user = userService.findByEmail(email);
-
-        // Call service and get the new URL
-        String imageUrl = userService.uploadProfileImage(user.getId(), file);
-
-        return ResponseEntity.ok(Map.of(
-                "status", "success",
-                "message", "Profile image updated successfully",
-                "imageUrl", imageUrl // Return URL to frontend immediately
-        ));
-    }
-
-    // 2. GET IMAGE (Simpler now)
-    // You might not even need this endpoint if the Frontend already has the URL
-    // from the /me or /profile endpoints.
-    @GetMapping("/image")
-    public ResponseEntity<?> getProfileImage(Authentication authentication) {
-        String email = authentication.getName();
-        User user = userService.findByEmail(email);
-
-        String imageUrl = user.getProfileImageUrl();
-
-        if (imageUrl == null) {
-            return ResponseEntity.notFound().build();
-        }
-
-        // Just return the URL string
-        return ResponseEntity.ok(Map.of("imageUrl", imageUrl));
-    }
-
-    // 3. DELETE IMAGE (DELETE)
-    @DeleteMapping("/image")
-    public ResponseEntity<?> deleteProfileImage(Authentication authentication) {
-        String email = authentication.getName();
-        User user = userService.findByEmail(email);
-
-        userService.deleteProfileImage(user.getId());
-
-        return ResponseEntity.ok(Map.of(
-                "status", "success",
-                "message", "Profile image removed"
-        ));
-    }
-
 }

@@ -119,54 +119,6 @@ public class UserService implements UserDetailsService {
         return userRepository.findByEmailOrPhone(input, input);
     }
 
-    //================= SEARCH FOR USERS ===========================
-//    public List<UserSummaryResponse> searchUsers(String query, String currentEmail) {
-//        if (query == null || query.trim().isEmpty()) {
-//            return Collections.emptyList();
-//        }
-//
-//        return userRepository.searchUsers(query.trim())
-//                .stream()
-//                // 🛑 FIX: Use ignoreCase to ensure strict exclusion of self
-//                .filter(u -> !u.getEmail().equalsIgnoreCase(currentEmail))
-//                .map(u -> {
-//                    // 1. Generate Handle
-//                    String handle = "@" + u.getEmail().split("@")[0];
-//
-//                    // 2. Try to get Real Name
-//                    String displayName = "Unknown";
-//                    if (u.getProfileData() != null) {
-//                        Object nameObj = u.getProfileData().getOrDefault("fullName", u.getProfileData().get("name"));
-//                        if (nameObj != null && !nameObj.toString().trim().isEmpty()) {
-//                            displayName = nameObj.toString();
-//                        }
-//                    }
-//
-//                    // 3. Fallback: Use Handle if name is missing
-//                    if (displayName.equals("Unknown")) {
-//                        String cleanName = handle.substring(1);
-//                        displayName = cleanName.substring(0, 1).toUpperCase() + cleanName.substring(1);
-//                    }
-//
-//                    return new UserSummaryResponse(
-//                            displayName,
-//                            handle,
-//                            u.getProfileImageUrl(),
-//                            u.getEmail()
-//                    );
-//                })
-//                .limit(10)
-//                .collect(Collectors.toList());
-//    }
-//==============================================================
-
-    //==============================================================
-
-
-
-
-    // ================== TRANSACTION PIN MANAGEMENT ==================
-
     /**
      * Check if the user has a PIN set.
      */

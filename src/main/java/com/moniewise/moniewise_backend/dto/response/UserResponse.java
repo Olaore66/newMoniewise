@@ -23,6 +23,7 @@ public class UserResponse { // Renamed to UserResponse to avoid confusion
     private Instant lastLogin;
     private Map<String, Object> profileData;
     private boolean isVerified;
+    private String profileImageUrl;
     
     // ✅ The Contract: Always return a Wallet object, never null.
     private WalletInfo wallet;
@@ -36,6 +37,7 @@ public class UserResponse { // Renamed to UserResponse to avoid confusion
         this.lastLogin = user.getLastLogin();
         this.profileData = user.getProfileData();
         this.isVerified = user.isVerified();
+        this.profileImageUrl = user.getProfileImageUrl();
 
         // 🛡️ Production Logic: Handle "Empty Shell" Users
         if (walletEntity != null) {
