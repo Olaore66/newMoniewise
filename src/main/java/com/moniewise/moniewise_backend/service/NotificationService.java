@@ -738,6 +738,14 @@ public class NotificationService {
         try {
             String collapseKey = getGroupKey(type);
 
+            // 1. Define the Visible Notification (For System Tray)
+            // ✅ THIS IS THE MISSING PIECE
+            com.google.firebase.messaging.Notification notificationPayload =
+                    com.google.firebase.messaging.Notification.builder()
+                            .setTitle(title)
+                            .setBody(body)
+                            .build();
+
             AndroidConfig androidConfig = AndroidConfig.builder()
                     .setTtl(86400 * 1000) // 24 hours
                     .setPriority(AndroidConfig.Priority.HIGH)
@@ -745,6 +753,8 @@ public class NotificationService {
                             .setChannelId("wisemonie_alerts_v1") // Must match Flutter Channel
                             .setSound("wisemonie")
                             .setDefaultSound(false)
+                            .setTitle(title)
+                            .setBody(body)
                             .setPriority(AndroidNotification.Priority.MAX)
                             .setVisibility(AndroidNotification.Visibility.PUBLIC)
                             .setClickAction("FLUTTER_NOTIFICATION_CLICK")
@@ -761,6 +771,7 @@ public class NotificationService {
 
             Message.Builder messageBuilder = Message.builder()
                     .setToken(fcmToken) // 👈 Use the string directly
+                    .setNotification(notificationPayload)
                     .setAndroidConfig(androidConfig)
                     .setApnsConfig(apnsConfig);
 
