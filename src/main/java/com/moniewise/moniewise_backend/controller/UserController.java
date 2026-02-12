@@ -181,4 +181,15 @@ public class UserController {
         userService.updateFcmToken(email, token);
         return ResponseEntity.ok(Map.of("message", "FCM token updated successfully"));
     }
+
+    // =========================================================================
+    // 6. GET RECENT BUDGETS (1 Active, 1 Completed)
+    // =========================================================================
+    @GetMapping("/budgets/recent")
+    public ResponseEntity<?> getRecentBudgets(Authentication authentication) {
+        String email = authentication.getName();
+        Map<String, Object> result = userService.getMostRecentBudgets(email);
+        return ResponseEntity.ok(result);
+    }
 }
+

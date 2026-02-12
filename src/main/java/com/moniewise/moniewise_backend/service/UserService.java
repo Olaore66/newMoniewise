@@ -6,11 +6,10 @@ import com.google.firebase.cloud.StorageClient;
 import com.moniewise.moniewise_backend.dto.request.ProfileRequest;
 import com.moniewise.moniewise_backend.dto.response.SignupResponse;
 import com.moniewise.moniewise_backend.dto.response.UserSummaryResponse;
-import com.moniewise.moniewise_backend.entity.PasswordResetToken;
-import com.moniewise.moniewise_backend.entity.User;
-import com.moniewise.moniewise_backend.entity.UserSummary;
-import com.moniewise.moniewise_backend.entity.Wallet;
+import com.moniewise.moniewise_backend.entity.*;
+import com.moniewise.moniewise_backend.enums.BudgetStatus;
 import com.moniewise.moniewise_backend.enums.Role;
+import com.moniewise.moniewise_backend.repository.BudgetRepository;
 import com.moniewise.moniewise_backend.repository.PasswordResetTokenRepository;
 import com.moniewise.moniewise_backend.repository.UserRepository;
 import com.moniewise.moniewise_backend.repository.WalletRepository;
@@ -52,7 +51,9 @@ public class UserService implements UserDetailsService {
     // Add to class dependencies
     private final NotificationService notificationService;
 
-    public UserService(UserRepository userRepository, PasswordEncoder passwordEncoder, WalletService walletService, WalletRepository walletRepository, WalletService walletService1, OtpService otpService, PasswordResetTokenRepository passwordResetTokenRepository, NotificationService notificationService) {
+    private final BudgetRepository budgetRepository;
+
+    public UserService(UserRepository userRepository, PasswordEncoder passwordEncoder, WalletService walletService, WalletRepository walletRepository, WalletService walletService1, OtpService otpService, PasswordResetTokenRepository passwordResetTokenRepository, NotificationService notificationService, BudgetRepository budgetRepository) {
         this.userRepository = userRepository;
         this.passwordEncoder = passwordEncoder; // No link to SecurityConfig
         this.walletRepository = walletRepository;
@@ -60,6 +61,7 @@ public class UserService implements UserDetailsService {
         this.otpService = otpService;
         this.passwordResetTokenRepository = passwordResetTokenRepository;
         this.notificationService = notificationService;
+        this.budgetRepository = budgetRepository;
     }
 
     @Transactional
@@ -498,6 +500,47 @@ public class UserService implements UserDetailsService {
 
         userRepository.save(user);
         logger.info("❌ Soft-deleted user account: " + email);
+    }
+
+    // ==============================================================
+    // ✅ GET MOST RECENT BUDGETS (Active & Completed)
+    // ==============================================================
+    @Transactional(readOnly = true)
+    public Map<String, Object> getMostRecentBudgets(String email) {
+        User user = findByEmail(email);
+
+        // 1. Fetch Most Recent Active
+        Optional<Budget> activeOpt = budgetRepository
+                .findTopByUserIdAndStatusOrderByCreatedAtDesc(user.getId(), BudgetStatus.ACTIVE);
+
+        // 2. Fetch Most Recent Completed
+        Optional<Budget> completedOpt = budgetRepository
+                .findTopByUserIdAndStatusOrderByCreatedAtDesc(user.getId(), BudgetStatus.COMPLETED);
+
+        // 3. Construct Response
+        Map<String, Object> response = new HashMap<>();
+
+        // We map manually or use a helper to avoid Infinite Recursion (User -> Budget -> User)
+        response.put("active", activeOpt.map(this::mapBudgetToSummary).orElse(null));
+        response.put("completed", completedOpt.map(this::mapBudgetToSummary).orElse(null));
+
+        return response;
+    }
+
+    // Helper to prevent infinite JSON recursion / loading heavy relationships
+    private Map<String, Object> mapBudgetToSummary(Budget budget) {
+        Map<String, Object> summary = new HashMap<>();
+        summary.put("id", budget.getId());
+        summary.put("name", budget.getName());
+        summary.put("totalAmount", budget.getTotalAmount());
+        summary.put("allocatedAmount", budget.getAllocatedAmount());
+        summary.put("startDate", budget.getStartDate());
+        summary.put("endDate", budget.getEndDate());
+        summary.put("status", budget.getStatus());
+        summary.put("createdAt", budget.getCreatedAt());
+        // Add envelope count or summary if needed, but keep it light
+        summary.put("envelopeCount", budget.getEnvelopes() != null ? budget.getEnvelopes().size() : 0);
+        return summary;
     }
 
 

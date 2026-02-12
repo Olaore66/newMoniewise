@@ -36,4 +36,9 @@ public interface BudgetRepository extends JpaRepository<Budget, Long> {
 
     // ✅ NEW: Batch Processing for Expired Budgets
     Page<Budget> findByStatusAndEndDateLessThanEqual(BudgetStatus status, LocalDate endDate, Pageable pageable);
+
+    // ... existing imports
+
+    // ✅ NEW: Fetch the single most recent budget by status
+    Optional<Budget> findTopByUserIdAndStatusOrderByCreatedAtDesc(Long userId, BudgetStatus status);
 }
