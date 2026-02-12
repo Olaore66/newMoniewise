@@ -116,7 +116,7 @@ public class User {
 //    }
 
     // 2. ENSURE this exists (You already have it) 👇
-    @Column(name = "profile_image_url")
+    @Column(name = "profile_image_url", columnDefinition = "TEXT")
     private String profileImageUrl;
 
     // For JwtUtil compatibility (pass email as token subject)
