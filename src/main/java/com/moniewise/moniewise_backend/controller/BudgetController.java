@@ -2,10 +2,8 @@ package com.moniewise.moniewise_backend.controller;
 
 import com.moniewise.moniewise_backend.dto.request.BudgetRequest;
 import com.moniewise.moniewise_backend.dto.request.LockRequest;
-import com.moniewise.moniewise_backend.dto.request.SpendEnvelopeRequest;
 import com.moniewise.moniewise_backend.dto.response.BudgetResponse;
 import com.moniewise.moniewise_backend.dto.response.EnvelopeResponse;
-
 import com.moniewise.moniewise_backend.entity.ScheduledTask;
 import com.moniewise.moniewise_backend.entity.User;
 import com.moniewise.moniewise_backend.exception.TncAcceptanceRequiredException;
@@ -31,7 +29,10 @@ import java.time.ZoneOffset;
 import java.time.format.DateTimeParseException;
 import java.time.format.TextStyle;
 import java.time.temporal.ChronoUnit;
-import java.util.*;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 @RestController
@@ -93,7 +94,6 @@ public class BudgetController {
         return ResponseEntity.ok(budgets);
     }
 
-    // New: GET /budgets/{budgetId}
     @GetMapping("/{budgetId}")
     public ResponseEntity<?> getBudgetById(@PathVariable Long budgetId, Authentication authentication) {
         try {
@@ -249,8 +249,6 @@ public class BudgetController {
         }
     }
 
-
-    // New endpoint for ActiveBudgetScreen
     @GetMapping("/user/{userId}")
     public ResponseEntity<List<Map<String, Object>>> getUserBudgets(@PathVariable Long userId, Authentication authentication) {
         try {

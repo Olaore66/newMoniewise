@@ -750,7 +750,7 @@ public class NotificationService {
                     .setTtl(86400 * 1000) // 24 hours
                     .setPriority(AndroidConfig.Priority.HIGH)
                     .setNotification(AndroidNotification.builder()
-                            .setChannelId("wisemonie_alerts_v1") // Must match Flutter Channel
+                            .setChannelId("wisemonie_alerts_v2") // Must match Flutter Channel
                             .setSound("wisemonie")
                             .setDefaultSound(false)
                             .setTitle(title)
