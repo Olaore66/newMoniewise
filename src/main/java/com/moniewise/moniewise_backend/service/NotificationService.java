@@ -655,7 +655,18 @@ public class NotificationService {
     private String generateMessage(NotificationType type, Map<String, Object> params) {
         if (params == null || params.isEmpty()) return "New notification received";
 
+
+
         return switch (type) {
+            // ── Credit / Money In ────────────────────────────────────────────────
+            case WALLET_FUNDED,
+                    WALLET_DEPOSIT,
+                    ENVELOPE_TO_WALLET -> String.format(
+                    "Credit Alert: ₦%s added to your wallet%s",
+                    formatAmount(params.getOrDefault("amount", "0")),
+                    optionalPart(" • From: %s", params.get("sourceName"))
+            );
+
             case ENVELOPE_TRANSFER -> String.format("Moved ₦%s. %s Remaining: ₦%s.",
                     params.getOrDefault("amount", "0"), params.getOrDefault("period", ""), params.getOrDefault("remaining", "0"));
 
@@ -670,6 +681,27 @@ public class NotificationService {
 
             default -> "System Update: Action completed successfully.";
         };
+    }
+
+    /**
+     * Helper to format amount consistently (₦1,234.00)
+     */
+    private String formatAmount(Object value) {
+        try {
+            BigDecimal amount = new BigDecimal(value.toString());
+            return String.format("%,.2f", amount);
+        } catch (Exception e) {
+            return value.toString();
+        }
+    }
+
+    /**
+     * Helper to add optional " • From: ..." part only if value exists
+     */
+    private String optionalPart(String format, Object value) {
+        return value != null && !value.toString().trim().isEmpty()
+                ? String.format(" • " + format, value)
+                : "";
     }
 
     // =========================================================================
