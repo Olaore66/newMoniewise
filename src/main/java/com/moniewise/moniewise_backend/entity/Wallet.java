@@ -2,15 +2,14 @@ package com.moniewise.moniewise_backend.entity;
 
 
 import com.moniewise.moniewise_backend.enums.WalletStatus;
-import lombok.Getter;
-import lombok.Setter;
-import lombok.NoArgsConstructor;
 import lombok.AllArgsConstructor;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import lombok.Setter;
 import org.springframework.data.jpa.convert.threeten.Jsr310JpaConverters;
 
 import javax.persistence.*;
 import java.math.BigDecimal;
-import java.time.Instant;
 import java.time.LocalDateTime;
 
 @Entity
@@ -23,10 +22,6 @@ public class Wallet {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
-
-//    @OneToOne
-//    @JoinColumn(name = "user_id", nullable = false)
-//    private User userId;
 
     @OneToOne
     @JoinColumn(name = "user_id", nullable = false)

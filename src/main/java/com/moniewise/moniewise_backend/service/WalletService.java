@@ -18,7 +18,9 @@ import com.moniewise.moniewise_backend.repository.WalletRepository;
 import com.moniewise.moniewise_backend.thirdParty.PaymentGateway;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -50,6 +52,10 @@ public class WalletService {
     private final PaymentProvider paymentProvider;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
+
+    @Autowired
+    @Lazy // Prevents Circular Dependency
+    private WalletService self; // 👈 Inject yourself
 
     public WalletService(WalletRepository walletRepository,
                          TransactionLogRepository transactionLogRepository,
@@ -381,7 +387,7 @@ public class WalletService {
 
             // 2. ⚡ ATOMIC TRANSACTION (Fast DB Write)
             // We call a separate private method to handle the DB lock strictly
-            processSuccessfulFunding(email, amountPaid, transactionReference, paymentDescription, transactionTime);
+            this.processSuccessfulFunding(email, amountPaid, transactionReference, paymentDescription, transactionTime);
 
         } catch (Exception e) {
             logger.error("❌ WEBHOOK CRASHED: ", e);
@@ -451,36 +457,89 @@ public class WalletService {
             );
         });
     }
-    @Transactional(rollbackFor = Exception.class)
+//    @Transactional(rollbackFor = Exception.class)
+//    public void withdrawToBank(Long userId, WithdrawalRequest request) {
+//        // 1. Basic Validation
+//        if (request.getAmount().compareTo(BigDecimal.ZERO) <= 0) {
+//            throw new IllegalArgumentException("Withdrawal amount must be positive");
+//        }
+//
+//        // 2. Fetch Wallet
+//        Wallet wallet = walletRepository.findByUserId(userId)
+//                .orElseThrow(() -> new EntityNotFoundException("Wallet not found"));
+//
+//        // 3. Check Funds (Main Wallet only, ignores Envelopes)
+//        if (wallet.getBalance().compareTo(request.getAmount()) < 0) {
+//            throw new IllegalArgumentException("Insufficient funds in wallet. Available: ₦" + wallet.getBalance());
+//        }
+//
+//        // 4. (Optional) Verify Transaction PIN
+//        // if (!passwordEncoder.matches(request.getPassword(), user.getTransactionPin())) { ... }
+//
+//        // 5. Deduct Balance (The Debit)
+//        BigDecimal newBalance = wallet.getBalance().subtract(request.getAmount());
+//        wallet.setBalance(newBalance);
+//        walletRepository.save(wallet);
+//
+//        // 6. Generate Reference
+//        String reference = "WTH-" + System.currentTimeMillis() + "-" + userId;
+//
+//        // 7. Initiate Transfer via Payment Provider
+//        try {
+//            // This is the same provider you used in EnvelopeService
+//            paymentProvider.initiateTransfer(
+//                    request.getBankCode(),
+//                    request.getAccountNumber(),
+//                    request.getAccountName(),
+//                    request.getAmount(),
+//                    reference,
+//                    "Wallet Withdrawal"
+//            );
+//        } catch (Exception e) {
+//            // CRITICAL: If the bank transfer fails, @Transactional will rollback the balance deduction automatically.
+//            logger.error("Withdrawal failed for user {}: {}", userId, e.getMessage());
+//            throw new RuntimeException("Bank transfer failed: " + e.getMessage());
+//        }
+//
+//        // 8. Log the Transaction
+//        TransactionLog log = new TransactionLog();
+//        log.setUserId(userId);
+//        log.setBudgetId(null); // Not related to a budget
+//        log.setSourceEnvelopeId(null); // Not related to an envelope
+//        log.setExternalAccountId(request.getAccountNumber());
+//        log.setAmount(request.getAmount().negate()); // Negative to show money leaving
+//        log.setFee(BigDecimal.ZERO); // Add fee logic here if needed (e.g. N10)
+//        log.setTransactionType(TransactionType.WALLET_WITHDRAWAL); // Ensure this Enum exists!
+//        log.setReference(reference);
+//        log.setStatus(TransactionStatus.COMPLETED);
+//        log.setDescription("Withdrawal to " + request.getAccountName());
+//        log.setCreatedAt(LocalDateTime.now());
+//
+//        transactionLogRepository.save(log);
+//
+//        // 9. Send Notification
+//        notificationService.sendNotification(
+//                userId.toString(),
+//                String.format("Debit Alert: ₦%.2f withdrawn to %s.", request.getAmount(), request.getAccountName()),
+//                NotificationType.DEBIT_ALERT,
+//                null, null, "VIEW_WALLET", "/dashboard"
+//        );
+//    }
+
+    // NOTE: This method is NOT @Transactional at the top level
     public void withdrawToBank(Long userId, WithdrawalRequest request) {
         // 1. Basic Validation
         if (request.getAmount().compareTo(BigDecimal.ZERO) <= 0) {
-            throw new IllegalArgumentException("Withdrawal amount must be positive");
+            throw new IllegalArgumentException("Invalid amount");
         }
 
-        // 2. Fetch Wallet
-        Wallet wallet = walletRepository.findByUserId(userId)
-                .orElseThrow(() -> new EntityNotFoundException("Wallet not found"));
-
-        // 3. Check Funds (Main Wallet only, ignores Envelopes)
-        if (wallet.getBalance().compareTo(request.getAmount()) < 0) {
-            throw new IllegalArgumentException("Insufficient funds in wallet. Available: ₦" + wallet.getBalance());
-        }
-
-        // 4. (Optional) Verify Transaction PIN
-        // if (!passwordEncoder.matches(request.getPassword(), user.getTransactionPin())) { ... }
-
-        // 5. Deduct Balance (The Debit)
-        BigDecimal newBalance = wallet.getBalance().subtract(request.getAmount());
-        wallet.setBalance(newBalance);
-        walletRepository.save(wallet);
-
-        // 6. Generate Reference
+        // 2. 🔒 DB LOCK: Deduct Balance First (Pessimistic Locking)
+        // We do this in a small transaction to ensure they have funds
         String reference = "WTH-" + System.currentTimeMillis() + "-" + userId;
+        debitWalletForWithdrawal(userId, request.getAmount());
 
-        // 7. Initiate Transfer via Payment Provider
+        // 3. 🌐 EXTERNAL API CALL (Slow) - No DB lock here!
         try {
-            // This is the same provider you used in EnvelopeService
             paymentProvider.initiateTransfer(
                     request.getBankCode(),
                     request.getAccountNumber(),
@@ -489,34 +548,63 @@ public class WalletService {
                     reference,
                     "Wallet Withdrawal"
             );
-        } catch (Exception e) {
-            // CRITICAL: If the bank transfer fails, @Transactional will rollback the balance deduction automatically.
-            logger.error("Withdrawal failed for user {}: {}", userId, e.getMessage());
-            throw new RuntimeException("Bank transfer failed: " + e.getMessage());
-        }
 
-        // 8. Log the Transaction
+            // 4. ✅ Success: Log it
+            logWithdrawal(userId, request, reference, TransactionStatus.COMPLETED);
+
+        } catch (Exception e) {
+            logger.error("Withdrawal API Failed: {}", e.getMessage());
+
+            // 5. ↩️ FAILURE: Refund the money (Compensation Transaction)
+            refundFailedWithdrawal(userId, request.getAmount());
+
+            // Log as failed
+            logWithdrawal(userId, request, reference, TransactionStatus.FAILED);
+            throw new RuntimeException("Transfer failed, funds refunded.");
+        }
+    }
+
+    @Transactional
+    public void debitWalletForWithdrawal(Long userId, BigDecimal amount) {
+        Wallet wallet = walletRepository.findByUserId(userId)
+                .orElseThrow(() -> new EntityNotFoundException("Wallet not found"));
+
+        if (wallet.getBalance().compareTo(amount) < 0) {
+            throw new IllegalArgumentException("Insufficient funds");
+        }
+        wallet.setBalance(wallet.getBalance().subtract(amount));
+        walletRepository.save(wallet);
+    }
+
+    @Transactional
+    public void refundFailedWithdrawal(Long userId, BigDecimal amount) {
+        Wallet wallet = walletRepository.findByUserId(userId).orElseThrow();
+        wallet.setBalance(wallet.getBalance().add(amount));
+        walletRepository.save(wallet);
+    }
+
+    // Add this to the bottom of WalletService.java
+
+    private void logWithdrawal(Long userId, WithdrawalRequest request, String reference, TransactionStatus status) {
         TransactionLog log = new TransactionLog();
         log.setUserId(userId);
-        log.setBudgetId(null); // Not related to a budget
-        log.setSourceEnvelopeId(null); // Not related to an envelope
-        log.setExternalAccountId(request.getAccountNumber());
+        log.setBudgetId(null);
         log.setAmount(request.getAmount().negate()); // Negative to show money leaving
-        log.setFee(BigDecimal.ZERO); // Add fee logic here if needed (e.g. N10)
-        log.setTransactionType(TransactionType.WALLET_WITHDRAWAL); // Ensure this Enum exists!
+        log.setFee(BigDecimal.ZERO); // Add fee logic here if needed
+
+        // Ensure you have this Enum value, or use TransactionType.WALLET_DEDUCTION
+        log.setTransactionType(TransactionType.WALLET_WITHDRAWAL);
+
         log.setReference(reference);
-        log.setStatus(TransactionStatus.COMPLETED);
+        log.setStatus(status);
         log.setDescription("Withdrawal to " + request.getAccountName());
         log.setCreatedAt(LocalDateTime.now());
 
-        transactionLogRepository.save(log);
+        // Optional: specific fields if your entity supports them
+        // log.setExternalAccountNumber(request.getAccountNumber());
+        // log.setBankCode(request.getBankCode());
 
-        // 9. Send Notification
-        notificationService.sendNotification(
-                userId.toString(),
-                String.format("Debit Alert: ₦%.2f withdrawn to %s.", request.getAmount(), request.getAccountName()),
-                NotificationType.DEBIT_ALERT,
-                null, null, "VIEW_WALLET", "/dashboard"
-        );
+        transactionLogRepository.save(log);
     }
 }
+
