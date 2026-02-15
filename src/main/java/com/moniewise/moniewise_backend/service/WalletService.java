@@ -25,13 +25,8 @@ import org.springframework.transaction.annotation.Transactional;
 import javax.annotation.PostConstruct;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
-
 import java.time.format.DateTimeFormatter;
-import java.util.Locale;
+import java.util.*;
 import java.util.concurrent.CompletableFuture;
 
 import static com.moniewise.moniewise_backend.enums.TransactionType.WALLET_DEDUCTION;
@@ -265,105 +260,197 @@ public class WalletService {
 
     // 🔴 THIS IS THE FIXED METHOD 🔴
 
-    @Transactional
+//    @Transactional
+//    public void fundWalletFromWebhook(String payloadJson) {
+//        try {
+//            JsonNode root = objectMapper.readTree(payloadJson);
+//            String eventType = root.path("eventType").asText();
+//
+//            if ("SUCCESSFUL_TRANSACTION".equals(eventType)) { //
+//                JsonNode data = root.path("eventData");
+//
+//                String email = data.path("customer").path("email").asText();
+//                BigDecimal amountPaid = data.path("amountPaid").decimalValue();
+//                String transactionReference = data.path("transactionReference").asText();
+//                String paymentDescription = data.path("paymentDescription").asText(); //
+//
+//                // 🛡️ DATE PARSING FIX (Matches Monnify Doc: "17/11/2021 3:48:10 PM")
+//                LocalDateTime transactionTime = LocalDateTime.now();
+//                try {
+//                    String paidOn = data.path("paidOn").asText();
+//                    if (paidOn != null && !paidOn.isEmpty()) {
+//                        try {
+//                            // Try Format 1 (Simulator): "2026-01-01 12:00:00.0"
+//                            DateTimeFormatter formatter1 = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.S");
+//                            transactionTime = LocalDateTime.parse(paidOn, formatter1);
+//                        } catch (Exception e1) {
+//                            // Try Format 2 (Documentation): "17/11/2021 3:48:10 PM"
+//                            DateTimeFormatter formatter2 = DateTimeFormatter.ofPattern("dd/MM/yyyy h:mm:ss a", Locale.ENGLISH);
+//                            transactionTime = LocalDateTime.parse(paidOn, formatter2);
+//                        }
+//                    }
+//                } catch (Exception e) {
+//                    logger.warn("⚠️ Date parsing failed completely for '{}', using current time.", data.path("paidOn").asText());
+//                }
+//
+//                logger.info("💰 Funding Wallet: User={} Amount={}", email, amountPaid);
+//
+//                // 1. Find User
+//                User user = userRepository.findByEmail(email)
+//                        .orElseThrow(() -> new RuntimeException("User not found: " + email));
+//
+//                // 2. Find/Create Wallet
+//                Wallet wallet = walletRepository.findByUser(user)
+//                        .orElseGet(() -> createWalletForUser(user));
+//
+//                // 3. Duplicate Check (Optional but Recommended in Doc)
+//                if (transactionLogRepository.existsByReference(transactionReference)) { //
+//                    logger.info("⚠️ Transaction {} already processed. Skipping.", transactionReference);
+//                    return;
+//                }
+//
+//                // 4. Update Balance
+//                wallet.setBalance(wallet.getBalance().add(amountPaid));
+//                walletRepository.save(wallet);
+//
+//                // 5. Create Log
+//                TransactionLog transactionLog = new TransactionLog();
+//                transactionLog.setUserId(user.getId());
+//                transactionLog.setAmount(amountPaid);
+//                transactionLog.setTransactionType(com.moniewise.moniewise_backend.enums.TransactionType.WALLET_DEPOSIT);
+//                transactionLog.setReference(transactionReference);
+//                transactionLog.setDescription(paymentDescription);
+//                transactionLog.setStatus(com.moniewise.moniewise_backend.enums.TransactionStatus.COMPLETED);
+//                transactionLog.setCreatedAt(transactionTime);
+//
+//                transactionLogRepository.save(transactionLog);
+//
+//                // 6. Notify
+////                notificationService.sendNotification(
+////                        user.getId().toString(),
+////                        "Wallet funded with ₦" + amountPaid,
+////                        NotificationType.WALLET_FUNDED
+////                );
+//
+//                // 6. Notify (FIX: Run Async + Add Route)
+//                CompletableFuture.runAsync(() -> {
+//                    try {
+//                        notificationService.sendNotification(
+//                                user.getId().toString(),
+//                                String.format("Wallet funded with ₦%.2f", amountPaid),
+//                                NotificationType.WALLET_FUNDED,
+//                                null,
+//                                null,
+//                                "VIEW_WALLET", // Ensure the app knows where to go
+//                                "/wallet"
+//                        );
+//                    } catch (Exception e) {
+//                        logger.error("Failed to send webhook notification async", e);
+//                    }
+//                });
+//
+//                logger.info("✅ Wallet Funded Successfully!");
+//            }
+//        } catch (Exception e) {
+//            logger.error("❌ WEBHOOK CRASHED: ", e);
+//            throw new RuntimeException("Webhook failed", e);
+//        }
+//    }
+
+    // Inside WalletService.java
+
+    // Remove @Transactional from the top-level method
     public void fundWalletFromWebhook(String payloadJson) {
         try {
+            // 1. 🏗️ HEAVY LIFTING (Parsing) - Do this OUTSIDE the transaction
             JsonNode root = objectMapper.readTree(payloadJson);
             String eventType = root.path("eventType").asText();
 
-            if ("SUCCESSFUL_TRANSACTION".equals(eventType)) { //
-                JsonNode data = root.path("eventData");
-
-                String email = data.path("customer").path("email").asText();
-                BigDecimal amountPaid = data.path("amountPaid").decimalValue();
-                String transactionReference = data.path("transactionReference").asText();
-                String paymentDescription = data.path("paymentDescription").asText(); //
-
-                // 🛡️ DATE PARSING FIX (Matches Monnify Doc: "17/11/2021 3:48:10 PM")
-                LocalDateTime transactionTime = LocalDateTime.now();
-                try {
-                    String paidOn = data.path("paidOn").asText();
-                    if (paidOn != null && !paidOn.isEmpty()) {
-                        try {
-                            // Try Format 1 (Simulator): "2026-01-01 12:00:00.0"
-                            DateTimeFormatter formatter1 = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.S");
-                            transactionTime = LocalDateTime.parse(paidOn, formatter1);
-                        } catch (Exception e1) {
-                            // Try Format 2 (Documentation): "17/11/2021 3:48:10 PM"
-                            DateTimeFormatter formatter2 = DateTimeFormatter.ofPattern("dd/MM/yyyy h:mm:ss a", Locale.ENGLISH);
-                            transactionTime = LocalDateTime.parse(paidOn, formatter2);
-                        }
-                    }
-                } catch (Exception e) {
-                    logger.warn("⚠️ Date parsing failed completely for '{}', using current time.", data.path("paidOn").asText());
-                }
-
-                logger.info("💰 Funding Wallet: User={} Amount={}", email, amountPaid);
-
-                // 1. Find User
-                User user = userRepository.findByEmail(email)
-                        .orElseThrow(() -> new RuntimeException("User not found: " + email));
-
-                // 2. Find/Create Wallet
-                Wallet wallet = walletRepository.findByUser(user)
-                        .orElseGet(() -> createWalletForUser(user));
-
-                // 3. Duplicate Check (Optional but Recommended in Doc)
-                if (transactionLogRepository.existsByReference(transactionReference)) { //
-                    logger.info("⚠️ Transaction {} already processed. Skipping.", transactionReference);
-                    return;
-                }
-
-                // 4. Update Balance
-                wallet.setBalance(wallet.getBalance().add(amountPaid));
-                walletRepository.save(wallet);
-
-                // 5. Create Log
-                TransactionLog transactionLog = new TransactionLog();
-                transactionLog.setUserId(user.getId());
-                transactionLog.setAmount(amountPaid);
-                transactionLog.setTransactionType(com.moniewise.moniewise_backend.enums.TransactionType.WALLET_DEPOSIT);
-                transactionLog.setReference(transactionReference);
-                transactionLog.setDescription(paymentDescription);
-                transactionLog.setStatus(com.moniewise.moniewise_backend.enums.TransactionStatus.COMPLETED);
-                transactionLog.setCreatedAt(transactionTime);
-
-                transactionLogRepository.save(transactionLog);
-
-                // 6. Notify
-//                notificationService.sendNotification(
-//                        user.getId().toString(),
-//                        "Wallet funded with ₦" + amountPaid,
-//                        NotificationType.WALLET_FUNDED
-//                );
-
-                // 6. Notify (FIX: Run Async + Add Route)
-                CompletableFuture.runAsync(() -> {
-                    try {
-                        notificationService.sendNotification(
-                                user.getId().toString(),
-                                String.format("Wallet funded with ₦%.2f", amountPaid),
-                                NotificationType.WALLET_FUNDED,
-                                null,
-                                null,
-                                "VIEW_WALLET", // Ensure the app knows where to go
-                                "/wallet"
-                        );
-                    } catch (Exception e) {
-                        logger.error("Failed to send webhook notification async", e);
-                    }
-                });
-
-                logger.info("✅ Wallet Funded Successfully!");
+            if (!"SUCCESSFUL_TRANSACTION".equals(eventType)) {
+                return;
             }
+
+            JsonNode data = root.path("eventData");
+            String email = data.path("customer").path("email").asText();
+            BigDecimal amountPaid = data.path("amountPaid").decimalValue();
+            String transactionReference = data.path("transactionReference").asText();
+            String paymentDescription = data.path("paymentDescription").asText();
+
+            // Date parsing logic...
+            LocalDateTime transactionTime = parseTransactionDate(data.path("paidOn").asText());
+
+            // 2. ⚡ ATOMIC TRANSACTION (Fast DB Write)
+            // We call a separate private method to handle the DB lock strictly
+            processSuccessfulFunding(email, amountPaid, transactionReference, paymentDescription, transactionTime);
+
         } catch (Exception e) {
             logger.error("❌ WEBHOOK CRASHED: ", e);
             throw new RuntimeException("Webhook failed", e);
         }
     }
 
-    // Inside WalletService.java
+    // Add this helper method to WalletService.java
 
+    private LocalDateTime parseTransactionDate(String paidOn) {
+        if (paidOn == null || paidOn.isEmpty()) {
+            return LocalDateTime.now();
+        }
+        try {
+            // Try Format 1 (Simulator/ISO): "2026-01-01 12:00:00.0"
+            DateTimeFormatter formatter1 = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.S");
+            return LocalDateTime.parse(paidOn, formatter1);
+        } catch (Exception e1) {
+            try {
+                // Try Format 2 (Documentation/Monnify): "17/11/2021 3:48:10 PM"
+                DateTimeFormatter formatter2 = DateTimeFormatter.ofPattern("dd/MM/yyyy h:mm:ss a", Locale.ENGLISH);
+                return LocalDateTime.parse(paidOn, formatter2);
+            } catch (Exception e2) {
+                logger.warn("⚠️ Date parsing failed for '{}', using current time.", paidOn);
+                return LocalDateTime.now();
+            }
+        }
+    }
+
+    // This method is short, fast, and transactional
+    @Transactional
+    public void processSuccessfulFunding(String email, BigDecimal amount, String ref, String desc, LocalDateTime time) {
+        // 1. Duplicate Check
+        if (transactionLogRepository.existsByReference(ref)) {
+            logger.info("⚠️ Transaction {} already processed.", ref);
+            return;
+        }
+
+        // 2. Update Balance
+        User user = userRepository.findByEmail(email)
+                .orElseThrow(() -> new RuntimeException("User not found: " + email));
+
+        Wallet wallet = walletRepository.findByUser(user)
+                .orElseGet(() -> createWalletForUser(user)); // Note: This might still block if creating wallet, but acceptable for webhook
+
+        wallet.setBalance(wallet.getBalance().add(amount));
+        walletRepository.save(wallet);
+
+        // 3. Log
+        TransactionLog log = new TransactionLog();
+        log.setUserId(user.getId());
+        log.setAmount(amount);
+        log.setTransactionType(WALLET_DEPOSIT);
+        log.setReference(ref);
+        log.setDescription(desc);
+        log.setStatus(TransactionStatus.COMPLETED);
+        log.setCreatedAt(time);
+        transactionLogRepository.save(log);
+
+        // 4. Notify (Async - Do not block the transaction commit!)
+        CompletableFuture.runAsync(() -> {
+            notificationService.sendNotification(
+                    user.getId().toString(),
+                    String.format("Wallet funded with ₦%.2f", amount),
+                    NotificationType.WALLET_FUNDED,
+                    null, null, "VIEW_WALLET", "/wallet"
+            );
+        });
+    }
     @Transactional(rollbackFor = Exception.class)
     public void withdrawToBank(Long userId, WithdrawalRequest request) {
         // 1. Basic Validation

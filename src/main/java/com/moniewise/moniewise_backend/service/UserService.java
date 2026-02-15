@@ -301,8 +301,9 @@ public class UserService implements UserDetailsService {
         // ============================================================
         Optional<Wallet> existingWallet = walletRepository.findByUser(user);
 
-        if (existingWallet.isEmpty()) {
-            try {
+        if (!walletRepository.existsByUser(savedUser)) {
+            CompletableFuture.runAsync(() -> {
+                try {
                 logger.info("⚡ Profile complete. Creating Wallet for: " + user.getEmail());
 
                 // This creates the wallet using the name we just saved!
@@ -318,11 +319,11 @@ public class UserService implements UserDetailsService {
                 );
                 });
 
-            } catch (Exception e) {
-                logger.error("❌ Wallet creation failed for user " + user.getId() + ": " + e.getMessage());
-                // Note: We swallow the error here so the Profile Update doesn't fail.
-                // The user can try again later, or you can run a background job to fix missing wallets.
-            }
+                } catch (Exception e) {
+                    logger.error("❌ Background Wallet Creation Failed for {}: {}", savedUser.getEmail(), e.getMessage());
+                    // Optional: Add logic to retry later or flag user as "Wallet Failed"
+                }
+            });
         }
 
         return savedUser;

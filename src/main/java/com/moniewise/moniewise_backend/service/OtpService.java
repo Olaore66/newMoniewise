@@ -12,6 +12,8 @@ import org.springframework.transaction.annotation.Transactional;
 import java.security.SecureRandom;
 import java.time.LocalDateTime;
 import java.util.Optional;
+import java.util.Random;
+import java.util.concurrent.CompletableFuture;
 
 @Service
 public class OtpService {
@@ -33,7 +35,7 @@ public class OtpService {
     public String generateOtp(Long userId) {
         // Generate 6-digit OTP
         SecureRandom random = new SecureRandom();
-        String otpCode = String.format("%06d", random.nextInt(1000000));
+        String otpCode = String.valueOf(new Random().nextInt(9000) + 1000);
 
         // Delete any existing OTP for the user
         otpRepository.deleteByUserId(userId);
@@ -53,7 +55,9 @@ public class OtpService {
 
         // 4. SEND THE EMAIL (This was missing!) 🚀
         try {
-            notificationService.sendOtpEmail(user.getEmail(), otpCode);
+            CompletableFuture.runAsync(() -> {
+                notificationService.sendOtpEmail(user.getEmail(), otpCode);
+            });
         } catch (Exception e) {
             // Log error but don't fail the transaction
             System.err.println("Failed to trigger OTP email: " + e.getMessage());
