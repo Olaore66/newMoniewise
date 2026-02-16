@@ -26,6 +26,20 @@ public interface UserRepository extends JpaRepository<User, Long> {
     // ✅ FIXED: Native Query (Bypasses Hibernate HQL parser errors)
     // Uses Postgres JSON operator (->>) to extract text directly.
     // Note: We provide a countQuery to ensure pagination works efficiently.
+//    @Query(value = "SELECT " +
+//            "u.id AS id, " +
+//            "u.profile_data ->> 'firstName' AS firstName, " +
+//            "u.profile_data ->> 'lastName' AS lastName, " +
+//            "u.email AS email, " +
+//            "u.profile_data ->> 'userTag' AS userTag, " +
+//            "u.profile_image_url AS profileImageUrl " +
+//            "FROM users u " +
+//            "WHERE lower(u.email) LIKE lower(concat('%', :query, '%')) " +
+//            "OR lower(u.profile_data ->> 'firstName') LIKE lower(concat('%', :query, '%'))",
+//            countQuery = "SELECT count(*) FROM users u WHERE lower(u.email) LIKE lower(concat('%', :query, '%')) OR lower(u.profile_data ->> 'firstName') LIKE lower(concat('%', :query, '%'))",
+//            nativeQuery = true)
+//    List<UserSummary> searchUsers(@Param("query") String query, Pageable pageable);
+
     @Query(value = "SELECT " +
             "u.id AS id, " +
             "u.profile_data ->> 'firstName' AS firstName, " +
@@ -34,11 +48,30 @@ public interface UserRepository extends JpaRepository<User, Long> {
             "u.profile_data ->> 'userTag' AS userTag, " +
             "u.profile_image_url AS profileImageUrl " +
             "FROM users u " +
-            "WHERE lower(u.email) LIKE lower(concat('%', :query, '%')) " +
-            "OR lower(u.profile_data ->> 'firstName') LIKE lower(concat('%', :query, '%'))",
-            countQuery = "SELECT count(*) FROM users u WHERE lower(u.email) LIKE lower(concat('%', :query, '%')) OR lower(u.profile_data ->> 'firstName') LIKE lower(concat('%', :query, '%'))",
+            "WHERE (" +
+            "   LOWER(u.email) LIKE LOWER(CONCAT('%', :query, '%')) " +
+            "   OR u.phone LIKE CONCAT('%', :query, '%') " +  // 👈 Search Phone
+            "   OR LOWER(u.profile_data ->> 'firstName') LIKE LOWER(CONCAT('%', :query, '%')) " +
+            "   OR LOWER(u.profile_data ->> 'lastName') LIKE LOWER(CONCAT('%', :query, '%')) " +
+            "   OR LOWER(u.profile_data ->> 'userTag') LIKE LOWER(CONCAT('%', :query, '%'))" + // 👈 Search Tag
+            ") " +
+            "AND u.email NOT IN (:excludedEmails) " + // 👈 Exclude Self & Revenue
+            "AND u.deleted = false",
+
+            // Count Query is mandatory for Pageable in Native Queries
+            countQuery = "SELECT count(*) FROM users u WHERE (" +
+                    "   LOWER(u.email) LIKE LOWER(CONCAT('%', :query, '%')) " +
+                    "   OR u.phone LIKE CONCAT('%', :query, '%') " +
+                    "   OR LOWER(u.profile_data ->> 'firstName') LIKE LOWER(CONCAT('%', :query, '%')) " +
+                    "   OR LOWER(u.profile_data ->> 'lastName') LIKE LOWER(CONCAT('%', :query, '%')) " +
+                    "   OR LOWER(u.profile_data ->> 'userTag') LIKE LOWER(CONCAT('%', :query, '%'))" +
+                    ") AND u.email NOT IN (:excludedEmails) AND u.deleted = false",
             nativeQuery = true)
-    List<UserSummary> searchUsers(@Param("query") String query, Pageable pageable);
+    List<UserSummary> searchUsers(
+            @Param("query") String query,
+            @Param("excludedEmails") List<String> excludedEmails,
+            Pageable pageable
+    );
 
     // ✅ OPTIMIZED: Fetch only the token string (JPQL is fine here)
     @Query("SELECT u.fcmToken FROM User u WHERE u.id = :id")

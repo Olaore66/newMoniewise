@@ -12,7 +12,6 @@ import org.springframework.transaction.annotation.Transactional;
 import java.security.SecureRandom;
 import java.time.LocalDateTime;
 import java.util.Optional;
-import java.util.Random;
 import java.util.concurrent.CompletableFuture;
 
 @Service
@@ -35,7 +34,7 @@ public class OtpService {
     public String generateOtp(Long userId) {
         // Generate 6-digit OTP
         SecureRandom random = new SecureRandom();
-        String otpCode = String.valueOf(new Random().nextInt(9000) + 1000);
+        String otpCode = String.valueOf(random.nextInt(900000) + 100000);
 
         // Delete any existing OTP for the user
         otpRepository.deleteByUserId(userId);

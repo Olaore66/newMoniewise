@@ -178,13 +178,19 @@ public class UserService implements UserDetailsService {
             return Collections.emptyList();
         }
 
+        // 1. Define excluded emails (Self + Revenue)
+        List<String> excludedEmails = Arrays.asList(currentEmail, "revenue@wisemonie.app");
+
         // 1. Use the NEW Repository Method (Fetches only name/email/tag)
         // We limit to 15 results at the DB level, saving massive RAM.
-        List<UserSummary> results = userRepository.searchUsers(query.trim(), PageRequest.of(0, 15));
-
+        List<UserSummary> results = userRepository.searchUsers(
+                query.trim(),
+                excludedEmails,
+                PageRequest.of(0, 15)
+        );
         return results.stream()
                 // 2. Filter self (Lightweight string check)
-                .filter(u -> !u.getEmail().equalsIgnoreCase(currentEmail))
+//                .filter(u -> !u.getEmail().equalsIgnoreCase(currentEmail))
                 .map(u -> {
                     // 3. Generate Handle
                     String handle = (u.getUserTag() != null && !u.getUserTag().isEmpty())
