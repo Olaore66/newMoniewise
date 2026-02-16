@@ -172,82 +172,36 @@ public class UserService implements UserDetailsService {
 
     // ==============================================================
     // ✅ SAFE SEARCH (Fixes Memory Crash)
-    // ==============================================================
-//    public List<UserSummaryResponse> searchUsers(String query, String currentEmail) {
-//        if (query == null || query.trim().isEmpty()) {
-//            return Collections.emptyList();
-//        }
-//
-//        // 1. Define excluded emails (Self + Revenue)
-//        List<String> excludedEmails = Arrays.asList(currentEmail, "revenue@wisemonie.app");
-//
-//        // 1. Use the NEW Repository Method (Fetches only name/email/tag)
-//        // We limit to 15 results at the DB level, saving massive RAM.
-//        List<UserSummary> results = userRepository.searchUsers(
-//                query.trim(),
-//                excludedEmails,
-//                PageRequest.of(0, 15)
-//        );
-//        return results.stream()
-//                // 2. Filter self (Lightweight string check)
-////                .filter(u -> !u.getEmail().equalsIgnoreCase(currentEmail))
-//                .map(u -> {
-//                    // 3. Generate Handle
-//                    String handle = (u.getUserTag() != null && !u.getUserTag().isEmpty())
-//                            ? u.getUserTag()
-//                            : "@" + u.getEmail().split("@")[0];
-//
-//                    // 4. Generate Display Name
-//                    String displayName = "Unknown";
-//                    if (u.getFirstName() != null && !u.getFirstName().isEmpty()) {
-//                        displayName = u.getFirstName() + " " + u.getLastName();
-//                    } else {
-//                        // Fallback to handle
-//                        String cleanName = handle.startsWith("@") ? handle.substring(1) : handle;
-//                        displayName = cleanName.substring(0, 1).toUpperCase() + cleanName.substring(1);
-//                    }
-//
-//                    return new UserSummaryResponse(
-//                            displayName,
-//                            handle,
-//                            u.getProfileImageUrl(),
-//                            u.getEmail()
-//                    );
-//                })
-//                .collect(Collectors.toList());
-//    }
-
-    // In UserService.java
-
+//     ==============================================================
     public List<UserSummaryResponse> searchUsers(String query, String currentEmail) {
         if (query == null || query.trim().isEmpty()) {
             return Collections.emptyList();
         }
 
-        // 1. Prepare the wildcard pattern in Java (Safer than SQL CONCAT)
-        String searchPattern = "%" + query.trim().toLowerCase() + "%";
+        // 1. Define excluded emails (Self + Revenue)
+//        List<String> excludedEmails = Arrays.asList(currentEmail, "revenue@wisemonie.app");
 
-        // 2. Fetch slightly more results (e.g., 20) to account for the 1-2 we might filter out
+        // 1. Use the NEW Repository Method (Fetches only name/email/tag)
+        // We limit to 15 results at the DB level, saving massive RAM.
         List<UserSummary> results = userRepository.searchUsers(
-                searchPattern,
-                PageRequest.of(0, 20)
+                query.trim(),
+                PageRequest.of(0, 15)
         );
-
         return results.stream()
-                // 3. Filter Self & Revenue Account in Java (100% Reliable)
-                .filter(u -> !u.getEmail().equalsIgnoreCase(currentEmail) &&
-                        !u.getEmail().equalsIgnoreCase("revenue@wisemonie.app"))
+                // 2. Filter self (Lightweight string check)
+                .filter(u -> !u.getEmail().equalsIgnoreCase(currentEmail))
                 .map(u -> {
-                    // Generate Handle
+                    // 3. Generate Handle
                     String handle = (u.getUserTag() != null && !u.getUserTag().isEmpty())
                             ? u.getUserTag()
                             : "@" + u.getEmail().split("@")[0];
 
-                    // Generate Display Name
+                    // 4. Generate Display Name
                     String displayName = "Unknown";
                     if (u.getFirstName() != null && !u.getFirstName().isEmpty()) {
                         displayName = u.getFirstName() + " " + u.getLastName();
                     } else {
+                        // Fallback to handle
                         String cleanName = handle.startsWith("@") ? handle.substring(1) : handle;
                         displayName = cleanName.substring(0, 1).toUpperCase() + cleanName.substring(1);
                     }
@@ -259,9 +213,12 @@ public class UserService implements UserDetailsService {
                             u.getEmail()
                     );
                 })
-                .limit(15) // Limit back to 15 after filtering
                 .collect(Collectors.toList());
     }
+
+//     In UserService.java
+
+
     public User login(String emailOrPhone, String password) {
         User user = userRepository.findByEmail(emailOrPhone)
                 .orElseGet(() -> userRepository.findByPhone(emailOrPhone)

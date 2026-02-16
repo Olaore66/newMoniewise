@@ -23,22 +23,22 @@ public interface UserRepository extends JpaRepository<User, Long> {
     @Query(value = "SELECT * FROM users WHERE email = :email", nativeQuery = true)
     Optional<User> findGlobalByEmail(@Param("email") String email);
 
-    // ✅ FIXED: Native Query (Bypasses Hibernate HQL parser errors)
-    // Uses Postgres JSON operator (->>) to extract text directly.
-    // Note: We provide a countQuery to ensure pagination works efficiently.
-//    @Query(value = "SELECT " +
-//            "u.id AS id, " +
-//            "u.profile_data ->> 'firstName' AS firstName, " +
-//            "u.profile_data ->> 'lastName' AS lastName, " +
-//            "u.email AS email, " +
-//            "u.profile_data ->> 'userTag' AS userTag, " +
-//            "u.profile_image_url AS profileImageUrl " +
-//            "FROM users u " +
-//            "WHERE lower(u.email) LIKE lower(concat('%', :query, '%')) " +
-//            "OR lower(u.profile_data ->> 'firstName') LIKE lower(concat('%', :query, '%'))",
-//            countQuery = "SELECT count(*) FROM users u WHERE lower(u.email) LIKE lower(concat('%', :query, '%')) OR lower(u.profile_data ->> 'firstName') LIKE lower(concat('%', :query, '%'))",
-//            nativeQuery = true)
-//    List<UserSummary> searchUsers(@Param("query") String query, Pageable pageable);
+//     ✅ FIXED: Native Query (Bypasses Hibernate HQL parser errors)
+//     Uses Postgres JSON operator (->>) to extract text directly.
+//     Note: We provide a countQuery to ensure pagination works efficiently.
+    @Query(value = "SELECT " +
+            "u.id AS id, " +
+            "u.profile_data ->> 'firstName' AS firstName, " +
+            "u.profile_data ->> 'lastName' AS lastName, " +
+            "u.email AS email, " +
+            "u.profile_data ->> 'userTag' AS userTag, " +
+            "u.profile_image_url AS profileImageUrl " +
+            "FROM users u " +
+            "WHERE lower(u.email) LIKE lower(concat('%', :query, '%')) " +
+            "OR lower(u.profile_data ->> 'firstName') LIKE lower(concat('%', :query, '%'))",
+            countQuery = "SELECT count(*) FROM users u WHERE lower(u.email) LIKE lower(concat('%', :query, '%')) OR lower(u.profile_data ->> 'firstName') LIKE lower(concat('%', :query, '%'))",
+            nativeQuery = true)
+    List<UserSummary> searchUsers(@Param("query") String query, Pageable pageable);
 
 //    @Query(value = "SELECT " +
 //            "u.id AS id, " +
@@ -76,35 +76,35 @@ public interface UserRepository extends JpaRepository<User, Long> {
     // In UserRepository.java
 
     // ✅ FIXED: Uses COALESCE to handle NULLs and removes the List parameter complexity
-    @Query(value = "SELECT " +
-            "u.id AS id, " +
-            "u.profile_data ->> 'firstName' AS firstName, " +
-            "u.profile_data ->> 'lastName' AS lastName, " +
-            "u.email AS email, " +
-            "u.profile_data ->> 'userTag' AS userTag, " +
-            "u.profile_image_url AS profileImageUrl " +
-            "FROM users u " +
-            "WHERE (" +
-            "   LOWER(COALESCE(u.email, '')) LIKE :pattern " + // Handle NULL email
-            "   OR COALESCE(u.phone, '') LIKE :pattern " +     // Handle NULL phone
-            "   OR LOWER(COALESCE(u.profile_data ->> 'firstName', '')) LIKE :pattern " +
-            "   OR LOWER(COALESCE(u.profile_data ->> 'lastName', '')) LIKE :pattern " +
-            "   OR LOWER(COALESCE(u.profile_data ->> 'userTag', '')) LIKE :pattern" +
-            ") " +
-            "AND u.deleted = false",
-
-            countQuery = "SELECT count(*) FROM users u WHERE (" +
-                    "   LOWER(COALESCE(u.email, '')) LIKE :pattern " +
-                    "   OR COALESCE(u.phone, '') LIKE :pattern " +
-                    "   OR LOWER(COALESCE(u.profile_data ->> 'firstName', '')) LIKE :pattern " +
-                    "   OR LOWER(COALESCE(u.profile_data ->> 'lastName', '')) LIKE :pattern " +
-                    "   OR LOWER(COALESCE(u.profile_data ->> 'userTag', '')) LIKE :pattern" +
-                    ") AND u.deleted = false",
-            nativeQuery = true)
-    List<UserSummary> searchUsers(
-            @Param("pattern") String pattern, // We pass "%query%" from Java
-            Pageable pageable
-    );
+//    @Query(value = "SELECT " +
+//            "u.id AS id, " +
+//            "u.profile_data ->> 'firstName' AS firstName, " +
+//            "u.profile_data ->> 'lastName' AS lastName, " +
+//            "u.email AS email, " +
+//            "u.profile_data ->> 'userTag' AS userTag, " +
+//            "u.profile_image_url AS profileImageUrl " +
+//            "FROM users u " +
+//            "WHERE (" +
+//            "   LOWER(COALESCE(u.email, '')) LIKE :pattern " + // Handle NULL email
+//            "   OR COALESCE(u.phone, '') LIKE :pattern " +     // Handle NULL phone
+//            "   OR LOWER(COALESCE(u.profile_data ->> 'firstName', '')) LIKE :pattern " +
+//            "   OR LOWER(COALESCE(u.profile_data ->> 'lastName', '')) LIKE :pattern " +
+//            "   OR LOWER(COALESCE(u.profile_data ->> 'userTag', '')) LIKE :pattern" +
+//            ") " +
+//            "AND u.deleted = false",
+//
+//            countQuery = "SELECT count(*) FROM users u WHERE (" +
+//                    "   LOWER(COALESCE(u.email, '')) LIKE :pattern " +
+//                    "   OR COALESCE(u.phone, '') LIKE :pattern " +
+//                    "   OR LOWER(COALESCE(u.profile_data ->> 'firstName', '')) LIKE :pattern " +
+//                    "   OR LOWER(COALESCE(u.profile_data ->> 'lastName', '')) LIKE :pattern " +
+//                    "   OR LOWER(COALESCE(u.profile_data ->> 'userTag', '')) LIKE :pattern" +
+//                    ") AND u.deleted = false",
+//            nativeQuery = true)
+//    List<UserSummary> searchUsers(
+//            @Param("pattern") String pattern, // We pass "%query%" from Java
+//            Pageable pageable
+//    );
 
     // ✅ OPTIMIZED: Fetch only the token string (JPQL is fine here)
     @Query("SELECT u.fcmToken FROM User u WHERE u.id = :id")
