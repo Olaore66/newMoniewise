@@ -40,6 +40,42 @@ public interface UserRepository extends JpaRepository<User, Long> {
 //            nativeQuery = true)
 //    List<UserSummary> searchUsers(@Param("query") String query, Pageable pageable);
 
+//    @Query(value = "SELECT " +
+//            "u.id AS id, " +
+//            "u.profile_data ->> 'firstName' AS firstName, " +
+//            "u.profile_data ->> 'lastName' AS lastName, " +
+//            "u.email AS email, " +
+//            "u.profile_data ->> 'userTag' AS userTag, " +
+//            "u.profile_image_url AS profileImageUrl " +
+//            "FROM users u " +
+//            "WHERE (" +
+//            "   LOWER(u.email) LIKE LOWER(CONCAT('%', :query, '%')) " +
+//            "   OR u.phone LIKE CONCAT('%', :query, '%') " +  // 👈 Search Phone
+//            "   OR LOWER(u.profile_data ->> 'firstName') LIKE LOWER(CONCAT('%', :query, '%')) " +
+//            "   OR LOWER(u.profile_data ->> 'lastName') LIKE LOWER(CONCAT('%', :query, '%')) " +
+//            "   OR LOWER(u.profile_data ->> 'userTag') LIKE LOWER(CONCAT('%', :query, '%'))" + // 👈 Search Tag
+//            ") " +
+//            "AND u.email NOT IN (:excludedEmails) " + // 👈 Exclude Self & Revenue
+//            "AND u.deleted = false",
+//
+//            // Count Query is mandatory for Pageable in Native Queries
+//            countQuery = "SELECT count(*) FROM users u WHERE (" +
+//                    "   LOWER(u.email) LIKE LOWER(CONCAT('%', :query, '%')) " +
+//                    "   OR u.phone LIKE CONCAT('%', :query, '%') " +
+//                    "   OR LOWER(u.profile_data ->> 'firstName') LIKE LOWER(CONCAT('%', :query, '%')) " +
+//                    "   OR LOWER(u.profile_data ->> 'lastName') LIKE LOWER(CONCAT('%', :query, '%')) " +
+//                    "   OR LOWER(u.profile_data ->> 'userTag') LIKE LOWER(CONCAT('%', :query, '%'))" +
+//                    ") AND u.email NOT IN (:excludedEmails) AND u.deleted = false",
+//            nativeQuery = true)
+//    List<UserSummary> searchUsers(
+//            @Param("query") String query,
+//            @Param("excludedEmails") List<String> excludedEmails,
+//            Pageable pageable
+//    );
+
+    // In UserRepository.java
+
+    // ✅ FIXED: Uses COALESCE to handle NULLs and removes the List parameter complexity
     @Query(value = "SELECT " +
             "u.id AS id, " +
             "u.profile_data ->> 'firstName' AS firstName, " +
@@ -49,27 +85,24 @@ public interface UserRepository extends JpaRepository<User, Long> {
             "u.profile_image_url AS profileImageUrl " +
             "FROM users u " +
             "WHERE (" +
-            "   LOWER(u.email) LIKE LOWER(CONCAT('%', :query, '%')) " +
-            "   OR u.phone LIKE CONCAT('%', :query, '%') " +  // 👈 Search Phone
-            "   OR LOWER(u.profile_data ->> 'firstName') LIKE LOWER(CONCAT('%', :query, '%')) " +
-            "   OR LOWER(u.profile_data ->> 'lastName') LIKE LOWER(CONCAT('%', :query, '%')) " +
-            "   OR LOWER(u.profile_data ->> 'userTag') LIKE LOWER(CONCAT('%', :query, '%'))" + // 👈 Search Tag
+            "   LOWER(COALESCE(u.email, '')) LIKE :pattern " + // Handle NULL email
+            "   OR COALESCE(u.phone, '') LIKE :pattern " +     // Handle NULL phone
+            "   OR LOWER(COALESCE(u.profile_data ->> 'firstName', '')) LIKE :pattern " +
+            "   OR LOWER(COALESCE(u.profile_data ->> 'lastName', '')) LIKE :pattern " +
+            "   OR LOWER(COALESCE(u.profile_data ->> 'userTag', '')) LIKE :pattern" +
             ") " +
-            "AND u.email NOT IN (:excludedEmails) " + // 👈 Exclude Self & Revenue
             "AND u.deleted = false",
 
-            // Count Query is mandatory for Pageable in Native Queries
             countQuery = "SELECT count(*) FROM users u WHERE (" +
-                    "   LOWER(u.email) LIKE LOWER(CONCAT('%', :query, '%')) " +
-                    "   OR u.phone LIKE CONCAT('%', :query, '%') " +
-                    "   OR LOWER(u.profile_data ->> 'firstName') LIKE LOWER(CONCAT('%', :query, '%')) " +
-                    "   OR LOWER(u.profile_data ->> 'lastName') LIKE LOWER(CONCAT('%', :query, '%')) " +
-                    "   OR LOWER(u.profile_data ->> 'userTag') LIKE LOWER(CONCAT('%', :query, '%'))" +
-                    ") AND u.email NOT IN (:excludedEmails) AND u.deleted = false",
+                    "   LOWER(COALESCE(u.email, '')) LIKE :pattern " +
+                    "   OR COALESCE(u.phone, '') LIKE :pattern " +
+                    "   OR LOWER(COALESCE(u.profile_data ->> 'firstName', '')) LIKE :pattern " +
+                    "   OR LOWER(COALESCE(u.profile_data ->> 'lastName', '')) LIKE :pattern " +
+                    "   OR LOWER(COALESCE(u.profile_data ->> 'userTag', '')) LIKE :pattern" +
+                    ") AND u.deleted = false",
             nativeQuery = true)
     List<UserSummary> searchUsers(
-            @Param("query") String query,
-            @Param("excludedEmails") List<String> excludedEmails,
+            @Param("pattern") String pattern, // We pass "%query%" from Java
             Pageable pageable
     );
 
