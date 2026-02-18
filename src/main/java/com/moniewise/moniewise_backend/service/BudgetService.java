@@ -297,23 +297,23 @@ public class BudgetService {
         walletRepository.save(revenueWallet);
 
         // Refund unallocated amount
-        BigDecimal unallocatedAmount = actualBudgetAmount.subtract(allocationSum);
-        if (unallocatedAmount.compareTo(BigDecimal.ZERO) > 0) {
-            walletService.fundWallet(user.getId(), unallocatedAmount,
-                    String.format("₦%.2f refunded to wallet from unallocated budget funds.", unallocatedAmount));
-            TransactionLog refundLog = new TransactionLog();
-            refundLog.setUserId(user.getId());
-            refundLog.setBudgetId(savedBudget.getId());
-            refundLog.setAmount(unallocatedAmount);
-            refundLog.setTransactionType(BUDGET_UNALLOCATED_REFUNDED);
-            refundLog.setStatus(TransactionStatus.SUCCESS);
-            refundLog.setCreatedAt(now);
-
-            // 👇 ADD THIS LINE (Generate a unique reference)
-            refundLog.setReference("REF-" + System.currentTimeMillis() + "-" + user.getId());
-
-            transactionLogRepository.save(refundLog);
-        }
+//        BigDecimal unallocatedAmount = actualBudgetAmount.subtract(allocationSum);
+//        if (unallocatedAmount.compareTo(BigDecimal.ZERO) > 0) {
+//            walletService.fundWallet(user.getId(), unallocatedAmount,
+//                    String.format("₦%.2f refunded to wallet from unallocated budget funds.", unallocatedAmount));
+//            TransactionLog refundLog = new TransactionLog();
+//            refundLog.setUserId(user.getId());
+//            refundLog.setBudgetId(savedBudget.getId());
+//            refundLog.setAmount(unallocatedAmount);
+//            refundLog.setTransactionType(BUDGET_UNALLOCATED_REFUNDED);
+//            refundLog.setStatus(TransactionStatus.SUCCESS);
+//            refundLog.setCreatedAt(now);
+//
+//            // 👇 ADD THIS LINE (Generate a unique reference)
+//            refundLog.setReference("REF-" + System.currentTimeMillis() + "-" + user.getId());
+//
+//            transactionLogRepository.save(refundLog);
+//        }
 
         // ——————— TRANSACTION LOGS ———————
         // 1. Budget allocation deduction
@@ -387,9 +387,9 @@ public class BudgetService {
         params.put("allocated", String.format("%,.2f", allocationSum));
         params.put("fee", String.format("%,.2f", fee));
 
-        if (unallocatedAmount.compareTo(BigDecimal.ZERO) > 0) {
-            params.put("refunded", String.format("%,.2f", unallocatedAmount));
-        }
+//        if (unallocatedAmount.compareTo(BigDecimal.ZERO) > 0) {
+//            params.put("refunded", String.format("%,.2f", unallocatedAmount));
+//        }
 
         // Publish the event!
         eventPublisher.publishEvent(new GenericNotificationEvent(
