@@ -417,9 +417,21 @@ public class TransactionService {
     }
 
     private String getCounterpartyName(TransactionLog t) {
-        if(t.getDescription() != null && t.getDescription().contains("Transfer to ")) {
-            return t.getDescription().replace("Transfer to ", "");
+        if (t.getDescription() == null) {
+            return "Wisemonie User";
         }
+
+        // Handle outgoing transfers
+        if (t.getDescription().contains("Transfer to ")) {
+            return t.getDescription().replace("Transfer to ", "").trim();
+        }
+
+        // Handle incoming transfers
+        if (t.getDescription().contains("Received from ")) {
+            return t.getDescription().replace("Received from ", "").trim();
+        }
+
+        // Default fallback
         return "Wisemonie User";
     }
 
