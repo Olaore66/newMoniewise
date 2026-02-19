@@ -258,6 +258,7 @@ import com.moniewise.moniewise_backend.enums.TransactionType;
 import com.moniewise.moniewise_backend.repository.BudgetRepository;
 import com.moniewise.moniewise_backend.repository.EnvelopeRepository;
 import com.moniewise.moniewise_backend.repository.TransactionLogRepository;
+import com.moniewise.moniewise_backend.repository.UserRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -285,6 +286,9 @@ public class TransactionService {
 
     @Autowired
     private BudgetRepository budgetRepo;
+
+    @Autowired
+    private UserRepository userRepo;
 
     private static final Set<TransactionType> USER_VISIBLE_TYPES = Set.of(
             WALLET_DEPOSIT, WALLET_TO_BUDGET, BUDGET_ALLOCATION, ENVELOPE_TO_ENVELOPE,
@@ -417,21 +421,36 @@ public class TransactionService {
     }
 
     private String getCounterpartyName(TransactionLog t) {
-        if (t.getDescription() == null) {
-            return "Wisemonie User";
+        // 1. BEST WAY: Look up by ID
+        if (t.getCounterpartyUserId() != null) {
+            return userRepo.findById(t.getCounterpartyUserId())
+                    .map(u -> {
+                        // Extract from the profile_data JSON map
+                        if (u.getProfileData() != null && u.getProfileData().containsKey("name")) {
+                            return (String) u.getProfileData().get("name");
+                        }
+
+                        // If no name is in the profile, use their email prefix as a fallback
+                        if (u.getEmail() != null) {
+                            return u.getEmail().split("@")[0];
+                        }
+
+                        return "Wisemonie User";
+                    })
+                    .orElse("Wisemonie User");
         }
 
-        // Handle outgoing transfers
-        if (t.getDescription().contains("Transfer to ")) {
-            return t.getDescription().replace("Transfer to ", "").trim();
+        // 2. FALLBACK: String parsing (for old transactions)
+        if (t.getDescription() != null) {
+            if (t.getDescription().contains("Transfer to ")) {
+                return t.getDescription().replace("Transfer to ", "").trim();
+            }
+            if (t.getDescription().contains("Received from ")) {
+                return t.getDescription().replace("Received from ", "").trim();
+            }
         }
 
-        // Handle incoming transfers
-        if (t.getDescription().contains("Received from ")) {
-            return t.getDescription().replace("Received from ", "").trim();
-        }
-
-        // Default fallback
+        // 3. FINAL FALLBACK
         return "Wisemonie User";
     }
 
