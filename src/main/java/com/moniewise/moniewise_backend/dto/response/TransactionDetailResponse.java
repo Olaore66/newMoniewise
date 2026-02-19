@@ -8,13 +8,21 @@ import java.time.LocalDateTime;
 
 public record TransactionDetailResponse(
         Long id,
+        String reference,                // ✅ ADDED: For tracking/receipts
+        String status,                   // ✅ ADDED: COMPLETED, FAILED, PENDING
+        String direction,                // ✅ ADDED: "CREDIT" or "DEBIT"
         String title,
         String fullDescription,
         BigDecimal amount,
         BigDecimal fee,
         BigDecimal netAmount,            // amount - fee (for clarity)
+        // 👇 ADDED THESE TWO 👇
+        String sender,
+        String recipient,
         TransactionType transactionType,
         LocalDateTime createdAt,
+
+
 
         // Context
         Long budgetId,
@@ -27,3 +35,5 @@ public record TransactionDetailResponse(
         // For future: external transfers
         String externalAccountId
 ) {}
+
+

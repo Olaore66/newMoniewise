@@ -423,33 +423,135 @@ public class TransactionService {
         return "Wisemonie User";
     }
 
+//    private TransactionDetailResponse mapToDetailResponse(TransactionLog t) {
+//        // For detail view, single queries are fine (no N+1 issue here)
+//        String sourceName = getEnvelopeName(t.getSourceEnvelopeId());
+//        String targetName = getEnvelopeName(t.getTargetEnvelopeId());
+//        String budgetName = getBudgetName(t.getBudgetId());
+//
+//        String title = switch (t.getTransactionType()) {
+//            case WALLET_DEPOSIT -> "Wallet funded";
+//            case ENVELOPE_TO_ENVELOPE -> "From %s to %s".formatted(sourceName, targetName);
+//            case ENVELOPE_TO_EXTERNAL -> "Sent to bank";
+//            case ENVELOPE_TO_USER -> "Sent to user";
+//            case USER_TO_ENVELOPE -> "Received from user";
+//            case BUDGET_CREATION_FEE -> "Budget creation fee";
+//            case BUDGET_ALLOCATION -> "Allocated to budget";
+//            case BUDGET_UNALLOCATED_REFUNDED -> "Refunded to wallet";
+//            default -> t.getTransactionType().name().replace("_", " ");
+//        };
+//
+//        BigDecimal fee = t.getFee() != null ? t.getFee() : BigDecimal.ZERO;
+//
+//        return new TransactionDetailResponse(
+//                t.getId(),
+//                title,
+//                t.getDescription(),
+//                t.getAmount(),
+//                fee,
+//                t.getAmount().subtract(fee),
+//                t.getTransactionType(),
+//                t.getCreatedAt(),
+//                t.getBudgetId(),
+//                budgetName,
+//                sourceName,
+//                t.getSourceEnvelopeId(),
+//                targetName,
+//                t.getTargetEnvelopeId(),
+//                t.getExternalAccountId()
+//        );
+//    }
+// Replace this method in your TransactionService.java
+
     private TransactionDetailResponse mapToDetailResponse(TransactionLog t) {
-        // For detail view, single queries are fine (no N+1 issue here)
         String sourceName = getEnvelopeName(t.getSourceEnvelopeId());
         String targetName = getEnvelopeName(t.getTargetEnvelopeId());
         String budgetName = getBudgetName(t.getBudgetId());
 
+        // 1. Amount & Direction Math (Fixes the Double Negative issue)
+        boolean isDebit = isOutgoing(t.getTransactionType(), t.getAmount());
+        String direction = isDebit ? "DEBIT" : "CREDIT";
+
+        // Force amount to be positive for display
+        BigDecimal absoluteAmount = t.getAmount().abs();
+        BigDecimal fee = t.getFee() != null ? t.getFee() : BigDecimal.ZERO;
+
+        // Net Amount: If Debit, they paid Amount + Fee. If Credit, they got Amount - Fee.
+        BigDecimal netAmount = isDebit ? absoluteAmount.add(fee) : absoluteAmount.subtract(fee);
+
+        // 2. Resolve Sender and Recipient (Fixes the "System to System" issue)
+        String sender = "System";
+        String recipient = "System";
+
+        switch (t.getTransactionType()) {
+            case BUDGET_ALLOCATION:
+                sender = "Main Wallet";
+                recipient = budgetName != null ? "Budget: " + budgetName : "Budget Envelopes";
+                break;
+            case BUDGET_CREATION_FEE:
+                sender = "Main Wallet";
+                recipient = "MonieWise Fee";
+                break;
+            case BUDGET_UNALLOCATED_REFUNDED:
+                sender = "Unallocated Funds";
+                recipient = "Main Wallet";
+                break;
+            case WALLET_DEPOSIT:
+                sender = "External Transfer / Card";
+                recipient = "Main Wallet";
+                break;
+            case WALLET_WITHDRAWAL:
+            case ENVELOPE_TO_EXTERNAL:
+                sender = t.getTransactionType() == WALLET_WITHDRAWAL ? "Main Wallet" : sourceName;
+                recipient = t.getExternalAccountId() != null ? "Bank: " + t.getExternalAccountId() : "External Bank";
+                break;
+            case ENVELOPE_TO_ENVELOPE:
+                sender = sourceName;
+                recipient = targetName;
+                break;
+            case ENVELOPE_TO_USER:
+                sender = sourceName;
+                recipient = getCounterpartyName(t);
+                break;
+            case USER_TO_ENVELOPE:
+                sender = getCounterpartyName(t);
+                recipient = targetName;
+                break;
+            default:
+                sender = "MonieWise Account";
+                recipient = "MonieWise Account";
+                break;
+        }
+
+        // 3. User-Friendly Title
         String title = switch (t.getTransactionType()) {
             case WALLET_DEPOSIT -> "Wallet funded";
             case ENVELOPE_TO_ENVELOPE -> "From %s to %s".formatted(sourceName, targetName);
             case ENVELOPE_TO_EXTERNAL -> "Sent to bank";
-            case ENVELOPE_TO_USER -> "Sent to user";
-            case USER_TO_ENVELOPE -> "Received from user";
+            case ENVELOPE_TO_USER -> "Sent to " + getCounterpartyName(t);
+            case USER_TO_ENVELOPE -> "Received from " + getCounterpartyName(t);
             case BUDGET_CREATION_FEE -> "Budget creation fee";
             case BUDGET_ALLOCATION -> "Allocated to budget";
             case BUDGET_UNALLOCATED_REFUNDED -> "Refunded to wallet";
-            default -> t.getTransactionType().name().replace("_", " ");
+            default -> formatEnumName(t.getTransactionType());
         };
 
-        BigDecimal fee = t.getFee() != null ? t.getFee() : BigDecimal.ZERO;
+        // Fallbacks for missing data
+        String reference = t.getReference() != null ? t.getReference() : "N/A";
+        String status = t.getStatus() != null ? t.getStatus().name() : "COMPLETED";
 
         return new TransactionDetailResponse(
                 t.getId(),
+                reference,
+                status,
+                direction,
                 title,
                 t.getDescription(),
-                t.getAmount(),
+                absoluteAmount,
                 fee,
-                t.getAmount().subtract(fee),
+                netAmount,
+                sender,
+                recipient,
                 t.getTransactionType(),
                 t.getCreatedAt(),
                 t.getBudgetId(),
@@ -461,7 +563,6 @@ public class TransactionService {
                 t.getExternalAccountId()
         );
     }
-
     private String getEnvelopeName(Long envelopeId) {
         if (envelopeId == null) return "System";
         return envelopeRepo.findById(envelopeId)
