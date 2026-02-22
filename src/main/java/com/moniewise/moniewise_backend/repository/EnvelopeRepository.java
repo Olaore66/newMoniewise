@@ -2,6 +2,7 @@ package com.moniewise.moniewise_backend.repository;
 
 import com.moniewise.moniewise_backend.entity.Envelope;
 import com.moniewise.moniewise_backend.enums.BudgetStatus;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -30,5 +31,5 @@ public interface EnvelopeRepository extends JpaRepository<Envelope, Long> {
     @Query(value = "SELECT * FROM envelopes e JOIN budgets b ON e.budget_id = b.id WHERE b.status = CAST(:status AS VARCHAR) AND e.conditions->>'type' != :type", nativeQuery = true)
     Stream<Envelope> findByBudgetStatusAndTypeNot(@Param("status") BudgetStatus status, @Param("type") String type);
 
-    List<Envelope> findByNextDisbursementAtBefore(LocalDateTime now);
+    List<Envelope> findByNextDisbursementAtBefore(LocalDateTime now, Pageable pageable);
 }

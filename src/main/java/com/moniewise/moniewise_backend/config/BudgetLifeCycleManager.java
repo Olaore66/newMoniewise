@@ -222,42 +222,51 @@ public class BudgetLifeCycleManager {
 
         while (hasMore && currentLoop < maxLoops) {
             currentLoop++;
-            hasMore = transactionTemplate.execute(status -> {
-                // 1. Fetch only ACTIVE budgets that have expired
-                Pageable pageable = PageRequest.of(0, batchSize);
-                Page<Budget> page = budgetRepository.findByStatusAndEndDateLessThanEqual(BudgetStatus.ACTIVE, today, pageable);
 
-                if (page.isEmpty()) return false;
+            // 1. Fetch the page OUTSIDE the transaction
+            Pageable pageable = PageRequest.of(0, batchSize);
+            Page<Budget> page = budgetRepository.findByStatusAndEndDateLessThanEqual(BudgetStatus.ACTIVE, today, pageable);
 
-                List<Budget> budgetsToUpdate = new ArrayList<>();
-                List<Envelope> envelopesToUpdate = new ArrayList<>();
-                List<TransactionLog> logsToSave = new ArrayList<>();
+            if (page.isEmpty()) {
+                hasMore = false;
+                continue;
+            }
 
-                for (Budget budget : page.getContent()) {
-                    try {
-                        // 2. Try to expire the budget safely
-                        processBudgetExpiry(budget, budgetsToUpdate, envelopesToUpdate, logsToSave);
-                    } catch (Exception e) {
-                        logger.error("🚨 CRITICAL: Failed to expire Budget ID {}. Quarantining.", budget.getId(), e);
+            for (Budget budget : page.getContent()) {
+                try {
+                    // 2. Process EACH budget in its own isolated transaction
+                    transactionTemplate.execute(status -> {
+                        List<Budget> bUpdate = new ArrayList<>();
+                        List<Envelope> eUpdate = new ArrayList<>();
+                        List<TransactionLog> lSave = new ArrayList<>();
 
-                        // 3. THE FIX: Quarantine the budget so it doesn't loop forever
-                        // This stops the CPU spike AND preserves the financial state for review.
-                        budget.setStatus(BudgetStatus.FAILED_PROCESSING);
-                        budgetsToUpdate.add(budget);
+                        processBudgetExpiry(budget, bUpdate, eUpdate, lSave);
 
-                        // Optional: Send an admin alert here (Email/Slack)
-                    }
+                        budgetRepository.saveAll(bUpdate);
+                        envelopeRepository.saveAll(eUpdate);
+                        transactionLogRepository.saveAll(lSave);
+                        return null;
+                    });
+                } catch (Exception e) {
+                    logger.error("🚨 Failed to expire Budget ID {}. Quarantining.", budget.getId(), e);
+
+                    // 3. Save Quarantine state in a NEW transaction so it doesn't roll back
+                    transactionTemplate.execute(status -> {
+                        Budget failedBudget = budgetRepository.findById(budget.getId()).orElse(null);
+                        if (failedBudget != null) {
+                            failedBudget.setStatus(BudgetStatus.FAILED_PROCESSING);
+                            budgetRepository.save(failedBudget);
+                        }
+                        return null;
+                    });
                 }
+            }
 
-                budgetRepository.saveAll(budgetsToUpdate);
-                envelopeRepository.saveAll(envelopesToUpdate);
-                transactionLogRepository.saveAll(logsToSave);
+            // 🧹 RAM CLEANUP
+            entityManager.flush();
+            entityManager.clear();
 
-                entityManager.flush();
-                entityManager.clear();
-
-                return page.hasNext();
-            });
+            hasMore = page.hasNext();
         }
 
         refreshDynamicTasks(today);
@@ -920,18 +929,33 @@ public class BudgetLifeCycleManager {
         logger.info("Cleaned notifications older than {}", threshold);
     }
 
+//    @Scheduled(fixedRate = 60000)
+//    @Transactional
+//    public void checkAndHandleMaturedEnvelopes() {
+//        // FIX: Use fetchCurrentDateTimeFromDatabase and optimized query
+//        LocalDateTime now = fetchCurrentDateTimeFromDatabase();
+//        List<Envelope> envelopes = envelopeRepository.findByNextDisbursementAtBefore(now);
+//
+//        for (Envelope envelope : envelopes) {
+//            handleMaturedEnvelope(envelope);
+//        }
+//    }
+
     @Scheduled(fixedRate = 60000)
     @Transactional
     public void checkAndHandleMaturedEnvelopes() {
-        // FIX: Use fetchCurrentDateTimeFromDatabase and optimized query
         LocalDateTime now = fetchCurrentDateTimeFromDatabase();
-        List<Envelope> envelopes = envelopeRepository.findByNextDisbursementAtBefore(now);
+        // Limit to 100 per minute to prevent memory spikes
+        Pageable limit = PageRequest.of(0, 100);
+
+        // Note: You must update your repository method to accept Pageable:
+        // List<Envelope> findByNextDisbursementAtBefore(LocalDateTime time, Pageable pageable);
+        List<Envelope> envelopes = envelopeRepository.findByNextDisbursementAtBefore(now, limit);
 
         for (Envelope envelope : envelopes) {
             handleMaturedEnvelope(envelope);
         }
     }
-
     private void handleMaturedEnvelope(Envelope envelope) {
         Map<String, Object> conditions = envelope.getConditions();
 
@@ -990,9 +1014,10 @@ public class BudgetLifeCycleManager {
     @Transactional
     public void refundExpiredPendingDisbursements() {
         LocalDateTime now = fetchCurrentDateTimeFromDatabase();
+        Pageable limit = PageRequest.of(0, 100);
 
         // 1. Find expired items
-        List<PendingDisbursement> expiredDisbursements = pendingDisbursementRepository.findByExpiresAtBeforeAndNotifiedUserTrue(now);
+        List<PendingDisbursement> expiredDisbursements = pendingDisbursementRepository.findByExpiresAtBeforeAndNotifiedUserTrue(now, limit);
         List<PendingDisbursement> disbursementsToDelete = new ArrayList<>();
 
 

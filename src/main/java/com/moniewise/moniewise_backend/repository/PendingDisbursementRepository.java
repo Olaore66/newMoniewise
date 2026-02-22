@@ -2,6 +2,7 @@ package com.moniewise.moniewise_backend.repository;
 
 import com.moniewise.moniewise_backend.entity.PendingDisbursement;
 import com.moniewise.moniewise_backend.enums.Status;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -28,7 +29,7 @@ public interface PendingDisbursementRepository extends JpaRepository<PendingDisb
 
     // Existing method for refundExpiredPendingDisbursements
     @Query("SELECT pd FROM PendingDisbursement pd WHERE pd.expiresAt <= :expiresAt AND pd.notifiedUser = true")
-    List<PendingDisbursement> findByExpiresAtBeforeAndNotifiedUserTrue(@Param("expiresAt") LocalDateTime expiresAt);
+    List<PendingDisbursement> findByExpiresAtBeforeAndNotifiedUserTrue(@Param("expiresAt") LocalDateTime expiresAt, Pageable pageable);
 
     // Add this line
     Optional<PendingDisbursement> findFirstByEnvelopeIdAndStatus(Long envelopeId, Status status);
