@@ -150,32 +150,80 @@ public class BudgetLifeCycleManager {
         logger.info("Scheduled next disbursement for envelope {} at {}", envelope.getId(), triggerTime);
     }
 //================================================================================
+//    @Transactional(timeout = 120)
+//    @Scheduled(cron = "0 */5 * * * ?", zone = "Africa/Lagos") // FIX: Added zone for consistency
+//    // ✅ NEW SAFE VERSION
+//    @Scheduled(cron = "0 */15 * * * ?", zone = "Africa/Lagos")
+//    public void processBudgets() {
+//        LocalDateTime now = fetchCurrentDateTimeFromDatabase();
+//        LocalDate today = now.toLocalDate();
+//        LocalDate threeDaysFromNow = today.plusDays(3);
+//
+//        // 1. Notifications (These are light, List is fine)
+////        List<Budget> nearingEnd = budgetRepository.findByStatusAndEndDate(BudgetStatus.ACTIVE, threeDaysFromNow);
+////        for (Budget budget : nearingEnd) {
+////            notificationService.sendNotification(
+////                    budget.getUser().getId().toString(),
+////                    "Budget '" + budget.getName() + "' ends in 3 days.",
+////                    NotificationType.BUDGET_END
+////            );
+////        }
+//
+//        // 2. HEAVY WORK: Process Expired Budgets in Batches
+//        int batchSize = 100;
+//        boolean hasMore = true;
+//
+//        while (hasMore) {
+//            hasMore = transactionTemplate.execute(status -> {
+//                // Page 0 because processed budgets change status to COMPLETED
+//                Pageable pageable = PageRequest.of(0, batchSize);
+//                Page<Budget> page = budgetRepository.findByStatusAndEndDateLessThanEqual(BudgetStatus.ACTIVE, today, pageable);
+//
+//                if (page.isEmpty()) return false;
+//
+//                List<Budget> budgetsToUpdate = new ArrayList<>();
+//                List<Envelope> envelopesToUpdate = new ArrayList<>();
+//                List<TransactionLog> logsToSave = new ArrayList<>();
+//
+//                for (Budget budget : page.getContent()) {
+//                    try {
+//                        processBudgetExpiry(budget, budgetsToUpdate, envelopesToUpdate, logsToSave);
+//                    } catch (Exception e) {
+//                        logger.error("Error expiring budget {}: {}", budget.getId(), e.getMessage());
+//                    }
+//                }
+//
+//                budgetRepository.saveAll(budgetsToUpdate);
+//                envelopeRepository.saveAll(envelopesToUpdate);
+//                transactionLogRepository.saveAll(logsToSave);
+//
+//                // 🧹 RAM CLEANUP
+//                entityManager.flush();
+//                entityManager.clear();
+//
+//                return page.hasNext();
+//            });
+//        }
+//
+//        // 3. Dynamic Refresh (Optional: keep as is or batch if >1000 dynamic envelopes)
+//        refreshDynamicTasks(today);
+//    }
+
     @Transactional(timeout = 120)
-    @Scheduled(cron = "0 */5 * * * ?", zone = "Africa/Lagos") // FIX: Added zone for consistency
-    // ✅ NEW SAFE VERSION
     @Scheduled(cron = "0 */15 * * * ?", zone = "Africa/Lagos")
     public void processBudgets() {
         LocalDateTime now = fetchCurrentDateTimeFromDatabase();
         LocalDate today = now.toLocalDate();
-        LocalDate threeDaysFromNow = today.plusDays(3);
 
-        // 1. Notifications (These are light, List is fine)
-//        List<Budget> nearingEnd = budgetRepository.findByStatusAndEndDate(BudgetStatus.ACTIVE, threeDaysFromNow);
-//        for (Budget budget : nearingEnd) {
-//            notificationService.sendNotification(
-//                    budget.getUser().getId().toString(),
-//                    "Budget '" + budget.getName() + "' ends in 3 days.",
-//                    NotificationType.BUDGET_END
-//            );
-//        }
-
-        // 2. HEAVY WORK: Process Expired Budgets in Batches
         int batchSize = 100;
         boolean hasMore = true;
+        int maxLoops = 50;
+        int currentLoop = 0;
 
-        while (hasMore) {
+        while (hasMore && currentLoop < maxLoops) {
+            currentLoop++;
             hasMore = transactionTemplate.execute(status -> {
-                // Page 0 because processed budgets change status to COMPLETED
+                // 1. Fetch only ACTIVE budgets that have expired
                 Pageable pageable = PageRequest.of(0, batchSize);
                 Page<Budget> page = budgetRepository.findByStatusAndEndDateLessThanEqual(BudgetStatus.ACTIVE, today, pageable);
 
@@ -187,9 +235,17 @@ public class BudgetLifeCycleManager {
 
                 for (Budget budget : page.getContent()) {
                     try {
+                        // 2. Try to expire the budget safely
                         processBudgetExpiry(budget, budgetsToUpdate, envelopesToUpdate, logsToSave);
                     } catch (Exception e) {
-                        logger.error("Error expiring budget {}: {}", budget.getId(), e.getMessage());
+                        logger.error("🚨 CRITICAL: Failed to expire Budget ID {}. Quarantining.", budget.getId(), e);
+
+                        // 3. THE FIX: Quarantine the budget so it doesn't loop forever
+                        // This stops the CPU spike AND preserves the financial state for review.
+                        budget.setStatus(BudgetStatus.FAILED_PROCESSING);
+                        budgetsToUpdate.add(budget);
+
+                        // Optional: Send an admin alert here (Email/Slack)
                     }
                 }
 
@@ -197,7 +253,6 @@ public class BudgetLifeCycleManager {
                 envelopeRepository.saveAll(envelopesToUpdate);
                 transactionLogRepository.saveAll(logsToSave);
 
-                // 🧹 RAM CLEANUP
                 entityManager.flush();
                 entityManager.clear();
 
@@ -205,10 +260,8 @@ public class BudgetLifeCycleManager {
             });
         }
 
-        // 3. Dynamic Refresh (Optional: keep as is or batch if >1000 dynamic envelopes)
         refreshDynamicTasks(today);
     }
-
     // ========================================================================
     // 🛑 FIXED SPAM: SEPARATE DAILY CRON FOR BUDGET WARNINGS (Runs at 9:00 AM)
     // ========================================================================
@@ -451,23 +504,121 @@ public class BudgetLifeCycleManager {
         }
     }
     //===================================================
+//    private void processBudgetExpiry(Budget budget, List<Budget> budgetsToUpdate, List<Envelope> envelopesToUpdate,
+//                                     List<TransactionLog> logsToSave) {
+//        User user = budget.getUser();
+//        LocalDateTime now = fetchCurrentDateTimeFromDatabase();
+//        BigDecimal totalRefunded = BigDecimal.ZERO;
+//        List<Envelope> envelopes = envelopeRepository.findByBudgetId(budget.getId());
+//
+//        // FIX: Use totalRemainingAmount for refunds and reset both amounts
+//        for (Envelope envelope : envelopes) {
+//            BigDecimal remainingAmount = envelope.getTotalRemainingAmount(); // Changed to totalRemainingAmount
+//            if (remainingAmount.compareTo(BigDecimal.ZERO) > 0) {
+//                walletService.fundWallet(
+//                        user.getId(),
+//                        remainingAmount,
+//                        String.format("Refund of unused amount from envelope %s of budget %s", envelope.getName(), budget.getName())
+//                );
+//
+//                TransactionLog refundLog = new TransactionLog();
+//                refundLog.setUserId(user.getId());
+//                refundLog.setBudgetId(budget.getId());
+//                refundLog.setSourceEnvelopeId(envelope.getId());
+//                refundLog.setAmount(remainingAmount);
+//                refundLog.setTransactionType(BUDGET_COMPLETION_REFUND);
+//                refundLog.setStatus(COMPLETED);
+//                refundLog.setCreatedAt(now);
+//                // FIX: Generate an internal reference
+//                String ref = "MW-REFUND-" + UUID.randomUUID().toString();
+//                refundLog.setReference(ref);
+//                logsToSave.add(refundLog);
+//
+//                notificationService.sendNotification(
+//                        user.getId().toString(),
+//                        String.format("Your budget '%s' has ended. ₦%.2f from '%s' (total remaining: ₦%.2f) has been refunded to your wallet.",
+//                                budget.getName(), remainingAmount, envelope.getName(), remainingAmount),
+//                        NotificationType.BUDGET_COMPLETED,
+//                        budget.getId(),
+//                        envelope.getId(),
+//                        "VIEW_BUDGET",
+//                        "/budgets/" + budget.getId() + "/envelopes" // Navigation URL
+//                );
+//
+//                envelope.setRemainingAmount(BigDecimal.ZERO);
+//                envelope.setTotalRemainingAmount(BigDecimal.ZERO); // Reset both
+//                envelopesToUpdate.add(envelope);
+//                scheduledTaskRepository.deleteByEnvelopeId(envelope.getId());
+//                totalRefunded = totalRefunded.add(remainingAmount);
+//            }
+//        }
+//
+//        budget.setStatus(BudgetStatus.COMPLETED);
+//        budget.setRemainingAmount(BigDecimal.ZERO);
+//        budgetsToUpdate.add(budget);
+//
+//        // FIX: Include totalRemainingAmount in notification
+//        if (totalRefunded.compareTo(BigDecimal.ZERO) > 0) {
+////            notificationService.sendNotification(
+////                    user.getId().toString(),
+////                    String.format("Your budget '%s' has ended. A total of ₦%.2f has been refunded to your wallet.", budget.getName(), totalRefunded),
+////                    NotificationType.BUDGET_COMPLETED,
+////                    budget.getId(),                     // Context ID 1
+////                    null,                               // No specific envelope context for summary
+////                    "VIEW_BUDGET",                      // Action Type
+////                    "/budgets/" + budget.getId() + "/envelopes" // Navigation URL
+////            );
+//            // ✅ PUBLISH EVENT FOR COMPLETION
+//            Map<String, Object> compParams = Map.of(
+//                    "budgetName", budget.getName(),
+//                    "refunded", String.format("%,.2f", totalRefunded)
+//            );
+//            eventPublisher.publishEvent(new GenericNotificationEvent(
+//                    this, user.getId().toString(), NotificationType.BUDGET_COMPLETED,
+//                    compParams, budget.getId(), null, "/budgets/" + budget.getId()
+//            ));
+//        } else {
+//            notificationService.sendNotification(
+//                    user.getId().toString(),
+//                    String.format("Your budget '%s' has ended with no unused funds to refund.", budget.getName()),
+//                    NotificationType.BUDGET_COMPLETED
+//            );
+//        }
+//
+//        logger.info("Budget {} completed for user {}. Refunded ₦{}", budget.getId(), user.getId(), totalRefunded);
+//    }
+
     private void processBudgetExpiry(Budget budget, List<Budget> budgetsToUpdate, List<Envelope> envelopesToUpdate,
                                      List<TransactionLog> logsToSave) {
         User user = budget.getUser();
+
+        // 🛡️ DEFENSIVE CHECK 1: Does user exist?
+        if (user == null || user.getId() == null) {
+            throw new IllegalStateException("Budget " + budget.getId() + " has no valid user linked.");
+        }
+
         LocalDateTime now = fetchCurrentDateTimeFromDatabase();
         BigDecimal totalRefunded = BigDecimal.ZERO;
         List<Envelope> envelopes = envelopeRepository.findByBudgetId(budget.getId());
 
-        // FIX: Use totalRemainingAmount for refunds and reset both amounts
         for (Envelope envelope : envelopes) {
-            BigDecimal remainingAmount = envelope.getTotalRemainingAmount(); // Changed to totalRemainingAmount
-            if (remainingAmount.compareTo(BigDecimal.ZERO) > 0) {
-                walletService.fundWallet(
-                        user.getId(),
-                        remainingAmount,
-                        String.format("Refund of unused amount from envelope %s of budget %s", envelope.getName(), budget.getName())
-                );
+            BigDecimal remainingAmount = envelope.getTotalRemainingAmount();
 
+            // 🛡️ DEFENSIVE CHECK 2: Ignore negative/zero balances safely
+            if (remainingAmount != null && remainingAmount.compareTo(BigDecimal.ZERO) > 0) {
+
+                try {
+                    // Attempt Refund
+                    walletService.fundWallet(
+                            user.getId(), remainingAmount,
+                            String.format("Refund from '%s' (Budget: %s)", envelope.getName(), budget.getName()), true
+                    );
+                } catch (Exception e) {
+                    // If wallet funding fails, we MUST throw exception to trigger Quarantine
+                    throw new RuntimeException("Wallet funding failed for user " + user.getId() + ": " + e.getMessage(), e);
+                }
+
+                // Log the Refund
                 TransactionLog refundLog = new TransactionLog();
                 refundLog.setUserId(user.getId());
                 refundLog.setBudgetId(budget.getId());
@@ -476,46 +627,28 @@ public class BudgetLifeCycleManager {
                 refundLog.setTransactionType(BUDGET_COMPLETION_REFUND);
                 refundLog.setStatus(COMPLETED);
                 refundLog.setCreatedAt(now);
-                // FIX: Generate an internal reference
-                String ref = "MW-REFUND-" + UUID.randomUUID().toString();
-                refundLog.setReference(ref);
+                refundLog.setReference("MW-REF-" + UUID.randomUUID().toString());
                 logsToSave.add(refundLog);
 
-                notificationService.sendNotification(
-                        user.getId().toString(),
-                        String.format("Your budget '%s' has ended. ₦%.2f from '%s' (total remaining: ₦%.2f) has been refunded to your wallet.",
-                                budget.getName(), remainingAmount, envelope.getName(), remainingAmount),
-                        NotificationType.BUDGET_COMPLETED,
-                        budget.getId(),
-                        envelope.getId(),
-                        "VIEW_BUDGET",
-                        "/budgets/" + budget.getId() + "/envelopes" // Navigation URL
-                );
-
-                envelope.setRemainingAmount(BigDecimal.ZERO);
-                envelope.setTotalRemainingAmount(BigDecimal.ZERO); // Reset both
-                envelopesToUpdate.add(envelope);
-                scheduledTaskRepository.deleteByEnvelopeId(envelope.getId());
                 totalRefunded = totalRefunded.add(remainingAmount);
             }
+
+            // Clear envelope balance
+            envelope.setRemainingAmount(BigDecimal.ZERO);
+            envelope.setTotalRemainingAmount(BigDecimal.ZERO);
+            envelopesToUpdate.add(envelope);
+
+            // Clean tasks
+            scheduledTaskRepository.deleteByEnvelopeId(envelope.getId());
         }
 
+        // Mark Success
         budget.setStatus(BudgetStatus.COMPLETED);
         budget.setRemainingAmount(BigDecimal.ZERO);
         budgetsToUpdate.add(budget);
 
-        // FIX: Include totalRemainingAmount in notification
+        // Notify User
         if (totalRefunded.compareTo(BigDecimal.ZERO) > 0) {
-//            notificationService.sendNotification(
-//                    user.getId().toString(),
-//                    String.format("Your budget '%s' has ended. A total of ₦%.2f has been refunded to your wallet.", budget.getName(), totalRefunded),
-//                    NotificationType.BUDGET_COMPLETED,
-//                    budget.getId(),                     // Context ID 1
-//                    null,                               // No specific envelope context for summary
-//                    "VIEW_BUDGET",                      // Action Type
-//                    "/budgets/" + budget.getId() + "/envelopes" // Navigation URL
-//            );
-            // ✅ PUBLISH EVENT FOR COMPLETION
             Map<String, Object> compParams = Map.of(
                     "budgetName", budget.getName(),
                     "refunded", String.format("%,.2f", totalRefunded)
