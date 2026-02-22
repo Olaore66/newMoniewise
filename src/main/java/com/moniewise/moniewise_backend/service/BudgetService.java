@@ -321,7 +321,7 @@ public class BudgetService {
         allocationLog.setUserId(user.getId());
         allocationLog.setBudgetId(savedBudget.getId());
         allocationLog.setAmount(allocationSum.negate());  // Negative = money left wallet
-        allocationLog.setFee(BigDecimal.ZERO);
+        allocationLog.setFee(fee);
         allocationLog.setTransactionType(BUDGET_ALLOCATION);
         // 👇 ADD THIS
         allocationLog.setReference("BUD-ALL-" + savedBudget.getId() + "-" + System.currentTimeMillis());

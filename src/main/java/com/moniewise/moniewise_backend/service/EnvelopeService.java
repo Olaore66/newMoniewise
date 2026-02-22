@@ -1670,7 +1670,9 @@ public class EnvelopeService {
         String recipientName = getSafeName(recipient);
         walletService.fundWallet(recipient.getId(), amount, null, true);
 
-        String baseRef = UUID.randomUUID().toString();
+//        String baseRef = UUID.randomUUID().toString();
+        String baseRef = recipient.getId() + "-" + System.currentTimeMillis();
+
         String description = "Transfer to " + recipientName;
         String type = (String) sourceEnvelope.getConditions().getOrDefault("type", "");
         if ("emergency".equalsIgnoreCase(type) && request.getWithdrawalReason() != null) {
@@ -1678,6 +1680,7 @@ public class EnvelopeService {
         } else if (request.getNote() != null) {
             description = request.getNote();
         }
+
 
         TransactionLog senderLog = TransactionLog.builder()
                 .userId(sender.getId())
