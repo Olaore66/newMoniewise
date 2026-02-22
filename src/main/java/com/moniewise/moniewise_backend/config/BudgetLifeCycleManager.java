@@ -12,6 +12,7 @@ import com.moniewise.moniewise_backend.service.WalletService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -54,6 +55,7 @@ public class BudgetLifeCycleManager {
     private final PendingDisbursementRepository pendingDisbursementRepository;
     private final EnvelopeService envelopeService;
 
+    private final ApplicationEventPublisher eventPublisher;
     @PersistenceContext
     private EntityManager entityManager;
     private final long GRACE_PERIOD_MINUTES = 10; // can be dynamic per envelope
@@ -68,8 +70,8 @@ public class BudgetLifeCycleManager {
             TransactionTemplate transactionTemplate,
             NotificationRepository notificationRepository,
             PendingDisbursementRepository pendingDisbursementRepository,
-            @Lazy EnvelopeService envelopeService
-    ) {
+            @Lazy EnvelopeService envelopeService,
+            ApplicationEventPublisher eventPublisher) {
         this.budgetRepository = budgetRepository;
         this.envelopeRepository = envelopeRepository;
         this.scheduledTaskRepository = scheduledTaskRepository;
@@ -80,6 +82,7 @@ public class BudgetLifeCycleManager {
         this.notificationRepository = notificationRepository;
         this.pendingDisbursementRepository = pendingDisbursementRepository;
         this.envelopeService = envelopeService;
+        this.eventPublisher = eventPublisher;
     }
 
     @PostConstruct
@@ -157,14 +160,14 @@ public class BudgetLifeCycleManager {
         LocalDate threeDaysFromNow = today.plusDays(3);
 
         // 1. Notifications (These are light, List is fine)
-        List<Budget> nearingEnd = budgetRepository.findByStatusAndEndDate(BudgetStatus.ACTIVE, threeDaysFromNow);
-        for (Budget budget : nearingEnd) {
-            notificationService.sendNotification(
-                    budget.getUser().getId().toString(),
-                    "Budget '" + budget.getName() + "' ends in 3 days.",
-                    NotificationType.BUDGET_END
-            );
-        }
+//        List<Budget> nearingEnd = budgetRepository.findByStatusAndEndDate(BudgetStatus.ACTIVE, threeDaysFromNow);
+//        for (Budget budget : nearingEnd) {
+//            notificationService.sendNotification(
+//                    budget.getUser().getId().toString(),
+//                    "Budget '" + budget.getName() + "' ends in 3 days.",
+//                    NotificationType.BUDGET_END
+//            );
+//        }
 
         // 2. HEAVY WORK: Process Expired Budgets in Batches
         int batchSize = 100;
@@ -204,6 +207,29 @@ public class BudgetLifeCycleManager {
 
         // 3. Dynamic Refresh (Optional: keep as is or batch if >1000 dynamic envelopes)
         refreshDynamicTasks(today);
+    }
+
+    // ========================================================================
+    // 🛑 FIXED SPAM: SEPARATE DAILY CRON FOR BUDGET WARNINGS (Runs at 9:00 AM)
+    // ========================================================================
+    @Scheduled(cron = "0 0 9 * * ?", zone = "Africa/Lagos")
+    @Transactional(readOnly = true)
+    public void notifyExpiringBudgets() {
+        LocalDate threeDaysFromNow = fetchCurrentDateTimeFromDatabase().toLocalDate().plusDays(3);
+        List<Budget> nearingEnd = budgetRepository.findByStatusAndEndDate(BudgetStatus.ACTIVE, threeDaysFromNow);
+
+        for (Budget budget : nearingEnd) {
+            Map<String, Object> params = Map.of("budgetName", budget.getName());
+
+            eventPublisher.publishEvent(new GenericNotificationEvent(
+                    this,
+                    budget.getUser().getId().toString(),
+                    NotificationType.BUDGET_END_SOON,
+                    params,
+                    budget.getId(), null, "/budgets/" + budget.getId()
+            ));
+        }
+        logger.info("Sent 3-day warning notifications to {} budgets.", nearingEnd.size());
     }
 
     private void refreshDynamicTasks(LocalDate today) {
@@ -350,36 +376,51 @@ public class BudgetLifeCycleManager {
                 // CRITICAL: Schedule the NEXT reset
                 scheduleNextTask(envelope, "LIMIT_RESET", now);
                 break;
+//            case "PRE_DISBURSEMENT_NOTIFICATION_15MIN":
+//                // FIX: Include totalRemainingAmount in notification
+//                String message15 = String.format("Your '%s' envelope disbursement of ₦%s is 15 minutes away! (Total remaining: ₦%.2f)",
+//                        envelope.getName(), envelope.getConditions().get("limit"), envelope.getTotalRemainingAmount());
+//                notificationService.sendNotification(
+//                        userId,
+//                        message15,
+//                        NotificationType.PRE_DISBURSEMENT,
+//                        budget.getId(),                 // Context ID 1 (Budget)
+//                        envelope.getId(),               // Context ID 2 (Envelope)
+//                        "VIEW_ENVELOPE",                // Action Type
+//                        "/envelopes/" + envelope.getId() // Navigation URL
+//                );
+//                logger.debug("Sent 15-minute pre-disbursement notification for envelope {}: {}", envelope.getId(), message15);
+//                taskIdsToDelete.add(task.getId());
+//                break;
+//            case "PRE_DISBURSEMENT_NOTIFICATION_5MIN":
+//                // FIX: Include totalRemainingAmount in notification
+//                String message5 = String.format("Your '%s' envelope disbursement of ₦%s is 5 minutes away! (Total remaining: ₦%.2f)",
+//                        envelope.getName(), envelope.getConditions().get("limit"), envelope.getTotalRemainingAmount());
+//                notificationService.sendNotification(
+//                        userId,
+//                        message5,
+//                        NotificationType.PRE_DISBURSEMENT,
+//                        budget.getId(),                 // Context ID 1
+//                        envelope.getId(),               // Context ID 2
+//                        "VIEW_ENVELOPE",                // Action Type
+//                        "/envelopes/" + envelope.getId() // Navigation URL
+//                );
+//                logger.debug("Sent 5-minute pre-disbursement notification for envelope {}: {}", envelope.getId(), message5);
+//                taskIdsToDelete.add(task.getId());
+//                break;
             case "PRE_DISBURSEMENT_NOTIFICATION_15MIN":
-                // FIX: Include totalRemainingAmount in notification
-                String message15 = String.format("Your '%s' envelope disbursement of ₦%s is 15 minutes away! (Total remaining: ₦%.2f)",
-                        envelope.getName(), envelope.getConditions().get("limit"), envelope.getTotalRemainingAmount());
-                notificationService.sendNotification(
-                        userId,
-                        message15,
-                        NotificationType.PRE_DISBURSEMENT,
-                        budget.getId(),                 // Context ID 1 (Budget)
-                        envelope.getId(),               // Context ID 2 (Envelope)
-                        "VIEW_ENVELOPE",                // Action Type
-                        "/envelopes/" + envelope.getId() // Navigation URL
-                );
-                logger.debug("Sent 15-minute pre-disbursement notification for envelope {}: {}", envelope.getId(), message15);
-                taskIdsToDelete.add(task.getId());
-                break;
             case "PRE_DISBURSEMENT_NOTIFICATION_5MIN":
-                // FIX: Include totalRemainingAmount in notification
-                String message5 = String.format("Your '%s' envelope disbursement of ₦%s is 5 minutes away! (Total remaining: ₦%.2f)",
-                        envelope.getName(), envelope.getConditions().get("limit"), envelope.getTotalRemainingAmount());
-                notificationService.sendNotification(
-                        userId,
-                        message5,
-                        NotificationType.PRE_DISBURSEMENT,
-                        budget.getId(),                 // Context ID 1
-                        envelope.getId(),               // Context ID 2
-                        "VIEW_ENVELOPE",                // Action Type
-                        "/envelopes/" + envelope.getId() // Navigation URL
+                // ✅ PUBLISH EVENT INSTEAD OF HARDCODED NOTIFICATION
+                String timeLimit = task.getTaskType().contains("15") ? "15 minutes" : "5 minutes";
+                Map<String, Object> preParams = Map.of(
+                        "amount", formatAmount(envelope.getConditions().get("limit")),
+                        "envelopeName", envelope.getName(),
+                        "time", timeLimit
                 );
-                logger.debug("Sent 5-minute pre-disbursement notification for envelope {}: {}", envelope.getId(), message5);
+                eventPublisher.publishEvent(new GenericNotificationEvent(
+                        this, userId, NotificationType.PRE_DISBURSEMENT, preParams,
+                        budget.getId(), envelope.getId(), "/envelopes/" + envelope.getId()
+                ));
                 taskIdsToDelete.add(task.getId());
                 break;
             case "DISBURSEMENT":
@@ -465,15 +506,24 @@ public class BudgetLifeCycleManager {
 
         // FIX: Include totalRemainingAmount in notification
         if (totalRefunded.compareTo(BigDecimal.ZERO) > 0) {
-            notificationService.sendNotification(
-                    user.getId().toString(),
-                    String.format("Your budget '%s' has ended. A total of ₦%.2f has been refunded to your wallet.", budget.getName(), totalRefunded),
-                    NotificationType.BUDGET_COMPLETED,
-                    budget.getId(),                     // Context ID 1
-                    null,                               // No specific envelope context for summary
-                    "VIEW_BUDGET",                      // Action Type
-                    "/budgets/" + budget.getId() + "/envelopes" // Navigation URL
+//            notificationService.sendNotification(
+//                    user.getId().toString(),
+//                    String.format("Your budget '%s' has ended. A total of ₦%.2f has been refunded to your wallet.", budget.getName(), totalRefunded),
+//                    NotificationType.BUDGET_COMPLETED,
+//                    budget.getId(),                     // Context ID 1
+//                    null,                               // No specific envelope context for summary
+//                    "VIEW_BUDGET",                      // Action Type
+//                    "/budgets/" + budget.getId() + "/envelopes" // Navigation URL
+//            );
+            // ✅ PUBLISH EVENT FOR COMPLETION
+            Map<String, Object> compParams = Map.of(
+                    "budgetName", budget.getName(),
+                    "refunded", String.format("%,.2f", totalRefunded)
             );
+            eventPublisher.publishEvent(new GenericNotificationEvent(
+                    this, user.getId().toString(), NotificationType.BUDGET_COMPLETED,
+                    compParams, budget.getId(), null, "/budgets/" + budget.getId()
+            ));
         } else {
             notificationService.sendNotification(
                     user.getId().toString(),
@@ -674,15 +724,25 @@ public class BudgetLifeCycleManager {
             logsToSave.add(log);
 
             // 6. Notify User (Success Message)
-            notificationService.sendNotification(
-                    envelope.getBudget().getUser().getId().toString(),
-                    String.format("₦%.2f is now available in '%s'.", amountToDisburse, envelope.getName()),
-                    NotificationType.DISBURSEMENT_SUCCESS,
-                    envelope.getBudget().getId(),
-                    envelope.getId(),
-                    "VIEW_ENVELOPE",
-                    "/envelopes/" + envelope.getId()
+//            notificationService.sendNotification(
+//                    envelope.getBudget().getUser().getId().toString(),
+//                    String.format("₦%.2f is now available in '%s'.", amountToDisburse, envelope.getName()),
+//                    NotificationType.DISBURSEMENT_SUCCESS,
+//                    envelope.getBudget().getId(),
+//                    envelope.getId(),
+//                    "VIEW_ENVELOPE",
+//                    "/envelopes/" + envelope.getId()
+//            );
+            // ✅ PUBLISH EVENT INSTEAD OF HARDCODED NOTIFICATION
+            Map<String, Object> params = Map.of(
+                    "amount", String.format("%,.2f", amountToDisburse),
+                    "envelopeName", envelope.getName()
             );
+            eventPublisher.publishEvent(new GenericNotificationEvent(
+                    this, envelope.getBudget().getUser().getId().toString(),
+                    NotificationType.DISBURSEMENT_SUCCESS, params,
+                    envelope.getBudget().getId(), envelope.getId(), "/envelopes/" + envelope.getId()
+            ));
 
             logger.info("Auto-disbursed ₦{} to envelope {}", amountToDisburse, envelope.getId());
         }
@@ -772,15 +832,25 @@ public class BudgetLifeCycleManager {
         envelopeRepository.save(envelope);
 
         // 4. Notify
-        notificationService.sendNotification(
-                envelope.getBudget().getUser().getId().toString(),
-                String.format("Lock Matured! ₦%.2f is now available in '%s'.", amountToDisburse, envelope.getName()),
-                NotificationType.DISBURSEMENT_SUCCESS,
-                envelope.getBudget().getId(),
-                envelope.getId(),
-                "VIEW_ENVELOPE",
-                "/envelopes/" + envelope.getId()
+//        notificationService.sendNotification(
+//                envelope.getBudget().getUser().getId().toString(),
+//                String.format("Lock Matured! ₦%.2f is now available in '%s'.", amountToDisburse, envelope.getName()),
+//                NotificationType.DISBURSEMENT_SUCCESS,
+//                envelope.getBudget().getId(),
+//                envelope.getId(),
+//                "VIEW_ENVELOPE",
+//                "/envelopes/" + envelope.getId()
+//        );
+        // ✅ PUBLISH EVENT INSTEAD OF HARDCODED NOTIFICATION
+        Map<String, Object> params = Map.of(
+                "amount", String.format("%,.2f", amountToDisburse),
+                "envelopeName", envelope.getName()
         );
+        eventPublisher.publishEvent(new GenericNotificationEvent(
+                this, envelope.getBudget().getUser().getId().toString(),
+                NotificationType.DISBURSEMENT_SUCCESS, params,
+                envelope.getBudget().getId(), envelope.getId(), "/envelopes/" + envelope.getId()
+        ));
     }
 
     @Scheduled(fixedRate = 60000)
@@ -800,16 +870,22 @@ public class BudgetLifeCycleManager {
                 Envelope envelope = envelopeRepository.findById(pd.getEnvelopeId()).orElse(null);
                 Long budgetId = (envelope != null) ? envelope.getBudget().getId() : null;
 
-                notificationService.sendNotification(
-                        pd.getUserId().toString(),
-                        String.format("Your disbursement window for '%s' has closed. The funds remain in your budget vault.",
-                                pd.getEnvelopeName()),
-                        NotificationType.EXPIRED_DISBURSEMENT,
-                        budgetId,                       // Context ID 1
-                        pd.getEnvelopeId(),             // Context ID 2
-                        "VIEW_ENVELOPE",                // Action Type
-                        "/envelopes/" + pd.getEnvelopeId() // Navigation URL
-                );
+//                notificationService.sendNotification(
+//                        pd.getUserId().toString(),
+//                        String.format("Your disbursement window for '%s' has closed. The funds remain in your budget vault.",
+//                                pd.getEnvelopeName()),
+//                        NotificationType.EXPIRED_DISBURSEMENT,
+//                        budgetId,                       // Context ID 1
+//                        pd.getEnvelopeId(),             // Context ID 2
+//                        "VIEW_ENVELOPE",                // Action Type
+//                        "/envelopes/" + pd.getEnvelopeId() // Navigation URL
+//                );
+                // ✅ PUBLISH EVENT
+                Map<String, Object> params = Map.of("envelopeName", pd.getEnvelopeName());
+                eventPublisher.publishEvent(new GenericNotificationEvent(
+                        this, pd.getUserId().toString(), NotificationType.EXPIRED_DISBURSEMENT,
+                        params, budgetId, pd.getEnvelopeId(), "/envelopes/" + pd.getEnvelopeId()
+                ));
 
                 disbursementsToDelete.add(pd);
 
@@ -934,6 +1010,11 @@ public class BudgetLifeCycleManager {
             default:
                 return null; // emergency or unsupported types
         }
+    }
+
+    private String formatAmount(Object obj) {
+        if(obj == null) return "0";
+        return obj.toString();
     }
 
 
