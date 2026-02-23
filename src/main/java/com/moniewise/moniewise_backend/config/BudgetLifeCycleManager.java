@@ -26,7 +26,6 @@ import javax.annotation.PostConstruct;
 import javax.persistence.EntityManager;
 import javax.persistence.PersistenceContext;
 import java.math.BigDecimal;
-import java.math.RoundingMode;
 import java.time.*;
 import java.time.format.DateTimeParseException;
 import java.time.temporal.TemporalAdjusters;
@@ -551,7 +550,7 @@ public class BudgetLifeCycleManager {
 
                 if (unspent.compareTo(BigDecimal.ZERO) > 0) {
                     // Move it back to the Vault
-                    envelope.setTotalRemainingAmount(envelope.getTotalRemainingAmount().add(unspent));
+//                    envelope.setTotalRemainingAmount(envelope.getTotalRemainingAmount().add(unspent));
 
                     // Optional: Create a log so the user knows why their vault increased
                     TransactionLog refundLog = new TransactionLog();
@@ -583,32 +582,6 @@ public class BudgetLifeCycleManager {
                 // 3. PROCEED TO DISBURSE
                 disburseEnvelope(envelope, now, envelopesToUpdate, logsToSave);
                 break;
-
-            case "safe_lock":
-            case "strict_lock":
-                if (!conditions.containsKey("lockStartDate") || !conditions.containsKey("lockDurationDays") || !conditions.containsKey("interestRate")) {
-                    logger.warn("Missing lock conditions for envelope {}", envelope.getId());
-                    break;
-                }
-                LocalDate lockStart = LocalDate.parse((String) conditions.get("lockStartDate"));
-                int lockDays = Integer.parseInt(conditions.get("lockDurationDays").toString());
-                LocalDate unlockDate = lockStart.plusDays(lockDays);
-
-                if (today.equals(unlockDate)) {
-                    BigDecimal interestRate = new BigDecimal(conditions.get("interestRate").toString());
-                    BigDecimal interest = envelope.getAmount()
-                            .multiply(interestRate)
-                            .divide(BigDecimal.valueOf(100), 2, RoundingMode.HALF_UP);
-                    envelope.setRemainingAmount(envelope.getRemainingAmount().add(interest));
-                    envelope.setTotalRemainingAmount(envelope.getTotalRemainingAmount().add(interest));
-                    envelopesToUpdate.add(envelope);
-
-                    disburseEnvelope(envelope, now, envelopesToUpdate, logsToSave);
-                    message = String.format("Lock lifted ",
-                            envelope.getName(), interest, conditions.get("limit"), envelope.getTotalRemainingAmount());
-                }
-                break;
-
             case "emergency":
                 // No automatic disbursement; handled by user action
                 break;
