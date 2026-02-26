@@ -312,11 +312,13 @@ public class BudgetLifeCycleManager {
         int batchSize = 100; // Only load 100 at a time
         boolean hasNextBatch = true;
 
-        while (hasNextBatch) {
-            // Process chunks in separate transactions
+        // 👇 YOU MUST ADD THESE TWO LINES 👇
+        int maxLoops = 50;
+        int currentLoop = 0;
+
+        while (hasNextBatch && currentLoop < maxLoops) {
+            currentLoop++;
             hasNextBatch = transactionTemplate.execute(status -> {
-                // Always fetch Page 0. Because we DELETE or RESCHEDULE tasks,
-                // they leave the "due" list, so the next batch moves up to Page 0.
                 Pageable pageable = PageRequest.of(0, batchSize);
 
                 // Uses the new Repository method we added
@@ -912,7 +914,13 @@ public class BudgetLifeCycleManager {
                 if (conditions.containsKey("lockStartDate") && conditions.containsKey("lockDurationDays")) {
                     LocalDate lockStart = LocalDate.parse((String) conditions.get("lockStartDate"));
                     int lockDays = Integer.parseInt(conditions.get("lockDurationDays").toString());
-                    return lockStart.plusDays(lockDays).atStartOfDay();
+
+                    // 👇 ADD THIS TO KILL THE GHOST TRAIN 👇
+                    LocalDateTime unlockTime = lockStart.plusDays(lockDays).atStartOfDay();
+                    if (unlockTime.isBefore(now)) {
+                        return null; // The lock is already done. Kill the task.
+                    }
+                    return unlockTime;
                 }
                 return null;
 
