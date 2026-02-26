@@ -834,7 +834,21 @@ public class BudgetLifeCycleManager {
                 LocalDate nextWeekStart = last.toLocalDate()
                         .plusWeeks(1)
                         .with(TemporalAdjusters.next(DayOfWeek.MONDAY));
-                return nextWeekStart.atStartOfDay();
+
+                LocalDateTime targetTime1 = nextWeekStart.atStartOfDay();
+
+                // 🛑 THE GHOST TRAIN FIX:
+                // If midnight has already passed today, force it to next Monday!
+                while (targetTime1.isBefore(now)) {
+                    targetTime1 = targetTime1.plusWeeks(1);
+                }
+
+                // Make sure we don't schedule past the budget end date
+                if (targetTime1.isAfter(budgetEnd.atTime(23, 59, 59))) {
+                    return null;
+                }
+
+                return targetTime1;
 
             case "dynamic":
                 // 1. Safety Check
