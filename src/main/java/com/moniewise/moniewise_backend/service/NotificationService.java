@@ -91,6 +91,61 @@ public class NotificationService {
      * Only handle the notification AFTER the transaction commits successfully.
      * Prevents "Ghost Notifications" where a user gets an alert but no money moved.
      */
+//    @Async
+//    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+////    public void handleNotificationEvent(GenericNotificationEvent event) {
+//        try {
+//            // 1. Centralized Message Generation
+//            String message = generateMessage(event.getType(), event.getParams());
+//            NotificationPriority priority = getPriority(event.getType());
+//
+//            // 2. Persist to DB
+//            Notification notification = new Notification();
+//            notification.setUserId(Long.valueOf(event.getUserId()));
+//            notification.setMessage(message);
+//            notification.setType(event.getType());
+//            notification.setCreatedAt(LocalDateTime.now());
+//            notification.setBudgetId(event.getContextId1());
+//            notification.setEnvelopeId(event.getContextId2());
+//            notification.setRedirectUrl(event.getActionUrl());
+//            notification.setRead(false);
+//            notificationRepository.save(notification);
+//
+//            // 3. Send FCM (Only for High Priority)
+//            if (priority == NotificationPriority.HIGH) {
+////                User user = userRepository.findById(Long.valueOf(event.getUserId())).orElse(null);
+//                Long userId = Long.valueOf(event.getUserId());
+////                if (user != null && user.getFcmToken() != null && !user.getFcmToken().isEmpty() && !"stub".equals(activeProfile)) {
+////                    if (firebaseMessaging != null) {
+////                        String dynamicTitle = getNotificationTitle(event.getType());
+////                        sendFCMMessage(user, dynamicTitle, message, null, event.getActionUrl(), event.getType());
+////                    } else {
+////                        logger.warn("⚠️ Skipping FCM: Firebase is not initialized.");
+////                    }
+////                }
+////
+//
+//                // ✅ NEW LIGHTWEIGHT WAY:
+//                // ✅ OPTIMIZED: Fetch ONLY the token string
+//                String fcmToken = userRepository.findFcmTokenById(userId);
+//
+//                if (fcmToken != null && !fcmToken.isEmpty() && !"stub".equals(activeProfile)) {
+//                    if (firebaseMessaging != null) {
+//                        String dynamicTitle = getNotificationTitle(event.getType());
+//                        sendFCMMessage(fcmToken, dynamicTitle, message, null, event.getActionUrl(), event.getType(), userId);
+//                    } else {
+//                        logger.warn("⚠️ Skipping FCM: Firebase is not initialized.");
+//                    }
+//                }
+//            } else {
+//                logger.info("Skipping FCM push for non-HIGH priority event: {}", event.getType());
+//            }
+//
+//        } catch (Exception e) {
+//            logger.error("Failed to process notification event for user {}", event.getUserId(), e);
+//        }
+//    }
+
     @Async
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void handleNotificationEvent(GenericNotificationEvent event) {
@@ -99,46 +154,35 @@ public class NotificationService {
             String message = generateMessage(event.getType(), event.getParams());
             NotificationPriority priority = getPriority(event.getType());
 
-            // 2. Persist to DB
-            Notification notification = new Notification();
-            notification.setUserId(Long.valueOf(event.getUserId()));
-            notification.setMessage(message);
-            notification.setType(event.getType());
-            notification.setCreatedAt(LocalDateTime.now());
-            notification.setBudgetId(event.getContextId1());
-            notification.setEnvelopeId(event.getContextId2());
-            notification.setRedirectUrl(event.getActionUrl());
-            notification.setRead(false);
-            notificationRepository.save(notification);
+            // 🛑 NEW: Determine if this notification should live in the DB forever
+            boolean shouldSaveToDatabase = shouldPersistToDatabase(event.getType());
 
-            // 3. Send FCM (Only for High Priority)
-            if (priority == NotificationPriority.HIGH) {
-//                User user = userRepository.findById(Long.valueOf(event.getUserId())).orElse(null);
-                Long userId = Long.valueOf(event.getUserId());
-//                if (user != null && user.getFcmToken() != null && !user.getFcmToken().isEmpty() && !"stub".equals(activeProfile)) {
-//                    if (firebaseMessaging != null) {
-//                        String dynamicTitle = getNotificationTitle(event.getType());
-//                        sendFCMMessage(user, dynamicTitle, message, null, event.getActionUrl(), event.getType());
-//                    } else {
-//                        logger.warn("⚠️ Skipping FCM: Firebase is not initialized.");
-//                    }
-//                }
-//
+            // 2. Persist to DB (ONLY if it's an important event)
+            if (shouldSaveToDatabase) {
+                Notification notification = new Notification();
+                notification.setUserId(Long.valueOf(event.getUserId()));
+                notification.setMessage(message);
+                notification.setType(event.getType());
+                notification.setCreatedAt(LocalDateTime.now());
+                notification.setBudgetId(event.getContextId1());
+                notification.setEnvelopeId(event.getContextId2());
+                notification.setRedirectUrl(event.getActionUrl());
+                notification.setRead(false);
+                notificationRepository.save(notification);
+            }
 
-                // ✅ NEW LIGHTWEIGHT WAY:
-                // ✅ OPTIMIZED: Fetch ONLY the token string
-                String fcmToken = userRepository.findFcmTokenById(userId);
+            // 3. Send FCM Push (We want to send pushes for MORE things than we save)
+            // Example: We push a 15-min warning to their phone, but we don't save it to the DB inbox.
+            Long userId = Long.valueOf(event.getUserId());
+            String fcmToken = userRepository.findFcmTokenById(userId);
 
-                if (fcmToken != null && !fcmToken.isEmpty() && !"stub".equals(activeProfile)) {
-                    if (firebaseMessaging != null) {
-                        String dynamicTitle = getNotificationTitle(event.getType());
-                        sendFCMMessage(fcmToken, dynamicTitle, message, null, event.getActionUrl(), event.getType(), userId);
-                    } else {
-                        logger.warn("⚠️ Skipping FCM: Firebase is not initialized.");
-                    }
+            if (fcmToken != null && !fcmToken.isEmpty() && !"stub".equals(activeProfile)) {
+                if (firebaseMessaging != null) {
+                    String dynamicTitle = getNotificationTitle(event.getType());
+                    sendFCMMessage(fcmToken, dynamicTitle, message, null, event.getActionUrl(), event.getType(), userId);
+                } else {
+                    logger.warn("⚠️ Skipping FCM: Firebase is not initialized.");
                 }
-            } else {
-                logger.info("Skipping FCM push for non-HIGH priority event: {}", event.getType());
             }
 
         } catch (Exception e) {
@@ -146,6 +190,32 @@ public class NotificationService {
         }
     }
 
+    // 👇 ADD THIS HELPER METHOD 👇
+    /**
+     * Determines which events are permanently saved in the user's in-app Inbox.
+     * Spammy events (like 5-minute warnings) return false.
+     */
+    private boolean shouldPersistToDatabase(NotificationType type) {
+        if (type == null) return false;
+
+        return switch (type) {
+            // ❌ DO NOT SAVE TO INBOX (Transient / Nudges)
+            case PRE_DISBURSEMENT, DISBURSEMENT_REMINDER, POSITIVE_NUDGE, WELCOME -> false;
+
+            // ✅ SAVE TO INBOX (Financial / Important)
+            case WALLET_FUNDED, WALLET_DEPOSIT, REFUND_ISSUED,
+                    WITHDRAWAL, EXTERNAL_TRANSFER, ENVELOPE_TRANSFER, BUDGET_CREATION_FEE,
+                    DISBURSEMENT_SUCCESS, EXPIRED_DISBURSEMENT, DISBURSEMENT_FAILED,
+                    INSUFFICIENT_BALANCE, LOW_BALANCE_WARNING, ENVELOPE_LOW_BALANCE,
+                    LIMIT_REACHED, BUDGET_LIMIT_WARNING, EMERGENCY_USED,
+                    BUDGET_CREATION, BUDGET_COMPLETED, ENVELOPE_CREATED,
+                    ENVELOPE_UPDATED, ENVELOPE_LOCKED, ENVELOPE_UNLOCKED,
+                    BUDGET_END, BUDGET_END_SOON, SYSTEM -> true;
+
+            // Default to true for safety, so we don't miss new critical enums
+            default -> true;
+        };
+    }
     /**
      * 🟢 CENTRALIZED COPY: All text lives here for events.
      */
