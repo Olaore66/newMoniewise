@@ -199,23 +199,44 @@ public class NotificationService {
         if (type == null) return false;
 
         return switch (type) {
-            // ❌ DO NOT SAVE TO INBOX (Transient / Nudges)
-            case PRE_DISBURSEMENT, DISBURSEMENT_REMINDER, POSITIVE_NUDGE, WELCOME -> false;
+            // ❌ DO NOT SAVE TO INBOX (Transient, Nudges, or Bundled Noise)
+            case PRE_DISBURSEMENT, DISBURSEMENT_REMINDER, POSITIVE_NUDGE, WELCOME,
+                    BUDGET_CREATION_FEE, ENVELOPE_CREATED -> false; // <--- Added here!
 
             // ✅ SAVE TO INBOX (Financial / Important)
             case WALLET_FUNDED, WALLET_DEPOSIT, REFUND_ISSUED,
-                    WITHDRAWAL, EXTERNAL_TRANSFER, ENVELOPE_TRANSFER, BUDGET_CREATION_FEE,
+                    WITHDRAWAL, EXTERNAL_TRANSFER, ENVELOPE_TRANSFER,
                     DISBURSEMENT_SUCCESS, EXPIRED_DISBURSEMENT, DISBURSEMENT_FAILED,
                     INSUFFICIENT_BALANCE, LOW_BALANCE_WARNING, ENVELOPE_LOW_BALANCE,
                     LIMIT_REACHED, BUDGET_LIMIT_WARNING, EMERGENCY_USED,
-                    BUDGET_CREATION, BUDGET_COMPLETED, ENVELOPE_CREATED,
+                    BUDGET_CREATION, BUDGET_COMPLETED,
                     ENVELOPE_UPDATED, ENVELOPE_LOCKED, ENVELOPE_UNLOCKED,
                     BUDGET_END, BUDGET_END_SOON, SYSTEM -> true;
 
-            // Default to true for safety, so we don't miss new critical enums
             default -> true;
         };
     }
+//    private boolean shouldPersistToDatabase(NotificationType type) {
+//        if (type == null) return false;
+//
+//        return switch (type) {
+//            // ❌ DO NOT SAVE TO INBOX (Transient / Nudges)
+//            case PRE_DISBURSEMENT, DISBURSEMENT_REMINDER, POSITIVE_NUDGE, WELCOME -> false;
+//
+//            // ✅ SAVE TO INBOX (Financial / Important)
+//            case WALLET_FUNDED, WALLET_DEPOSIT, REFUND_ISSUED,
+//                    WITHDRAWAL, EXTERNAL_TRANSFER, ENVELOPE_TRANSFER, BUDGET_CREATION_FEE,
+//                    DISBURSEMENT_SUCCESS, EXPIRED_DISBURSEMENT, DISBURSEMENT_FAILED,
+//                    INSUFFICIENT_BALANCE, LOW_BALANCE_WARNING, ENVELOPE_LOW_BALANCE,
+//                    LIMIT_REACHED, BUDGET_LIMIT_WARNING, EMERGENCY_USED,
+//                    BUDGET_CREATION, BUDGET_COMPLETED, ENVELOPE_CREATED,
+//                    ENVELOPE_UPDATED, ENVELOPE_LOCKED, ENVELOPE_UNLOCKED,
+//                    BUDGET_END, BUDGET_END_SOON, SYSTEM -> true;
+//
+//            // Default to true for safety, so we don't miss new critical enums
+//            default -> true;
+//        };
+//    }
     /**
      * 🟢 CENTRALIZED COPY: All text lives here for events.
      */
@@ -294,7 +315,11 @@ public class NotificationService {
             case BUDGET_CREATION -> {
                 String amount = formatAmount(params.getOrDefault("allocated", "0"));
                 String name = (String) params.get("budgetName");
-                yield String.format("Your budget '%s' is live! ₦%s has been successfully allocated.", name, amount);
+                String fee = formatAmount(params.getOrDefault("fee", "0"));
+                String envCount = String.valueOf(params.getOrDefault("envelopeCount", "your"));
+
+                yield String.format("And we're live! 🎯 Your '%s' budget is set up with ₦%s across %s envelopes. (Includes ₦%s setup fee).",
+                        name, amount, envCount, fee);
             }
 
             case BUDGET_CREATION_FEE -> {

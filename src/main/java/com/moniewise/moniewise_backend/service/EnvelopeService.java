@@ -2016,7 +2016,7 @@ public class EnvelopeService {
     }
 
     @Transactional
-    public EnvelopeResponse createEnvelope(EnvelopeRequest request, String email) {
+    public EnvelopeResponse createEnvelope(EnvelopeRequest request, String email, boolean isSilent) {
         Budget budget = budgetRepository.findById(request.getBudgetId())
                 .orElseThrow(() -> new EntityNotFoundException("Budget not found with ID: " + request.getBudgetId()));
 
@@ -2092,21 +2092,31 @@ public class EnvelopeService {
         budgetLifeCycleManager.scheduleDynamicTasks(envelope);
 
         // ✅ ADD NEW EVENT
-        Map<String, Object> params = Map.of(
-                "amount", String.format("%,.2f", amount),
-                "envelopeName", envelope.getName(),
-                "budgetName", budget.getName()
-        );
-
-        eventPublisher.publishEvent(new GenericNotificationEvent(
-                this,
-                budget.getUser().getId().toString(),
-                NotificationType.ENVELOPE_CREATED, // Make sure you handle this TYPE in NotificationService!
-                params,
-                budget.getId(),
-                envelope.getId(),
-                "/envelopes/" + envelope.getId()
-        ));
+//        Map<String, Object> params = Map.of(
+//                "amount", String.format("%,.2f", amount),
+//                "envelopeName", envelope.getName(),
+//                "budgetName", budget.getName()
+//        );
+//
+//        eventPublisher.publishEvent(new GenericNotificationEvent(
+//                this,
+//                budget.getUser().getId().toString(),
+//                NotificationType.ENVELOPE_CREATED, // Make sure you handle this TYPE in NotificationService!
+//                params,
+//                budget.getId(),
+//                envelope.getId(),
+//                "/envelopes/" + envelope.getId()
+//        ));
+        if (!isSilent) {
+            Map<String, Object> params = Map.of(
+                    "amount", String.format("%,.2f", amount),
+                    "envelopeName", envelope.getName()
+            );
+            eventPublisher.publishEvent(new GenericNotificationEvent(
+                    this, budget.getUser().getId().toString(), NotificationType.ENVELOPE_CREATED,
+                    params, budget.getId(), envelope.getId(), "/envelopes/" + envelope.getId()
+            ));
+        }
         return toResponse(envelope);
     }
 

@@ -275,7 +275,7 @@ public class BudgetService {
 
             envelopeRequest.setBudgetId(savedBudget.getId()); // Set budget ID
 
-            EnvelopeResponse envelopeResponse = envelopeService.createEnvelope(envelopeRequest, email);
+            EnvelopeResponse envelopeResponse = envelopeService.createEnvelope(envelopeRequest, email, true);
             Envelope envelope = envelopeRepository.findById(envelopeResponse.getId())
                     .orElseThrow(() -> new IllegalStateException("Failed to retrieve created envelope"));
             envelopes.add(envelope);
@@ -382,24 +382,35 @@ public class BudgetService {
 //        );
 
         // 🛑 FIXED: PUBLISH SUCCESS EVENT HERE (AT THE VERY END)
+//        Map<String, Object> params = new HashMap<>();
+//        params.put("budgetName", savedBudget.getName());
+//        params.put("allocated", String.format("%,.2f", allocationSum));
+//        params.put("fee", String.format("%,.2f", fee));
+//
+////        if (unallocatedAmount.compareTo(BigDecimal.ZERO) > 0) {
+////            params.put("refunded", String.format("%,.2f", unallocatedAmount));
+////        }
+//
+//        // Publish the event!
+//        eventPublisher.publishEvent(new GenericNotificationEvent(
+//                this,
+//                user.getId().toString(),
+//                NotificationType.BUDGET_CREATION,
+//                params,
+//                savedBudget.getId(),
+//                null,
+//                "/budgets/" + savedBudget.getId()
+//        ));
+
         Map<String, Object> params = new HashMap<>();
-        params.put("budgetName", savedBudget.getName());
-        params.put("allocated", String.format("%,.2f", allocationSum));
-        params.put("fee", String.format("%,.2f", fee));
+        params.put("budgetName", budget.getName());
+        params.put("allocated", budget.getTotalAmount());
+        params.put("fee", fee);
+        params.put("envelopeCount", request.getEnvelopes().size());
 
-//        if (unallocatedAmount.compareTo(BigDecimal.ZERO) > 0) {
-//            params.put("refunded", String.format("%,.2f", unallocatedAmount));
-//        }
-
-        // Publish the event!
         eventPublisher.publishEvent(new GenericNotificationEvent(
-                this,
-                user.getId().toString(),
-                NotificationType.BUDGET_CREATION,
-                params,
-                savedBudget.getId(),
-                null,
-                "/budgets/" + savedBudget.getId()
+                this, user.getId().toString(), NotificationType.BUDGET_CREATION,
+                params, budget.getId(), null, "/budgets/" + budget.getId()
         ));
 
         return new BudgetResponse(

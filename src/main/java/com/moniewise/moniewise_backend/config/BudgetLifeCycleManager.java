@@ -96,20 +96,34 @@ public class BudgetLifeCycleManager {
     }
 
     public void scheduleDynamicTasks(Envelope envelope) {
-        // 1. Clear old pending tasks (Clean slate)
-//        scheduledTaskRepository.deleteByEnvelopeId(envelope.getId());
-
+        // 🛑 FIX 1: Clean slate for ALL task types so they don't stack up like pancakes
         scheduledTaskRepository.deleteByEnvelopeIdAndTaskType(envelope.getId(), "DISBURSEMENT");
+        scheduledTaskRepository.deleteByEnvelopeIdAndTaskType(envelope.getId(), "PRE_DISBURSEMENT_NOTIFICATION_15MIN");
+        scheduledTaskRepository.deleteByEnvelopeIdAndTaskType(envelope.getId(), "PRE_DISBURSEMENT_NOTIFICATION_5MIN");
 
         LocalDateTime now = fetchCurrentDateTimeFromDatabase();
-
-        // 2. Find ONLY the NEXT SINGLE disbursement time
         LocalDateTime nextTriggerTime = calculateNextDisbursementTime(envelope);
 
         if (nextTriggerTime != null) {
             scheduleDisbursementGroup(envelope, nextTriggerTime, now);
         }
     }
+
+//    public void scheduleDynamicTasks(Envelope envelope) {
+//        // 1. Clear old pending tasks (Clean slate)
+////        scheduledTaskRepository.deleteByEnvelopeId(envelope.getId());
+//
+//        scheduledTaskRepository.deleteByEnvelopeIdAndTaskType(envelope.getId(), "DISBURSEMENT");
+//
+//        LocalDateTime now = fetchCurrentDateTimeFromDatabase();
+//
+//        // 2. Find ONLY the NEXT SINGLE disbursement time
+//        LocalDateTime nextTriggerTime = calculateNextDisbursementTime(envelope);
+//
+//        if (nextTriggerTime != null) {
+//            scheduleDisbursementGroup(envelope, nextTriggerTime, now);
+//        }
+//    }
 
     // Helper to schedule the trio: Disbursement + Warnings
     private void scheduleDisbursementGroup(Envelope envelope, LocalDateTime triggerTime, LocalDateTime now) {
@@ -701,7 +715,7 @@ public class BudgetLifeCycleManager {
         notificationRepository.deleteByCreatedAtBefore(threshold);
         logger.info("Cleaned notifications older than {}", threshold);
     }
-    @Scheduled(fixedRate = 60000)
+//    @Scheduled(fixedRate = 60000)
     @Transactional
     public void checkAndHandleMaturedEnvelopes() {
         LocalDateTime now = fetchCurrentDateTimeFromDatabase();
