@@ -412,8 +412,8 @@ public class BudgetLifeCycleManager {
             case "DISBURSEMENT":
                 processEnvelopeDisbursement(envelope, now.toLocalDate(), envelopesToUpdate, logsToSave);
                 // CRITICAL: Schedule the NEXT disbursement so it happens again tomorrow/next week
-                scheduleNextTask(envelope, "DISBURSEMENT", now);
-//                scheduleDynamicTasks(envelope);
+//                scheduleNextTask(envelope, "DISBURSEMENT", now);
+                scheduleDynamicTasks(envelope);
                 taskIdsToDelete.add(task.getId());
                 break;
             default:

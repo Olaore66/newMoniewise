@@ -111,7 +111,7 @@ public class EnvelopeController {
            Authentication authentication
    ) {
        String email = authentication.getName();
-       EnvelopeResponse response = envelopeService.createEnvelope(request, email);
+       EnvelopeResponse response = envelopeService.createEnvelope(request, email, false);
        return new ResponseEntity<>(response, HttpStatus.CREATED);
    }
 
