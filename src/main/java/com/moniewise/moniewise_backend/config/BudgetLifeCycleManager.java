@@ -109,22 +109,6 @@ public class BudgetLifeCycleManager {
         }
     }
 
-//    public void scheduleDynamicTasks(Envelope envelope) {
-//        // 1. Clear old pending tasks (Clean slate)
-////        scheduledTaskRepository.deleteByEnvelopeId(envelope.getId());
-//
-//        scheduledTaskRepository.deleteByEnvelopeIdAndTaskType(envelope.getId(), "DISBURSEMENT");
-//
-//        LocalDateTime now = fetchCurrentDateTimeFromDatabase();
-//
-//        // 2. Find ONLY the NEXT SINGLE disbursement time
-//        LocalDateTime nextTriggerTime = calculateNextDisbursementTime(envelope);
-//
-//        if (nextTriggerTime != null) {
-//            scheduleDisbursementGroup(envelope, nextTriggerTime, now);
-//        }
-//    }
-
     // Helper to schedule the trio: Disbursement + Warnings
     private void scheduleDisbursementGroup(Envelope envelope, LocalDateTime triggerTime, LocalDateTime now) {
         List<ScheduledTask> tasks = new ArrayList<>();
@@ -159,71 +143,14 @@ public class BudgetLifeCycleManager {
         scheduledTaskRepository.saveAll(tasks);
         logger.info("Scheduled next disbursement for envelope {} at {}", envelope.getId(), triggerTime);
     }
-//================================================================================
-//    @Transactional(timeout = 120)
-//    @Scheduled(cron = "0 */5 * * * ?", zone = "Africa/Lagos") // FIX: Added zone for consistency
-//    // ✅ NEW SAFE VERSION
-//    @Scheduled(cron = "0 */15 * * * ?", zone = "Africa/Lagos")
-//    public void processBudgets() {
-//        LocalDateTime now = fetchCurrentDateTimeFromDatabase();
-//        LocalDate today = now.toLocalDate();
-//        LocalDate threeDaysFromNow = today.plusDays(3);
-//
-//        // 1. Notifications (These are light, List is fine)
-////        List<Budget> nearingEnd = budgetRepository.findByStatusAndEndDate(BudgetStatus.ACTIVE, threeDaysFromNow);
-////        for (Budget budget : nearingEnd) {
-////            notificationService.sendNotification(
-////                    budget.getUser().getId().toString(),
-////                    "Budget '" + budget.getName() + "' ends in 3 days.",
-////                    NotificationType.BUDGET_END
-////            );
-////        }
-//
-//        // 2. HEAVY WORK: Process Expired Budgets in Batches
-//        int batchSize = 100;
-//        boolean hasMore = true;
-//
-//        while (hasMore) {
-//            hasMore = transactionTemplate.execute(status -> {
-//                // Page 0 because processed budgets change status to COMPLETED
-//                Pageable pageable = PageRequest.of(0, batchSize);
-//                Page<Budget> page = budgetRepository.findByStatusAndEndDateLessThanEqual(BudgetStatus.ACTIVE, today, pageable);
-//
-//                if (page.isEmpty()) return false;
-//
-//                List<Budget> budgetsToUpdate = new ArrayList<>();
-//                List<Envelope> envelopesToUpdate = new ArrayList<>();
-//                List<TransactionLog> logsToSave = new ArrayList<>();
-//
-//                for (Budget budget : page.getContent()) {
-//                    try {
-//                        processBudgetExpiry(budget, budgetsToUpdate, envelopesToUpdate, logsToSave);
-//                    } catch (Exception e) {
-//                        logger.error("Error expiring budget {}: {}", budget.getId(), e.getMessage());
-//                    }
-//                }
-//
-//                budgetRepository.saveAll(budgetsToUpdate);
-//                envelopeRepository.saveAll(envelopesToUpdate);
-//                transactionLogRepository.saveAll(logsToSave);
-//
-//                // 🧹 RAM CLEANUP
-//                entityManager.flush();
-//                entityManager.clear();
-//
-//                return page.hasNext();
-//            });
-//        }
-//
-//        // 3. Dynamic Refresh (Optional: keep as is or batch if >1000 dynamic envelopes)
-//        refreshDynamicTasks(today);
-//    }
-
     @Transactional(timeout = 120)
     @Scheduled(cron = "0 */15 * * * ?", zone = "Africa/Lagos")
     public void processBudgets() {
         LocalDateTime now = fetchCurrentDateTimeFromDatabase();
         LocalDate today = now.toLocalDate();
+
+        // We only fetch it for expiration if 'yesterday' was the end date.
+        LocalDate yesterday = today.minusDays(1);
 
         int batchSize = 100;
         boolean hasMore = true;
@@ -235,7 +162,9 @@ public class BudgetLifeCycleManager {
 
             // 1. Fetch the page OUTSIDE the transaction
             Pageable pageable = PageRequest.of(0, batchSize);
-            Page<Budget> page = budgetRepository.findByStatusAndEndDateLessThanEqual(BudgetStatus.ACTIVE, today, pageable);
+            Page<Budget> page = budgetRepository.findByStatusAndEndDateLessThanEqual(BudgetStatus.ACTIVE, yesterday, pageable);
+//            Page<Budget> page = budgetRepository.findByStatusAndEndDateLessThanEqual(BudgetStatus.ACTIVE, today, pageable);
+
 
             if (page.isEmpty()) {
                 hasMore = false;

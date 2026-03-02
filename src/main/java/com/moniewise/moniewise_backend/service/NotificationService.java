@@ -216,62 +216,8 @@ public class NotificationService {
             default -> true;
         };
     }
-//    private boolean shouldPersistToDatabase(NotificationType type) {
-//        if (type == null) return false;
-//
-//        return switch (type) {
-//            // ❌ DO NOT SAVE TO INBOX (Transient / Nudges)
-//            case PRE_DISBURSEMENT, DISBURSEMENT_REMINDER, POSITIVE_NUDGE, WELCOME -> false;
-//
-//            // ✅ SAVE TO INBOX (Financial / Important)
-//            case WALLET_FUNDED, WALLET_DEPOSIT, REFUND_ISSUED,
-//                    WITHDRAWAL, EXTERNAL_TRANSFER, ENVELOPE_TRANSFER, BUDGET_CREATION_FEE,
-//                    DISBURSEMENT_SUCCESS, EXPIRED_DISBURSEMENT, DISBURSEMENT_FAILED,
-//                    INSUFFICIENT_BALANCE, LOW_BALANCE_WARNING, ENVELOPE_LOW_BALANCE,
-//                    LIMIT_REACHED, BUDGET_LIMIT_WARNING, EMERGENCY_USED,
-//                    BUDGET_CREATION, BUDGET_COMPLETED, ENVELOPE_CREATED,
-//                    ENVELOPE_UPDATED, ENVELOPE_LOCKED, ENVELOPE_UNLOCKED,
-//                    BUDGET_END, BUDGET_END_SOON, SYSTEM -> true;
-//
-//            // Default to true for safety, so we don't miss new critical enums
-//            default -> true;
-//        };
-//    }
-    /**
-     * 🟢 CENTRALIZED COPY: All text lives here for events.
-     */
-//    private String generateMessage(NotificationType type, Map<String, Object> params) {
-//        if (params == null || params.isEmpty()) return "New notification received";
-//
-//
-//
-//        return switch (type) {
-//            // ── Credit / Money In ────────────────────────────────────────────────
-//            case WALLET_FUNDED,
-//                    WALLET_DEPOSIT,
-//                    ENVELOPE_TO_WALLET -> String.format(
-//                    "Credit Alert: ₦%s added to your wallet%s",
-//                    formatAmount(params.getOrDefault("amount", "0")),
-//                    optionalPart(" • From: %s", params.get("sourceName"))
-//            );
-//
-//            case ENVELOPE_TRANSFER -> String.format("Moved ₦%s. %s Remaining: ₦%s.",
-//                    params.getOrDefault("amount", "0"), params.getOrDefault("period", ""), params.getOrDefault("remaining", "0"));
-//
-//            case BUDGET_CREATION -> String.format("Budget '%s' created! ₦%s allocated • ₦%s fee.",
-//                    params.get("budgetName"), params.getOrDefault("allocated", "0"), params.getOrDefault("fee", "0"));
-//
-//            case DISBURSEMENT_SUCCESS -> String.format("₦%s unlocked! You can now spend from your '%s' envelope.",
-//                    params.getOrDefault("amount", "0"), params.get("envelopeName"));
-//
-//            case EXTERNAL_TRANSFER -> String.format("Sent ₦%s to %s",
-//                    params.getOrDefault("amount", "0"), params.get("recipient"));
-//
-//            default -> "System Update: Action completed successfully.";
-//        };
-//    }
 
-    /**
+   /**
      * 🟢 CENTRALIZED COPY: Premium Fintech Notification Phrasing
      */
     private String generateMessage(NotificationType type, Map<String, Object> params) {
@@ -557,9 +503,10 @@ public class NotificationService {
 
     private NotificationPriority getPriority(NotificationType type) {
         return switch (type) {
-            case WALLET_DEPOSIT, WALLET_FUNDED, ENVELOPE_TRANSFER, EXTERNAL_TRANSFER, DISBURSEMENT,
-                    DISBURSEMENT_SUCCESS, LOW_BALANCE_WARNING, INSUFFICIENT_BALANCE -> NotificationPriority.HIGH;
-            case BUDGET_LIMIT_WARNING, BUDGET_END_SOON, DISBURSEMENT_READY, DISBURSEMENT_FAILED,
+            case WALLET_DEPOSIT, WALLET_FUNDED, ENVELOPE_TRANSFER, EXTERNAL_TRANSFER,
+                    LOW_BALANCE_WARNING, INSUFFICIENT_BALANCE, DISBURSEMENT, DISBURSEMENT_SUCCESS, DISBURSEMENT_READY, PRE_DISBURSEMENT, BUDGET_COMPLETED -> NotificationPriority.HIGH;
+
+            case BUDGET_LIMIT_WARNING, BUDGET_END_SOON, DISBURSEMENT_FAILED,
                     GOAL_ACHIEVED, WELCOME -> NotificationPriority.MEDIUM;
             default -> NotificationPriority.LOW;
         };

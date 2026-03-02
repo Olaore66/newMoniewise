@@ -2,12 +2,9 @@ package com.moniewise.moniewise_backend.enums;
 
 public enum NotificationType {
     MATURITY_ALERT,
-    GRACE_PERIOD_REMINDER,
-    EXPIRATION_NOTICE,
     BUDGET_LIMIT_WARNING,
     BUDGET_COMPLETED,
     WELCOME,
-    GENERAL,
     BUDGET_END,
     PRE_DISBURSEMENT,
     DISBURSEMENT,
@@ -18,26 +15,18 @@ public enum NotificationType {
     INSUFFICIENT_BALANCE,
     BUDGET_CREATION_FEE,
     WALLET_FUNDED,
-
-    DEBIT_ALERT,
-
     BUDGET_CREATION,
     ENVELOPE_CREATED,
     ENVELOPE_UPDATED,
     ENVELOPE_DELETED,
-
-    // NEW — BEST PRACTICES
     BUDGET_END_SOON,           // 3 days left
     DISBURSEMENT_SUCCESS,      // Money released
     DISBURSEMENT_FAILED,       // Grace period expired
     LIMIT_REACHED,             // Daily/weekly cap
     EMERGENCY_USED,
-    LOCK_EXPIRED,              // Strict lock → refund
     WEEKLY_SUMMARY,
     POSITIVE_NUDGE,
-
     REFUND_ISSUED,
-
     BUDGET_EXPIRED,
     ENVELOPE_LOCKED,
     ENVELOPE_UNLOCKED,
@@ -52,7 +41,5 @@ public enum NotificationType {
     BUDGET_ENDING_SOON,
     ENVELOPE_LOW_BALANCE,
     DISBURSEMENT_REFUNDED,
-    BUDGET_ALLOCATION,
-    BUDGET_UNALLOCATED_REFUNDED,
-    ENVELOPE_TO_WALLET
+    BUDGET_UNALLOCATED_REFUNDED
 }
