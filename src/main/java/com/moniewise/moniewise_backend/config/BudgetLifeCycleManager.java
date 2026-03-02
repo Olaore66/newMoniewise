@@ -343,7 +343,7 @@ public class BudgetLifeCycleManager {
                 // CRITICAL: Schedule the NEXT disbursement so it happens again tomorrow/next week
 //                scheduleNextTask(envelope, "DISBURSEMENT", now);
                 scheduleDynamicTasks(envelope);
-                taskIdsToDelete.add(task.getId());
+//                taskIdsToDelete.add(task.getId());
                 break;
             default:
                 logger.warn("Unknown task type {} for envelope {}", task.getTaskType(), envelope.getId());

@@ -40,7 +40,7 @@ public class NotificationService {
     private final JavaMailSender mailSender;
     private final TemplateEngine templateEngine;
 
-    @Value("${spring.profiles.active:stub}")
+    @Value("${spring.profiles.active:prod}")
     private String activeProfile;
 
     @Value("${twilio.account.sid:YOUR_TWILIO_ACCOUNT_SID}")
@@ -93,52 +93,41 @@ public class NotificationService {
      */
 //    @Async
 //    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
-////    public void handleNotificationEvent(GenericNotificationEvent event) {
+//    public void handleNotificationEvent(GenericNotificationEvent event) {
 //        try {
 //            // 1. Centralized Message Generation
 //            String message = generateMessage(event.getType(), event.getParams());
 //            NotificationPriority priority = getPriority(event.getType());
 //
-//            // 2. Persist to DB
-//            Notification notification = new Notification();
-//            notification.setUserId(Long.valueOf(event.getUserId()));
-//            notification.setMessage(message);
-//            notification.setType(event.getType());
-//            notification.setCreatedAt(LocalDateTime.now());
-//            notification.setBudgetId(event.getContextId1());
-//            notification.setEnvelopeId(event.getContextId2());
-//            notification.setRedirectUrl(event.getActionUrl());
-//            notification.setRead(false);
-//            notificationRepository.save(notification);
+//            // 🛑 NEW: Determine if this notification should live in the DB forever
+//            boolean shouldSaveToDatabase = shouldPersistToDatabase(event.getType());
 //
-//            // 3. Send FCM (Only for High Priority)
-//            if (priority == NotificationPriority.HIGH) {
-////                User user = userRepository.findById(Long.valueOf(event.getUserId())).orElse(null);
-//                Long userId = Long.valueOf(event.getUserId());
-////                if (user != null && user.getFcmToken() != null && !user.getFcmToken().isEmpty() && !"stub".equals(activeProfile)) {
-////                    if (firebaseMessaging != null) {
-////                        String dynamicTitle = getNotificationTitle(event.getType());
-////                        sendFCMMessage(user, dynamicTitle, message, null, event.getActionUrl(), event.getType());
-////                    } else {
-////                        logger.warn("⚠️ Skipping FCM: Firebase is not initialized.");
-////                    }
-////                }
-////
+//            // 2. Persist to DB (ONLY if it's an important event)
+//            if (shouldSaveToDatabase) {
+//                Notification notification = new Notification();
+//                notification.setUserId(Long.valueOf(event.getUserId()));
+//                notification.setMessage(message);
+//                notification.setType(event.getType());
+//                notification.setCreatedAt(LocalDateTime.now());
+//                notification.setBudgetId(event.getContextId1());
+//                notification.setEnvelopeId(event.getContextId2());
+//                notification.setRedirectUrl(event.getActionUrl());
+//                notification.setRead(false);
+//                notificationRepository.save(notification);
+//            }
 //
-//                // ✅ NEW LIGHTWEIGHT WAY:
-//                // ✅ OPTIMIZED: Fetch ONLY the token string
-//                String fcmToken = userRepository.findFcmTokenById(userId);
+//            // 3. Send FCM Push (We want to send pushes for MORE things than we save)
+//            // Example: We push a 15-min warning to their phone, but we don't save it to the DB inbox.
+//            Long userId = Long.valueOf(event.getUserId());
+//            String fcmToken = userRepository.findFcmTokenById(userId);
 //
-//                if (fcmToken != null && !fcmToken.isEmpty() && !"stub".equals(activeProfile)) {
-//                    if (firebaseMessaging != null) {
-//                        String dynamicTitle = getNotificationTitle(event.getType());
-//                        sendFCMMessage(fcmToken, dynamicTitle, message, null, event.getActionUrl(), event.getType(), userId);
-//                    } else {
-//                        logger.warn("⚠️ Skipping FCM: Firebase is not initialized.");
-//                    }
+//            if (fcmToken != null && !fcmToken.isEmpty() && !"stub".equals(activeProfile)) {
+//                if (firebaseMessaging != null) {
+//                    String dynamicTitle = getNotificationTitle(event.getType());
+//                    sendFCMMessage(fcmToken, dynamicTitle, message, null, event.getActionUrl(), event.getType(), userId);
+//                } else {
+//                    logger.warn("⚠️ Skipping FCM: Firebase is not initialized.");
 //                }
-//            } else {
-//                logger.info("Skipping FCM push for non-HIGH priority event: {}", event.getType());
 //            }
 //
 //        } catch (Exception e) {
@@ -146,18 +135,16 @@ public class NotificationService {
 //        }
 //    }
 
+    // 👇 ADD THIS HELPER METHOD 👇
     @Async
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void handleNotificationEvent(GenericNotificationEvent event) {
         try {
-            // 1. Centralized Message Generation
             String message = generateMessage(event.getType(), event.getParams());
             NotificationPriority priority = getPriority(event.getType());
-
-            // 🛑 NEW: Determine if this notification should live in the DB forever
             boolean shouldSaveToDatabase = shouldPersistToDatabase(event.getType());
 
-            // 2. Persist to DB (ONLY if it's an important event)
+            // 1. Save to App Inbox (If important)
             if (shouldSaveToDatabase) {
                 Notification notification = new Notification();
                 notification.setUserId(Long.valueOf(event.getUserId()));
@@ -171,26 +158,27 @@ public class NotificationService {
                 notificationRepository.save(notification);
             }
 
-            // 3. Send FCM Push (We want to send pushes for MORE things than we save)
-            // Example: We push a 15-min warning to their phone, but we don't save it to the DB inbox.
-            Long userId = Long.valueOf(event.getUserId());
-            String fcmToken = userRepository.findFcmTokenById(userId);
+            // 2. Send FCM Push (Only for HIGH or MEDIUM priority)
+            if (priority == NotificationPriority.HIGH || priority == NotificationPriority.MEDIUM) {
+                Long userId = Long.valueOf(event.getUserId());
+                String fcmToken = userRepository.findFcmTokenById(userId);
 
-            if (fcmToken != null && !fcmToken.isEmpty() && !"stub".equals(activeProfile)) {
-                if (firebaseMessaging != null) {
-                    String dynamicTitle = getNotificationTitle(event.getType());
-                    sendFCMMessage(fcmToken, dynamicTitle, message, null, event.getActionUrl(), event.getType(), userId);
-                } else {
-                    logger.warn("⚠️ Skipping FCM: Firebase is not initialized.");
+                if ("stub".equals(activeProfile)) {
+                    logger.info("🛑 [STUB MODE] Simulated Push Notification to User {}: {}", userId, message);
+                } else if (fcmToken != null && !fcmToken.isEmpty()) {
+                    if (firebaseMessaging != null) {
+                        String dynamicTitle = getNotificationTitle(event.getType());
+                        sendFCMMessage(fcmToken, dynamicTitle, message, null, event.getActionUrl(), event.getType(), userId);
+                    } else {
+                        logger.warn("⚠️ FCM is not initialized. Cannot send push.");
+                    }
                 }
             }
-
         } catch (Exception e) {
             logger.error("Failed to process notification event for user {}", event.getUserId(), e);
         }
     }
 
-    // 👇 ADD THIS HELPER METHOD 👇
     /**
      * Determines which events are permanently saved in the user's in-app Inbox.
      * Spammy events (like 5-minute warnings) return false.
