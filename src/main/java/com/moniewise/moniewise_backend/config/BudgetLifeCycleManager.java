@@ -285,7 +285,9 @@ public class BudgetLifeCycleManager {
                 // Save Batch
                 if (!envelopesToUpdate.isEmpty()) envelopeRepository.saveAll(envelopesToUpdate);
                 if (!logsToSave.isEmpty()) transactionLogRepository.saveAll(logsToSave);
-                if (!tasksToDelete.isEmpty()) scheduledTaskRepository.deleteAllById(tasksToDelete);
+                if (!tasksToDelete.isEmpty()) {
+                    scheduledTaskRepository.deleteTasksSafely(tasksToDelete);
+                }
 
                 // 🧹 RAM CLEANUP (Prevents OOM)
                 entityManager.flush();

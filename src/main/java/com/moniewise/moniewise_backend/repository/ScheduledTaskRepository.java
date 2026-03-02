@@ -43,4 +43,10 @@ public interface ScheduledTaskRepository extends JpaRepository<ScheduledTask, Lo
 
 
     void deleteByEnvelopeIdAndTaskType(Long id, String disbursement);
+
+    // 👇 ADD THIS NEW SAFE DELETE METHOD 👇
+    @Modifying
+    @Transactional
+    @Query("DELETE FROM ScheduledTask s WHERE s.id IN :ids")
+    void deleteTasksSafely(@Param("ids") List<Long> ids);
 }
