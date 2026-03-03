@@ -560,27 +560,25 @@ public class BudgetLifeCycleManager {
 
         if (conditions == null || !conditions.containsKey("limit")) return;
 
-        // 1. Validate Limit
         BigDecimal limit = new BigDecimal(((Number) conditions.get("limit")).doubleValue());
         if (limit.compareTo(BigDecimal.ZERO) <= 0) return;
 
-        // 2. Calculate Amount (Cap at what is actually in the Vault)
         BigDecimal amountToDisburse = envelope.getTotalRemainingAmount().min(limit);
 
+        // ✅ NEW ARCHITECTURE: Handle both Success and Empty states
         if (amountToDisburse.compareTo(BigDecimal.ZERO) > 0) {
 
+            // 1. FUNDING LOGIC
             envelope.setRemainingAmount(amountToDisburse);
             envelope.setLastDisbursedAt(now);
 
-            // 4. Handle Locks (Prevent them from locking again immediately)
             String type = (String) conditions.getOrDefault("type", "");
             if ("safe_lock".equals(type) || "strict_lock".equals(type)) {
                 envelope.setHasMatured(true);
             }
-
             envelopesToUpdate.add(envelope);
 
-            // 5. Create Transaction Log (So user sees "+N2000" in history)
+            // 2. TRANSACTION LOG
             TransactionLog log = new TransactionLog();
             log.setUserId(envelope.getBudget().getUser().getId());
             log.setBudgetId(envelope.getBudget().getId());
@@ -593,7 +591,7 @@ public class BudgetLifeCycleManager {
             log.setCreatedAt(now);
             logsToSave.add(log);
 
-            // ✅ PUBLISH EVENT INSTEAD OF HARDCODED NOTIFICATION
+            // 3. SUCCESS NOTIFICATION
             Map<String, Object> params = new HashMap<>();
             params.put("amount", String.format("%,.2f", amountToDisburse));
             params.put("envelopeName", envelope.getName() != null ? envelope.getName() : "Envelope");
@@ -603,10 +601,77 @@ public class BudgetLifeCycleManager {
                     NotificationType.DISBURSEMENT_SUCCESS, params,
                     envelope.getBudget().getId(), envelope.getId(), "/envelopes/" + envelope.getId()
             ));
-
             logger.info("Auto-disbursed ₦{} to envelope {}", amountToDisburse, envelope.getId());
+
+        } else {
+            // 🛑 NEW: EMPTY VAULT NOTIFICATION
+            // If the cron runs but there is no money left to give, tell the user!
+            Map<String, Object> params = new HashMap<>();
+            params.put("envelopeName", envelope.getName() != null ? envelope.getName() : "Envelope");
+
+            eventPublisher.publishEvent(new GenericNotificationEvent(
+                    this, envelope.getBudget().getUser().getId().toString(),
+                    NotificationType.ENVELOPE_LOW_BALANCE, // Make sure to add handling for this Enum in your NotificationService
+                    params,
+                    envelope.getBudget().getId(), envelope.getId(), "/envelopes/" + envelope.getId()
+            ));
+            logger.warn("Disbursement skipped for envelope {}: Vault is empty.", envelope.getId());
         }
     }
+
+//    private void disburseEnvelope(Envelope envelope, LocalDateTime now, List<Envelope> envelopesToUpdate,
+//                                  List<TransactionLog> logsToSave) {
+//        Map<String, Object> conditions = envelope.getConditions();
+//
+//        if (conditions == null || !conditions.containsKey("limit")) return;
+//
+//        // 1. Validate Limit
+//        BigDecimal limit = new BigDecimal(((Number) conditions.get("limit")).doubleValue());
+//        if (limit.compareTo(BigDecimal.ZERO) <= 0) return;
+//
+//        // 2. Calculate Amount (Cap at what is actually in the Vault)
+//        BigDecimal amountToDisburse = envelope.getTotalRemainingAmount().min(limit);
+//
+//        if (amountToDisburse.compareTo(BigDecimal.ZERO) > 0) {
+//
+//            envelope.setRemainingAmount(amountToDisburse);
+//            envelope.setLastDisbursedAt(now);
+//
+//            // 4. Handle Locks (Prevent them from locking again immediately)
+//            String type = (String) conditions.getOrDefault("type", "");
+//            if ("safe_lock".equals(type) || "strict_lock".equals(type)) {
+//                envelope.setHasMatured(true);
+//            }
+//
+//            envelopesToUpdate.add(envelope);
+//
+//            // 5. Create Transaction Log (So user sees "+N2000" in history)
+//            TransactionLog log = new TransactionLog();
+//            log.setUserId(envelope.getBudget().getUser().getId());
+//            log.setBudgetId(envelope.getBudget().getId());
+//            log.setSourceEnvelopeId(envelope.getId());
+//            log.setAmount(amountToDisburse);
+//            log.setTransactionType(TransactionType.ENVELOPE_DISBURSEMENT);
+//            log.setDescription("Auto-deposit to pocket");
+//            log.setStatus(TransactionStatus.COMPLETED);
+//            log.setReference("AUTO-" + envelope.getId() + "-" + System.currentTimeMillis());
+//            log.setCreatedAt(now);
+//            logsToSave.add(log);
+//
+//            // ✅ PUBLISH EVENT INSTEAD OF HARDCODED NOTIFICATION
+//            Map<String, Object> params = new HashMap<>();
+//            params.put("amount", String.format("%,.2f", amountToDisburse));
+//            params.put("envelopeName", envelope.getName() != null ? envelope.getName() : "Envelope");
+//
+//            eventPublisher.publishEvent(new GenericNotificationEvent(
+//                    this, envelope.getBudget().getUser().getId().toString(),
+//                    NotificationType.DISBURSEMENT_SUCCESS, params,
+//                    envelope.getBudget().getId(), envelope.getId(), "/envelopes/" + envelope.getId()
+//            ));
+//
+//            logger.info("Auto-disbursed ₦{} to envelope {}", amountToDisburse, envelope.getId());
+//        }
+//    }
     private boolean isSamePeriod(Map<String, Object> conditions, LocalDateTime now, LocalDateTime lastDisbursedAt) {
         // 1. Safety Check: If never disbursed, obviously not same period.
         if (lastDisbursedAt == null) return false;
