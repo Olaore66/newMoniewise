@@ -465,9 +465,9 @@ public class BudgetLifeCycleManager {
 
         String type = (String) conditions.get("type");
         // FIX: Skip dynamic envelopes to prevent duplicate disbursements
-        if ("dynamic".equals(type)) {
-            return; // Handled by processScheduledTasks
-        }
+//        if ("dynamic".equals(type)) {
+//            return; // Handled by processScheduledTasks
+//        }
 
         LocalDateTime lastDisbursedAt = envelope.getLastDisbursedAt() != null
                 ? envelope.getLastDisbursedAt()
@@ -482,15 +482,15 @@ public class BudgetLifeCycleManager {
             case "daily":
             case "weekly":
             case "dynamic":
-                // 🛑 2. SAFETY CHECK FOR NEW ENVELOPES
-                // If lastDisbursedAt is NULL (The Bug), assume it was created "Just Now" and fix the date
-                // WITHOUT refunding/resetting the money.
-                if (envelope.getLastDisbursedAt() == null) {
-                    logger.info("Fixing NULL lastDisbursedAt for envelope {}", envelope.getId());
-                    envelope.setLastDisbursedAt(now);
-                    envelopesToUpdate.add(envelope);
-                    return; // EXIT. Do not refill.
-                }
+//                // 🛑 2. SAFETY CHECK FOR NEW ENVELOPES
+//                // If lastDisbursedAt is NULL (The Bug), assume it was created "Just Now" and fix the date
+//                // WITHOUT refunding/resetting the money.
+//                if (envelope.getLastDisbursedAt() == null) {
+//                    logger.info("Fixing NULL lastDisbursedAt for envelope {}", envelope.getId());
+//                    envelope.setLastDisbursedAt(now);
+//                    envelopesToUpdate.add(envelope);
+//                    return; // EXIT. Do not refill.
+//                }
 
                 // 1. CHECK FOR UNSPENT MONEY (The "Saver's Reward")
                 BigDecimal unspent = envelope.getRemainingAmount();
@@ -603,15 +603,28 @@ public class BudgetLifeCycleManager {
             ));
             logger.info("Auto-disbursed ₦{} to envelope {}", amountToDisburse, envelope.getId());
 
+//        } else {
+//            // 🛑 NEW: EMPTY VAULT NOTIFICATION
+//            // If the cron runs but there is no money left to give, tell the user!
+//            Map<String, Object> params = new HashMap<>();
+//            params.put("envelopeName", envelope.getName() != null ? envelope.getName() : "Envelope");
+//
+//            eventPublisher.publishEvent(new GenericNotificationEvent(
+//                    this, envelope.getBudget().getUser().getId().toString(),
+//                    NotificationType.ENVELOPE_LOW_BALANCE, // Make sure to add handling for this Enum in your NotificationService
+//                    params,
+//                    envelope.getBudget().getId(), envelope.getId(), "/envelopes/" + envelope.getId()
+//            ));
+//            logger.warn("Disbursement skipped for envelope {}: Vault is empty.", envelope.getId());
+//        }
         } else {
-            // 🛑 NEW: EMPTY VAULT NOTIFICATION
-            // If the cron runs but there is no money left to give, tell the user!
+            // 🛑 ADD THIS: Tell the user the vault is empty!
             Map<String, Object> params = new HashMap<>();
             params.put("envelopeName", envelope.getName() != null ? envelope.getName() : "Envelope");
 
             eventPublisher.publishEvent(new GenericNotificationEvent(
                     this, envelope.getBudget().getUser().getId().toString(),
-                    NotificationType.ENVELOPE_LOW_BALANCE, // Make sure to add handling for this Enum in your NotificationService
+                    NotificationType.ENVELOPE_LOW_BALANCE,
                     params,
                     envelope.getBudget().getId(), envelope.getId(), "/envelopes/" + envelope.getId()
             ));
