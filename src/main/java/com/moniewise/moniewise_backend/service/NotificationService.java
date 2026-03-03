@@ -283,7 +283,10 @@ public class NotificationService {
             case PRE_DISBURSEMENT -> {
                 String amount = formatAmount(params.getOrDefault("amount", "0"));
                 String name = (String) params.get("envelopeName");
-                yield String.format("Get ready! ₦%s will be unlocked in your '%s' envelope shortly.", amount, name);
+
+                // 🛑 THE FIX: Extract the time parameter and inject it into the string!
+                String time = (String) params.getOrDefault("time", "shortly");
+                yield String.format("Get ready! ₦%s will be unlocked in your '%s' envelope in %s. ⏳", amount, name, time);
             }
 
             case EXPIRED_DISBURSEMENT -> {

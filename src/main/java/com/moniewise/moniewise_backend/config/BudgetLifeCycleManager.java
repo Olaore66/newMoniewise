@@ -208,7 +208,7 @@ public class BudgetLifeCycleManager {
             hasMore = page.hasNext();
         }
 
-        refreshDynamicTasks(today);
+//        refreshDynamicTasks(today);
     }
     // ========================================================================
     // 🛑 FIXED SPAM: SEPARATE DAILY CRON FOR BUDGET WARNINGS (Runs at 9:00 AM)
