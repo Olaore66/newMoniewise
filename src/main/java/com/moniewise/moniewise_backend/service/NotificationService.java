@@ -281,12 +281,12 @@ public class NotificationService {
             }
 
             case PRE_DISBURSEMENT -> {
-                String amount = formatAmount(params.getOrDefault("amount", "0"));
+//                String amount = formatAmount(params.getOrDefault("amount", "0"));
                 String name = (String) params.get("envelopeName");
 
                 // 🛑 THE FIX: Extract the time parameter and inject it into the string!
                 String time = (String) params.getOrDefault("time", "shortly");
-                yield String.format("Get ready! ₦%s will be unlocked in your '%s' envelope in %s. ⏳", amount, name, time);
+                yield String.format("Get ready! ₦%s will be unlocked in your '%s' envelope in %s. ⏳", name, time);
             }
 
             case EXPIRED_DISBURSEMENT -> {
@@ -460,7 +460,7 @@ public class NotificationService {
             case WALLET_FUNDED, WALLET_DEPOSIT, REFUND_ISSUED, DISBURSEMENT_REFUNDED, BUDGET_UNALLOCATED_REFUNDED -> "Credit Alert 🚀";
             case WITHDRAWAL, EXTERNAL_TRANSFER, ENVELOPE_TRANSFER, BUDGET_CREATION_FEE -> "Debit Alert 💸";
             case DISBURSEMENT, DISBURSEMENT_SUCCESS, DISBURSEMENT_READY -> "Funds Released 🔓";
-            case PRE_DISBURSEMENT, DISBURSEMENT_REMINDER -> "Disbursement Ready ⏳";
+            case PRE_DISBURSEMENT, DISBURSEMENT_REMINDER -> "Funds Unlocking Soon ⏳";
             case EXPIRED_DISBURSEMENT, DISBURSEMENT_FAILED -> "Disbursement Expired ❌";
             case INSUFFICIENT_BALANCE -> "Transaction Declined ⛔";
             case LOW_BALANCE_WARNING, ENVELOPE_LOW_BALANCE -> "Low Balance Warning 📉";
