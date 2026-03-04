@@ -346,6 +346,9 @@ public class BudgetLifeCycleManager {
 //                scheduleNextTask(envelope, "DISBURSEMENT", now);
                 scheduleDynamicTasks(envelope);
 //                taskIdsToDelete.add(task.getId());
+                // 🛑 THE FIX: Update the frontend UI date so it doesn't get stuck in the past!
+                envelope.setNextDisbursementAt(calculateNextDisbursementTime(envelope));
+                envelopesToUpdate.add(envelope);
                 break;
             default:
                 logger.warn("Unknown task type {} for envelope {}", task.getTaskType(), envelope.getId());

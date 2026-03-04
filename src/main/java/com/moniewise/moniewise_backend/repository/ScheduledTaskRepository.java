@@ -19,7 +19,7 @@ public interface ScheduledTaskRepository extends JpaRepository<ScheduledTask, Lo
 
 
     // ✅ NEW: Safe Batch Method (Returns a Page, not a huge List)
-    @Query("SELECT st FROM ScheduledTask st WHERE st.triggerTime <= :now")
+    @Query("SELECT st FROM ScheduledTask st WHERE st.triggerTime <= :now ORDER BY st.triggerTime ASC")
     Page<ScheduledTask> findTasksDueBy(@Param("now") LocalDateTime now, Pageable pageable);
 
     void deleteByEnvelopeId(Long envelopeId);
