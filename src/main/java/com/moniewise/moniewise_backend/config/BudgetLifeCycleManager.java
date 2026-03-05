@@ -106,6 +106,10 @@ public class BudgetLifeCycleManager {
 
         if (nextTriggerTime != null) {
             scheduleDisbursementGroup(envelope, nextTriggerTime, now);
+
+            // ✅ ADDED THIS: Save the exact date to the Envelope so the App UI is never left behind!
+            envelope.setNextDisbursementAt(nextTriggerTime);
+            envelopeRepository.save(envelope);
         }
     }
 
@@ -836,6 +840,105 @@ public class BudgetLifeCycleManager {
         LocalDate budgetStart = envelope.getBudget().getStartDate();
         LocalDate budgetEnd = envelope.getBudget().getEndDate();
 
+//        switch (type) {
+//            case "daily":
+//                String disbursementTime = (String) conditions.getOrDefault("disbursementTime", "00:00");
+//                LocalTime time;
+//                try {
+//                    time = LocalTime.parse(disbursementTime);
+//                } catch (DateTimeParseException e) {
+//                    logger.error("Invalid disbursementTime format for daily envelope {}: {}, defaulting to 00:00", envelope.getId(), disbursementTime, e);
+//                    time = LocalTime.of(0, 0);
+//                }
+//                LocalDateTime next = last.toLocalDate().atTime(time);
+//                if (next.isBefore(now) || next.isBefore(budgetStart.atStartOfDay())) {
+//                    next = (now.toLocalDate().isBefore(budgetStart) ? budgetStart : now.toLocalDate()).atTime(time);
+//                    while (next.isBefore(now)) {
+//                        next = next.plusDays(1);
+//                    }
+//                }
+//                if (next.isAfter(budgetEnd.atTime(23, 59, 59))) {
+//                    return null;
+//                }
+//                return next;
+//
+//            case "weekly":
+//                LocalDate nextWeekStart = last.toLocalDate()
+//                        .plusWeeks(1)
+//                        .with(TemporalAdjusters.next(DayOfWeek.MONDAY));
+//
+//                LocalDateTime targetTime1 = nextWeekStart.atStartOfDay();
+//
+//                // 🛑 THE GHOST TRAIN FIX:
+//                // If midnight has already passed today, force it to next Monday!
+//                while (targetTime1.isBefore(now)) {
+//                    targetTime1 = targetTime1.plusWeeks(1);
+//                }
+//
+//                // Make sure we don't schedule past the budget end date
+//                if (targetTime1.isAfter(budgetEnd.atTime(23, 59, 59))) {
+//                    return null;
+//                }
+//
+//                return targetTime1;
+//
+//            case "dynamic":
+//                // 1. Safety Check
+//                if (!conditions.containsKey("days") || !conditions.containsKey("disbursementTime")) {
+//                    return null;
+//                }
+//
+//                try {
+//                    // 2. Get the target time (e.g., 1:00 PM)
+//                    String timeStr = (String) conditions.get("disbursementTime");
+//                    LocalTime targetTime = LocalTime.parse(timeStr);
+//
+//                    // 3. Get Allowed Days (e.g., [MONDAY, WEDNESDAY, FRIDAY])
+//                    List<String> allowedDays = ((List<String>) conditions.get("days")).stream()
+//                            .map(String::toUpperCase)
+//                            .toList();
+//
+//                    // 4. Start checking from TODAY at the target time
+//                    // Example: Wednesday Jan 28 @ 1:00 PM
+//                    LocalDateTime candidate = now.toLocalDate().atTime(targetTime);
+//
+//                    // 5. THE FIX: If today's time has passed (11:21 PM > 1:00 PM),
+//                    // effectively start looking from TOMORROW.
+//                    if (candidate.isBefore(now)) {
+//                        candidate = candidate.plusDays(1);
+//                        // Now candidate is Thursday Jan 29 @ 1:00 PM
+//                    }
+//
+//                    // 6. THE SEARCH LOOP (Find the next matching day)
+//                    // We check up to 14 days into the future
+//                    for (int i = 0; i < 14; i++) {
+//                        String dayName = candidate.getDayOfWeek().name(); // e.g., "THURSDAY"
+//
+//                        // CHECK: Is "THURSDAY" in [MONDAY, WEDNESDAY, FRIDAY]?
+//                        if (allowedDays.contains(dayName)) {
+//
+//                            // YES! We found a match (e.g., when loop reaches FRIDAY)
+//
+//                            // Check bounds (Budget Start/End)
+//                            if (candidate.toLocalDate().isAfter(budgetEnd)) return null;
+//                            if (candidate.toLocalDate().isBefore(budgetStart)) {
+//                                candidate = candidate.plusDays(1);
+//                                continue;
+//                            }
+//
+//                            // Return this valid future time
+//                            return candidate;
+//                        }
+//
+//                        // NO: Thursday is NOT in the list.
+//                        // So we add 1 day and loop again (Candidate becomes FRIDAY)
+//                        candidate = candidate.plusDays(1);
+//                    }
+//                } catch (Exception e) {
+//                    logger.error("Error calculating dynamic time for envelope {}", envelope.getId(), e);
+//                }
+//                return null;
+
         switch (type) {
             case "daily":
                 String disbursementTime = (String) conditions.getOrDefault("disbursementTime", "00:00");
@@ -847,9 +950,11 @@ public class BudgetLifeCycleManager {
                     time = LocalTime.of(0, 0);
                 }
                 LocalDateTime next = last.toLocalDate().atTime(time);
-                if (next.isBefore(now) || next.isBefore(budgetStart.atStartOfDay())) {
+
+                // ✅ CHANGED TO !next.isAfter(now)
+                if (!next.isAfter(now) || next.isBefore(budgetStart.atStartOfDay())) {
                     next = (now.toLocalDate().isBefore(budgetStart) ? budgetStart : now.toLocalDate()).atTime(time);
-                    while (next.isBefore(now)) {
+                    while (!next.isAfter(now)) {
                         next = next.plusDays(1);
                     }
                 }
@@ -865,77 +970,53 @@ public class BudgetLifeCycleManager {
 
                 LocalDateTime targetTime1 = nextWeekStart.atStartOfDay();
 
-                // 🛑 THE GHOST TRAIN FIX:
-                // If midnight has already passed today, force it to next Monday!
-                while (targetTime1.isBefore(now)) {
+                // ✅ CHANGED TO !targetTime1.isAfter(now)
+                while (!targetTime1.isAfter(now)) {
                     targetTime1 = targetTime1.plusWeeks(1);
                 }
 
-                // Make sure we don't schedule past the budget end date
                 if (targetTime1.isAfter(budgetEnd.atTime(23, 59, 59))) {
                     return null;
                 }
-
                 return targetTime1;
 
             case "dynamic":
-                // 1. Safety Check
                 if (!conditions.containsKey("days") || !conditions.containsKey("disbursementTime")) {
                     return null;
                 }
 
                 try {
-                    // 2. Get the target time (e.g., 1:00 PM)
                     String timeStr = (String) conditions.get("disbursementTime");
                     LocalTime targetTime = LocalTime.parse(timeStr);
 
-                    // 3. Get Allowed Days (e.g., [MONDAY, WEDNESDAY, FRIDAY])
                     List<String> allowedDays = ((List<String>) conditions.get("days")).stream()
                             .map(String::toUpperCase)
                             .toList();
 
-                    // 4. Start checking from TODAY at the target time
-                    // Example: Wednesday Jan 28 @ 1:00 PM
                     LocalDateTime candidate = now.toLocalDate().atTime(targetTime);
 
-                    // 5. THE FIX: If today's time has passed (11:21 PM > 1:00 PM),
-                    // effectively start looking from TOMORROW.
-                    if (candidate.isBefore(now)) {
+                    // ✅ CHANGED TO !candidate.isAfter(now)
+                    if (!candidate.isAfter(now)) {
                         candidate = candidate.plusDays(1);
-                        // Now candidate is Thursday Jan 29 @ 1:00 PM
                     }
 
-                    // 6. THE SEARCH LOOP (Find the next matching day)
-                    // We check up to 14 days into the future
                     for (int i = 0; i < 14; i++) {
-                        String dayName = candidate.getDayOfWeek().name(); // e.g., "THURSDAY"
-
-                        // CHECK: Is "THURSDAY" in [MONDAY, WEDNESDAY, FRIDAY]?
+                        String dayName = candidate.getDayOfWeek().name();
                         if (allowedDays.contains(dayName)) {
-
-                            // YES! We found a match (e.g., when loop reaches FRIDAY)
-
-                            // Check bounds (Budget Start/End)
                             if (candidate.toLocalDate().isAfter(budgetEnd)) return null;
                             if (candidate.toLocalDate().isBefore(budgetStart)) {
                                 candidate = candidate.plusDays(1);
                                 continue;
                             }
-
-                            // Return this valid future time
                             return candidate;
                         }
-
-                        // NO: Thursday is NOT in the list.
-                        // So we add 1 day and loop again (Candidate becomes FRIDAY)
                         candidate = candidate.plusDays(1);
                     }
                 } catch (Exception e) {
                     logger.error("Error calculating dynamic time for envelope {}", envelope.getId(), e);
                 }
                 return null;
-
-            case "safe_lock":
+        case "safe_lock":
             case "strict_lock":
                 if (conditions.containsKey("lockStartDate") && conditions.containsKey("lockDurationDays")) {
                     LocalDate lockStart = LocalDate.parse((String) conditions.get("lockStartDate"));
