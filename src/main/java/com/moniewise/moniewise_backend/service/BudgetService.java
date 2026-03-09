@@ -55,6 +55,8 @@ public class BudgetService {
 
     private final ApplicationEventPublisher eventPublisher;
 
+    private final SavingsService savingsService;
+
 
     @Value("${moniewise.revenue.wallet.user-id}")
     private Long revenueWalletUserId;
@@ -66,7 +68,7 @@ public class BudgetService {
             WalletRepository walletRepository, UserService userService,
             TransactionLogRepository transactionLogRepository,
             NotificationService notificationService,
-            WalletService walletService, ScheduledTaskRepository scheduledTaskRepository, @Lazy EnvelopeService envelopeService, BudgetLifeCycleManager budgetLifeCycleManager, ApplicationEventPublisher eventPublisher) {
+            WalletService walletService, ScheduledTaskRepository scheduledTaskRepository, @Lazy EnvelopeService envelopeService, BudgetLifeCycleManager budgetLifeCycleManager, ApplicationEventPublisher eventPublisher, SavingsService savingsService) {
         this.envelopeRepository = envelopeRepository;
         this.budgetRepository = budgetRepository;
         this.revenueLogRepository = revenueLogRepository;
@@ -79,6 +81,7 @@ public class BudgetService {
         this.envelopeService = envelopeService;
         this.budgetLifeCycleManager = budgetLifeCycleManager;
         this.eventPublisher = eventPublisher;
+        this.savingsService = savingsService;
     }
 
     // Helper method to fetch current date/time from Postgres
@@ -278,6 +281,26 @@ public class BudgetService {
             EnvelopeResponse envelopeResponse = envelopeService.createEnvelope(envelopeRequest, email, true);
             Envelope envelope = envelopeRepository.findById(envelopeResponse.getId())
                     .orElseThrow(() -> new IllegalStateException("Failed to retrieve created envelope"));
+            // 🟢 THE SAVINGS SWEEP INTERCEPTOR 🟢
+            Map<String, Object> conditions = envelope.getConditions();
+            if (conditions != null && "savings_sweep".equalsIgnoreCase((String) conditions.getOrDefault("type", ""))) {
+                try {
+                    Long targetSavingsId = Long.valueOf(conditions.get("targetSavingsGoalId").toString());
+
+                    // 1. Send the money to the Pot!
+                    savingsService.sweepEnvelopeToSavings(user.getId(), targetSavingsId, correctAmount, envelope.getName());
+
+                    // 2. Turn this Envelope into an empty "Receipt"
+                    envelope.setRemainingAmount(BigDecimal.ZERO);
+                    envelope.setTotalRemainingAmount(BigDecimal.ZERO);
+                    envelope.setHasMatured(true);
+                    envelopeRepository.save(envelope);
+                } catch (Exception e) {
+                    logger.error("Failed to sweep envelope to savings for user {}", user.getId(), e);
+                    throw new IllegalStateException("Failed to process savings sweep for envelope: " + envelope.getName());
+                }
+            }
+
             envelopes.add(envelope);
         }
 
@@ -901,7 +924,7 @@ public class BudgetService {
         if (cond == null || !cond.containsKey("limit")) return;
 
         String type = ((String) cond.get("type")).toLowerCase();
-        if (List.of("emergency", "strict_lock", "safe_lock").contains(type)) return;
+        if (List.of("emergency", "strict_lock", "safe_lock", "savings_sweep").contains(type)) return;
 
         BigDecimal userLimit = new BigDecimal(cond.get("limit").toString());
         if (userLimit.compareTo(BigDecimal.ZERO) <= 0) {

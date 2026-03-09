@@ -1,0 +1,115 @@
+package com.moniewise.moniewise_backend.controller;
+
+import com.moniewise.moniewise_backend.dto.request.CreateSavingsGoalRequest;
+import com.moniewise.moniewise_backend.dto.request.FundSavingsRequest;
+import com.moniewise.moniewise_backend.entity.SavingsGoal;
+import com.moniewise.moniewise_backend.entity.User;
+import com.moniewise.moniewise_backend.service.SavingsService;
+import com.moniewise.moniewise_backend.service.UserService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+
+import javax.validation.Valid;
+import java.security.Principal;
+import java.util.List;
+
+@RestController
+@RequestMapping("/savings") // Adjust your API version path if needed
+public class SavingsController {
+
+    private static final Logger logger = LoggerFactory.getLogger(SavingsController.class);
+
+    private final SavingsService savingsService;
+    private final UserService userService;
+
+    public SavingsController(SavingsService savingsService, UserService userService) {
+        this.savingsService = savingsService;
+        this.userService = userService;
+    }
+
+    /**
+     * POST: Create a new Savings Goal (Phase 1)
+     */
+    @PostMapping
+    public ResponseEntity<?> createSavingsGoal(
+            @Valid @RequestBody CreateSavingsGoalRequest request,
+            Principal principal) {
+        try {
+            // 1. Get the securely authenticated user
+            User user = userService.findByEmail(principal.getName());
+
+            // 2. Call the Wealth Engine
+            SavingsGoal createdGoal = savingsService.createSavingsGoal(
+                    user.getId(),
+                    request.getName(),
+                    request.getTargetAmount(),
+                    request.getInitialDeposit(),
+                    request.getMaturityDate(),
+                    request.getInterestRate()
+            );
+
+            return new ResponseEntity<>(createdGoal, HttpStatus.CREATED);
+
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            // Catches validation errors like "Duplicate Name" or "Insufficient Funds"
+            logger.warn("Savings creation failed for {}: {}", principal.getName(), e.getMessage());
+            return ResponseEntity.badRequest().body(e.getMessage());
+        } catch (Exception e) {
+            logger.error("System error creating savings goal", e);
+            return ResponseEntity.internalServerError().body("An error occurred while creating your savings goal.");
+        }
+    }
+
+    /**
+     * GET: Fetch all active savings pots for the dashboard (Phase 3)
+     */
+    @GetMapping("/active")
+    public ResponseEntity<?> getActiveSavings(Principal principal) {
+        try {
+            // 1. Get the securely authenticated user
+            User user = userService.findByEmail(principal.getName());
+
+            // 2. Fetch their pots
+            List<SavingsGoal> activeGoals = savingsService.getActiveSavingsForUser(user.getId());
+
+            return ResponseEntity.ok(activeGoals);
+
+        } catch (Exception e) {
+            logger.error("Failed to fetch active savings for {}", principal.getName(), e);
+            return ResponseEntity.internalServerError().body("Failed to load savings goals.");
+        }
+    }
+
+    /**
+     * POST: Manually Top-Up an existing Savings Goal from Wallet
+     */
+    @PostMapping("/{id}/fund")
+    public ResponseEntity<?> fundSavingsGoal(
+            @PathVariable("id") Long savingsGoalId,
+            @Valid @RequestBody FundSavingsRequest request,
+            Principal principal) {
+        try {
+            // 1. Authenticate user
+            User user = userService.findByEmail(principal.getName());
+
+            // 2. Execute manual top-up
+            SavingsGoal updatedGoal = savingsService.manualTopUp(
+                    user.getId(),
+                    savingsGoalId,
+                    request.getAmount()
+            );
+
+            return ResponseEntity.ok(updatedGoal);
+
+        } catch (SecurityException | IllegalArgumentException | IllegalStateException e) {
+            logger.warn("Manual top-up failed for {}: {}", principal.getName(), e.getMessage());
+            return ResponseEntity.badRequest().body(e.getMessage());
+        } catch (Exception e) {
+            logger.error("System error during manual top-up", e);
+            return ResponseEntity.internalServerError().body("An error occurred while topping up your savings.");
+        }
+    }
+}

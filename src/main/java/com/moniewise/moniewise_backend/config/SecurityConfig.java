@@ -191,6 +191,7 @@ public class SecurityConfig {
                 .antMatchers("/transactions/pin/**").authenticated()
 
                 .antMatchers("/beneficiaries/**").authenticated()
+                .antMatchers("/savings/**").authenticated() // Handles savings...
 
                 .antMatchers(HttpMethod.PATCH, "/users/tnc").authenticated() // Explicitly secure TNC
                 .anyRequest().authenticated()
