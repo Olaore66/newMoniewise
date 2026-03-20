@@ -1,5 +1,6 @@
 package com.moniewise.moniewise_backend.service;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.moniewise.moniewise_backend.entity.User;
 import com.moniewise.moniewise_backend.externalTransfers.PaymentProvider;
 import lombok.RequiredArgsConstructor;
@@ -98,44 +99,56 @@ public class SecureWavePaymentProvider implements PaymentProvider {
     // ==========================================================
     // 2. RESOLVE ACCOUNT (The KYC Verification Step)
     // ==========================================================
+    // ==========================================================
+    // 2. RESOLVE ACCOUNT (The KYC Verification Step)
+    // ==========================================================
     @Override
     public String resolveAccount(String bankCode, String accountNumber) {
-        // Use the exact endpoint provided by SecureWave
         String url = baseUrl + "/customer_withdrawals/validate-account-name";
 
-        Map<String, Object> payload = new HashMap<>();
-        payload.put("bank_code", bankCode);
-        payload.put("account_number", accountNumber);
-
         try {
-            ResponseEntity<Map> response = restTemplate.postForEntity(
-                    url, new HttpEntity<>(payload, getSecureWaveHeaders()), Map.class);
+            // 1. Build the exact JSON String
+            ObjectMapper mapper = new ObjectMapper();
+            Map<String, String> payloadMap = new HashMap<>();
+            payloadMap.put("bank_code", bankCode);
+            payloadMap.put("account_number", accountNumber);
+            String jsonBody = mapper.writeValueAsString(payloadMap);
+
+            // 2. Force the headers to declare this is JSON
+            HttpHeaders headers = getSecureWaveHeaders();
+            headers.setContentType(MediaType.APPLICATION_JSON);
+
+            // 3. Send the pristine JSON String
+            ResponseEntity<Map> response = restTemplate.exchange(
+                    url,
+                    HttpMethod.POST,
+                    new HttpEntity<>(jsonBody, headers),
+                    Map.class
+            );
 
             if (response.getStatusCode() == HttpStatus.OK && response.getBody() != null) {
                 Map<String, Object> body = response.getBody();
-
-                // 1. Check if the provider successfully found the account
                 Boolean status = (Boolean) body.get("status");
 
                 if (status != null && status) {
-                    // 2. Extract the nested "data" object
                     Map<String, Object> data = (Map<String, Object>) body.get("data");
-
                     if (data != null && data.containsKey("account_name")) {
-                        // 3. Return the verified name! (e.g., "JOHN DOE")
-                        return data.get("account_name").toString();
+                        return (String) data.get("account_name");
                     }
                 } else {
-                    // If status is false, log the message they sent back
-                    log.warn("Account validation failed: {}", body.get("message"));
+                    log.error("SecureWave returned false status: {}", body.get("message"));
                 }
             }
-        } catch (Exception e) {
-            log.error("SecureWave Account Resolution Failed: {}", e.getMessage());
-        }
+            throw new RuntimeException("Could not verify account name. Please check the details.");
 
-        // If we reach here, the account doesn't exist or the bank network is down
-        throw new RuntimeException("Could not verify account details. Please check your account number and bank.");
+        } catch (org.springframework.web.client.HttpClientErrorException e) {
+            // 🚨 THIS IS THE WIRETAP!
+            log.error("SecureWave REJECTED the request. Status: {}, Body: {}", e.getStatusCode(), e.getResponseBodyAsString());
+            throw new RuntimeException("Account verification failed. Ensure the account number is correct.");
+        } catch (Exception e) {
+            log.error("SecureWave Account Resolution Failed: {}", e.getMessage(), e);
+            throw new RuntimeException("An internal error occurred during verification.");
+        }
     }
 
     // ==========================================================
