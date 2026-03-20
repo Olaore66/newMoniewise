@@ -7,19 +7,14 @@ import com.moniewise.moniewise_backend.entity.TransactionLog;
 import com.moniewise.moniewise_backend.entity.User;
 import com.moniewise.moniewise_backend.entity.Wallet;
 import com.moniewise.moniewise_backend.externalTransfers.PaymentProvider;
-import com.moniewise.moniewise_backend.service.MonnifyPaymentProvider;
 import com.moniewise.moniewise_backend.service.UserService;
 import com.moniewise.moniewise_backend.service.WalletService;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
-import org.springframework.security.core.annotation.AuthenticationPrincipal;
-import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.web.bind.annotation.*;
 
 import javax.validation.Valid;
-import java.math.BigDecimal;
 import java.security.Principal;
 import java.util.List;
 import java.util.Map;
@@ -32,9 +27,6 @@ public class WalletController {
     private final UserService userService;
     private final PaymentProvider paymentProvider;
 
-    // Leaving this here so your old Card Deposit doesn't break during transition
-    @Autowired
-    private MonnifyPaymentProvider monnifyPaymentProvider;
 
     // Constructor Injection (Spring Boot will automatically inject SecureWave because we added @Primary to it!)
     public WalletController(WalletService walletService, UserService userService, PaymentProvider paymentProvider) {
@@ -58,21 +50,6 @@ public class WalletController {
                 wallet.getStatus().name(),
                 wallet.getUpdatedAt()
         ));
-    }
-
-    @PostMapping("/deposit/card")
-    public ResponseEntity<?> initiateCardDeposit(@AuthenticationPrincipal UserDetails userDetails,
-                                                 @RequestBody Map<String, BigDecimal> request) {
-        String email = userDetails.getUsername();
-        User user = userService.findByEmail(email);
-
-        BigDecimal amount = request.get("amount");
-        if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {
-            return ResponseEntity.badRequest().body("Invalid amount");
-        }
-
-        Map<String, String> response = monnifyPaymentProvider.initializeCardPayment(user, amount);
-        return ResponseEntity.ok(response);
     }
 
     // =========================================================================
