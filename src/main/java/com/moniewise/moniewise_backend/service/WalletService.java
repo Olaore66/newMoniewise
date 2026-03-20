@@ -57,7 +57,7 @@ public class WalletService {
 
     public WalletService(WalletRepository walletRepository,
                          TransactionLogRepository transactionLogRepository,
-                         NotificationService notificationService, UserRepository userRepository, PaymentProvider paymentProvider, UserService userService) {
+                         NotificationService notificationService, UserRepository userRepository, PaymentProvider paymentProvider, @Lazy UserService userService) {
         this.walletRepository = walletRepository;
         this.transactionLogRepository = transactionLogRepository;
         this.notificationService = notificationService;

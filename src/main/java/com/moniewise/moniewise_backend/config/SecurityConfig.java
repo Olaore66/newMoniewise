@@ -180,6 +180,7 @@ public class SecurityConfig {
 //              .antMatchers("/tnc/**").authenticated()
                 .antMatchers("/users/**").authenticated()
                 .antMatchers("/notifications/**").authenticated()
+                .antMatchers("/api/webhooks/**").authenticated()
                 .antMatchers("/disbursements/**").authenticated()
                 .antMatchers("/transactions/**").authenticated()
                 .antMatchers("/legal/**").authenticated()
