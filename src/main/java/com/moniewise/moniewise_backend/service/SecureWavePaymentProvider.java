@@ -36,10 +36,10 @@ public class SecureWavePaymentProvider implements PaymentProvider {
     // --- Helper: SecureWave Headers ---
     private HttpHeaders getSecureWaveHeaders() {
         HttpHeaders headers = new HttpHeaders();
-        headers.set("Authorization", "Bearer " + secretKey);
-        headers.set("x-api-key", publicKey);
         headers.setContentType(MediaType.APPLICATION_JSON);
-        headers.setAccept(Arrays.asList(MediaType.APPLICATION_JSON));
+        headers.setAccept(Collections.singletonList(MediaType.APPLICATION_JSON));
+        headers.set("Authorization", "Bearer " + secretKey); // Ensure "Bearer " has a space!
+        headers.set("x-api-key", publicKey);
         return headers;
     }
 
@@ -171,15 +171,6 @@ public class SecureWavePaymentProvider implements PaymentProvider {
         throw new RuntimeException("Transfer Failed");
     }
 
-    // ==========================================================
-    // 4. CARD PAYMENT (Optional / If Supported)
-    // ==========================================================
-    public Map<String, String> initializeCardPayment(User user, BigDecimal amount) {
-        // If SecureWave supports card checkouts, put their initialization URL here.
-        // Otherwise, throw an UnsupportedOperationException if you are strictly using Virtual Accounts for funding now.
-        throw new UnsupportedOperationException("Card payments are not configured for SecureWave yet.");
-    }
-
     // Add this near the top of your class to hold the cached banks
     private List<Map<String, Object>> cachedBanks = null;
 
@@ -188,35 +179,42 @@ public class SecureWavePaymentProvider implements PaymentProvider {
     // ==========================================================
     @Override
     public List<Map<String, Object>> getSupportedBanks() {
-        // Return cached version instantly if we already downloaded it
-        if (cachedBanks != null && !cachedBanks.isEmpty()) {
-            return cachedBanks;
-        }
-
-        String url = baseUrl + "/banks"; // Notice this matches the /api/banks path
+        // Using the base URL from your environment variables
+        String url = baseUrl + "/banks";
 
         try {
-            // Use exchange() instead of postForEntity() because this is a GET request
+            // We expect a Map representing the outer JSON object { "status": true, "data": [...] }
             ResponseEntity<Map> response = restTemplate.exchange(
-                    url, HttpMethod.GET, new HttpEntity<>(getSecureWaveHeaders()), Map.class);
+                    url,
+                    HttpMethod.GET,
+                    new HttpEntity<>(getSecureWaveHeaders()),
+                    Map.class
+            );
 
             if (response.getStatusCode() == HttpStatus.OK && response.getBody() != null) {
                 Map<String, Object> body = response.getBody();
 
-                // Verify the "status": true flag from their JSON
+                // 1. Check if the API says it was successful
                 Boolean status = (Boolean) body.get("status");
                 if (status != null && status) {
-                    cachedBanks = (List<Map<String, Object>>) body.get("data");
-                    return cachedBanks;
+
+                    // 2. Safely extract the "data" array
+                    Object dataObj = body.get("data");
+                    if (dataObj instanceof List) {
+                        return (List<Map<String, Object>>) dataObj;
+                    }
+                } else {
+                    System.out.println("SecureWave returned failure status: {} " +  body.get("message"));
                 }
             }
         } catch (Exception e) {
-            log.error("Failed to fetch banks from SecureWave: {}", e.getMessage());
+            System.out.println("SecureWave API Exception while fetching banks: {} " + e.getMessage());
         }
 
-        return Collections.emptyList(); // Return empty if it fails so the app doesn't crash
+        // If anything fails, return an empty list.
+        // Your controller will catch this and gracefully tell the user "Bank list is currently unavailable"
+        return new ArrayList<>();
     }
-
     // ==========================================================
     // 6. UPDATE WITHDRAWAL BANK INFO
     // ==========================================================
