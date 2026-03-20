@@ -4,6 +4,7 @@ import com.moniewise.moniewise_backend.entity.User;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.util.List;
 import java.util.Map;
 
 @Service
@@ -11,10 +12,17 @@ public interface PaymentProvider {
     // 1. Verify the Name (e.g., "058" + "0123456789" -> "Emeka Johnson")
     String resolveAccount(String bankCode, String accountNumber);
 
-    // 👇 ADD THIS NEW METHOD TO SATISFY THE PaymentGateway INTERFACE 👇
+    // 1. Account Creation
     Map<String, String> createVirtualAccount(User user);
 
+    List<Map<String, Object>> getSupportedBanks();
+
     // 2. Send the Money
-    // Returns a "Provider Reference" (Their receipt ID)
     String initiateTransfer(String bankCode, String accountNumber, String accountName, BigDecimal amount, String uniqueReference, String narration);
+
+    // Add this to your PaymentProvider interface
+    boolean updateWithdrawalBankInfo(String email, String bankName, String accountName, String bankCode, String accountNumber);
+
+    // Add this to PaymentProvider.java
+    String initiateWithdrawal(String email, BigDecimal amount, String narration);
 }

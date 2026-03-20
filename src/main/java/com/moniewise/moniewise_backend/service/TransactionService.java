@@ -293,7 +293,7 @@ public class TransactionService {
     private static final Set<TransactionType> USER_VISIBLE_TYPES = Set.of(
             WALLET_DEPOSIT, WALLET_TO_BUDGET, BUDGET_ALLOCATION, ENVELOPE_TO_ENVELOPE,
             ENVELOPE_TO_EXTERNAL, ENVELOPE_TO_USER, USER_TO_ENVELOPE, BUDGET_CREATION_FEE,
-            BUDGET_UNALLOCATED_REFUNDED, STRICT_LOCK_ROLLBACK, DISBURSEMENT_REFUNDED
+            BUDGET_UNALLOCATED_REFUNDED, STRICT_LOCK_ROLLBACK, DISBURSEMENT_REFUNDED, WALLET_WITHDRAWAL
     );
 
     // =========================================================================
@@ -453,46 +453,6 @@ public class TransactionService {
         // 3. FINAL FALLBACK
         return "Wisemonie User";
     }
-
-//    private TransactionDetailResponse mapToDetailResponse(TransactionLog t) {
-//        // For detail view, single queries are fine (no N+1 issue here)
-//        String sourceName = getEnvelopeName(t.getSourceEnvelopeId());
-//        String targetName = getEnvelopeName(t.getTargetEnvelopeId());
-//        String budgetName = getBudgetName(t.getBudgetId());
-//
-//        String title = switch (t.getTransactionType()) {
-//            case WALLET_DEPOSIT -> "Wallet funded";
-//            case ENVELOPE_TO_ENVELOPE -> "From %s to %s".formatted(sourceName, targetName);
-//            case ENVELOPE_TO_EXTERNAL -> "Sent to bank";
-//            case ENVELOPE_TO_USER -> "Sent to user";
-//            case USER_TO_ENVELOPE -> "Received from user";
-//            case BUDGET_CREATION_FEE -> "Budget creation fee";
-//            case BUDGET_ALLOCATION -> "Allocated to budget";
-//            case BUDGET_UNALLOCATED_REFUNDED -> "Refunded to wallet";
-//            default -> t.getTransactionType().name().replace("_", " ");
-//        };
-//
-//        BigDecimal fee = t.getFee() != null ? t.getFee() : BigDecimal.ZERO;
-//
-//        return new TransactionDetailResponse(
-//                t.getId(),
-//                title,
-//                t.getDescription(),
-//                t.getAmount(),
-//                fee,
-//                t.getAmount().subtract(fee),
-//                t.getTransactionType(),
-//                t.getCreatedAt(),
-//                t.getBudgetId(),
-//                budgetName,
-//                sourceName,
-//                t.getSourceEnvelopeId(),
-//                targetName,
-//                t.getTargetEnvelopeId(),
-//                t.getExternalAccountId()
-//        );
-//    }
-// Replace this method in your TransactionService.java
 
     private TransactionDetailResponse mapToDetailResponse(TransactionLog t) {
         String sourceName = getEnvelopeName(t.getSourceEnvelopeId());

@@ -50,6 +50,18 @@ public class Wallet {
     @Column(name = "is_revenue_wallet", nullable = false)
     private boolean isRevenueWallet = false;
 
+    @Column(name = "settlement_account_number")
+    private String settlementAccountNumber;
+
+    @Column(name = "settlement_bank_code")
+    private String settlementBankCode;
+
+    @Column(name = "settlement_bank_name")
+    private String settlementBankName;
+
+    @Column(name = "settlement_account_name")
+    private String settlementAccountName;
+
     // Lombok @Getter @Setter already works
     public boolean isRevenueWallet() { return isRevenueWallet; }
     public void setIsRevenueWallet(boolean isRevenueWallet) { this.isRevenueWallet = isRevenueWallet; }

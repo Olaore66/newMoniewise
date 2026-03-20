@@ -1,10 +1,12 @@
 package com.moniewise.moniewise_backend.controller;
 
-import com.moniewise.moniewise_backend.dto.request.FundWalletRequest;
+import com.moniewise.moniewise_backend.dto.request.UpdateBankDetailsRequest;
 import com.moniewise.moniewise_backend.dto.request.WithdrawalRequest;
 import com.moniewise.moniewise_backend.dto.response.WalletResponse;
+import com.moniewise.moniewise_backend.entity.TransactionLog;
 import com.moniewise.moniewise_backend.entity.User;
 import com.moniewise.moniewise_backend.entity.Wallet;
+import com.moniewise.moniewise_backend.externalTransfers.PaymentProvider;
 import com.moniewise.moniewise_backend.service.MonnifyPaymentProvider;
 import com.moniewise.moniewise_backend.service.UserService;
 import com.moniewise.moniewise_backend.service.WalletService;
@@ -16,36 +18,29 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.web.bind.annotation.*;
 
+import javax.validation.Valid;
 import java.math.BigDecimal;
+import java.security.Principal;
+import java.util.List;
 import java.util.Map;
 
 @RestController
 @RequestMapping("/wallets")
 public class WalletController {
+
     private final WalletService walletService;
     private final UserService userService;
+    private final PaymentProvider paymentProvider;
 
+    // Leaving this here so your old Card Deposit doesn't break during transition
     @Autowired
-    private MonnifyPaymentProvider monnifyPaymentProvider; // Inject your provider
+    private MonnifyPaymentProvider monnifyPaymentProvider;
 
-    public WalletController(WalletService walletService, UserService userService) {
+    // Constructor Injection (Spring Boot will automatically inject SecureWave because we added @Primary to it!)
+    public WalletController(WalletService walletService, UserService userService, PaymentProvider paymentProvider) {
         this.walletService = walletService;
         this.userService = userService;
-    }
-
-    @PostMapping("/fund")
-    public ResponseEntity<?> fundWallet(@RequestBody FundWalletRequest request, Authentication authentication) {
-        try {
-            String email = authentication.getName();
-            Long userId = userService.findByEmail(email).getId();
-
-            // Note: The null is for the custom message.
-            walletService.fundWallet(userId, request.getAmount(), null);
-
-            return ResponseEntity.ok(Map.of("message", "Wallet funded successfully"));
-        } catch (Exception e) {
-            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
-        }
+        this.paymentProvider = paymentProvider;
     }
 
     @GetMapping
@@ -53,7 +48,6 @@ public class WalletController {
         String email = authentication.getName();
         Long userId = userService.findByEmail(email).getId();
 
-        // Use a clean service method instead of chaining .getUser().getWallet()
         Wallet wallet = walletService.getWalletByUserId(userId);
 
         return ResponseEntity.ok(new WalletResponse(
@@ -77,41 +71,94 @@ public class WalletController {
             return ResponseEntity.badRequest().body("Invalid amount");
         }
 
-        // Call the new method we just wrote
         Map<String, String> response = monnifyPaymentProvider.initializeCardPayment(user, amount);
-
         return ResponseEntity.ok(response);
     }
 
+    // =========================================================================
+    // SECUREWAVE CLOSED-LOOP WITHDRAWAL ENDPOINTS
+    // =========================================================================
 
-    // Inside WalletController.java
-
-    @PostMapping("/withdraw")
-    public ResponseEntity<?> withdrawFunds(
-            @RequestBody WithdrawalRequest request,
-            Authentication authentication
-    )  {
+    /**
+     * GET: Fetch all supported banks for withdrawals
+     */
+    @GetMapping("/banks")
+    public ResponseEntity<?> getSupportedBanks() {
         try {
-            // 1. Get User
-            String email = authentication.getName();
-            User user = userService.findByEmail(email);
+            List<Map<String, Object>> banks = paymentProvider.getSupportedBanks();
 
-            // 2. Call Service
-            walletService.withdrawToBank(user.getId(), request);
+            if (banks.isEmpty()) {
+                return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body("Bank list is currently unavailable");
+            }
 
-            // 3. Return Success
-            return ResponseEntity.ok(Map.of(
-                    "status", "success",
-                    "message", "Withdrawal successful",
-                    "newBalance", walletService.checkBalance(user.getId()) // Optional convenience
-            ));
-
-        } catch (IllegalArgumentException e) {
-            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+            return ResponseEntity.ok(banks);
         } catch (Exception e) {
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(Map.of("error", "Withdrawal failed: " + e.getMessage()));
+            return ResponseEntity.internalServerError().body(Map.of("error", "An error occurred while fetching banks"));
         }
     }
 
+    /**
+     * GET: Resolve Account Name (KYC Check)
+     */
+    @GetMapping("/resolve-account")
+    public ResponseEntity<?> resolveBankAccount(
+            @RequestParam String bankCode,
+            @RequestParam String accountNumber) {
+        try {
+            String accountName = paymentProvider.resolveAccount(bankCode, accountNumber);
+            return ResponseEntity.ok(Map.of("accountName", accountName));
+        } catch (RuntimeException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    /**
+     * POST: Save the verified Settlement Account details to the Wallet
+     */
+    @PostMapping("/bank-info")
+    public ResponseEntity<?> updateWithdrawalBank(
+            @Valid @RequestBody UpdateBankDetailsRequest request,
+            Principal principal) {
+        try {
+            User user = userService.findByEmail(principal.getName());
+
+            Wallet updatedWallet = walletService.updateSettlementAccount(user.getId(), request);
+
+            return ResponseEntity.ok(Map.of(
+                    "message", "Bank details updated successfully",
+                    "accountName", updatedWallet.getSettlementAccountName(),
+                    "accountNumber", updatedWallet.getSettlementAccountNumber(),
+                    "bankName", updatedWallet.getSettlementBankName()
+            ));
+
+        } catch (RuntimeException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    /**
+     * POST: Initiate a Withdrawal to the Settlement Account
+     */
+    @PostMapping("/withdraw")
+    public ResponseEntity<?> withdrawFunds(
+            @Valid @RequestBody WithdrawalRequest request,
+            Principal principal) {
+        try {
+            User user = userService.findByEmail(principal.getName());
+
+            TransactionLog transactionLog = walletService.processWithdrawal(user.getId(), request);
+
+            return ResponseEntity.ok(Map.of(
+                    "status", "success",
+                    "message", "Withdrawal initiated successfully",
+                    "reference", transactionLog.getReference(),
+                    "amount", transactionLog.getAmount()
+            ));
+
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        } catch (RuntimeException e) {
+            return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
+        }
+    }
 }

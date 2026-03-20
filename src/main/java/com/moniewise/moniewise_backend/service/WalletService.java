@@ -2,6 +2,7 @@ package com.moniewise.moniewise_backend.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.moniewise.moniewise_backend.dto.request.UpdateBankDetailsRequest;
 import com.moniewise.moniewise_backend.dto.request.WithdrawalRequest;
 import com.moniewise.moniewise_backend.entity.TransactionLog;
 import com.moniewise.moniewise_backend.entity.User;
@@ -10,12 +11,10 @@ import com.moniewise.moniewise_backend.enums.NotificationType;
 import com.moniewise.moniewise_backend.enums.TransactionStatus;
 import com.moniewise.moniewise_backend.enums.TransactionType;
 import com.moniewise.moniewise_backend.enums.WalletStatus;
-import com.moniewise.moniewise_backend.exception.EntityNotFoundException;
 import com.moniewise.moniewise_backend.externalTransfers.PaymentProvider;
 import com.moniewise.moniewise_backend.repository.TransactionLogRepository;
 import com.moniewise.moniewise_backend.repository.UserRepository;
 import com.moniewise.moniewise_backend.repository.WalletRepository;
-import com.moniewise.moniewise_backend.thirdParty.PaymentGateway;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -42,14 +41,13 @@ public class WalletService {
 
     // You defined this manually, so we must use "logger" everywhere, not "log"
     private static final Logger logger = LoggerFactory.getLogger(WalletService.class);
-
     private final WalletRepository walletRepository;
     private final TransactionLogRepository transactionLogRepository;
     private final NotificationService notificationService;
     private final UserRepository userRepository;
-    private final PaymentGateway paymentGateway;
-
     private final PaymentProvider paymentProvider;
+
+    private final UserService userService;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -59,13 +57,13 @@ public class WalletService {
 
     public WalletService(WalletRepository walletRepository,
                          TransactionLogRepository transactionLogRepository,
-                         NotificationService notificationService, UserRepository userRepository, PaymentGateway paymentGateway, PaymentProvider paymentProvider) {
+                         NotificationService notificationService, UserRepository userRepository, PaymentProvider paymentProvider, UserService userService) {
         this.walletRepository = walletRepository;
         this.transactionLogRepository = transactionLogRepository;
         this.notificationService = notificationService;
         this.userRepository = userRepository;
-        this.paymentGateway = paymentGateway;
         this.paymentProvider = paymentProvider;
+        this.userService = userService;
     }
 
     public Wallet getWalletByUserId(Long userId) {
@@ -173,6 +171,7 @@ public class WalletService {
         });
     }
 
+//     MONNIFY HOW CREATE VIRTUAL ACCOUNT..... SWITCHING TO SECUREWAVE NG SERVICES
     @Transactional
     public Wallet createWalletForUser(User user) {
         if (user.getId() == null) {
@@ -190,12 +189,13 @@ public class WalletService {
         wallet.setStatus(WalletStatus.ACTIVE);
         wallet.setUpdatedAt(LocalDateTime.now());
 
-        Map<String, String> virtualAccount = paymentGateway.createVirtualAccount(user);
+        Map<String, String> virtualAccount = paymentProvider.createVirtualAccount(user);
         wallet.setAccountNumber(virtualAccount.get("accountNumber"));
         wallet.setBankName(virtualAccount.get("bank"));
 
         return walletRepository.save(wallet);
     }
+
 
     // 1. The MASTER Method (Does the actual work)
     @Transactional
@@ -457,154 +457,94 @@ public class WalletService {
             );
         });
     }
-//    @Transactional(rollbackFor = Exception.class)
-//    public void withdrawToBank(Long userId, WithdrawalRequest request) {
-//        // 1. Basic Validation
-//        if (request.getAmount().compareTo(BigDecimal.ZERO) <= 0) {
-//            throw new IllegalArgumentException("Withdrawal amount must be positive");
-//        }
-//
-//        // 2. Fetch Wallet
-//        Wallet wallet = walletRepository.findByUserId(userId)
-//                .orElseThrow(() -> new EntityNotFoundException("Wallet not found"));
-//
-//        // 3. Check Funds (Main Wallet only, ignores Envelopes)
-//        if (wallet.getBalance().compareTo(request.getAmount()) < 0) {
-//            throw new IllegalArgumentException("Insufficient funds in wallet. Available: ₦" + wallet.getBalance());
-//        }
-//
-//        // 4. (Optional) Verify Transaction PIN
-//        // if (!passwordEncoder.matches(request.getPassword(), user.getTransactionPin())) { ... }
-//
-//        // 5. Deduct Balance (The Debit)
-//        BigDecimal newBalance = wallet.getBalance().subtract(request.getAmount());
-//        wallet.setBalance(newBalance);
-//        walletRepository.save(wallet);
-//
-//        // 6. Generate Reference
-//        String reference = "WTH-" + System.currentTimeMillis() + "-" + userId;
-//
-//        // 7. Initiate Transfer via Payment Provider
-//        try {
-//            // This is the same provider you used in EnvelopeService
-//            paymentProvider.initiateTransfer(
-//                    request.getBankCode(),
-//                    request.getAccountNumber(),
-//                    request.getAccountName(),
-//                    request.getAmount(),
-//                    reference,
-//                    "Wallet Withdrawal"
-//            );
-//        } catch (Exception e) {
-//            // CRITICAL: If the bank transfer fails, @Transactional will rollback the balance deduction automatically.
-//            logger.error("Withdrawal failed for user {}: {}", userId, e.getMessage());
-//            throw new RuntimeException("Bank transfer failed: " + e.getMessage());
-//        }
-//
-//        // 8. Log the Transaction
-//        TransactionLog log = new TransactionLog();
-//        log.setUserId(userId);
-//        log.setBudgetId(null); // Not related to a budget
-//        log.setSourceEnvelopeId(null); // Not related to an envelope
-//        log.setExternalAccountId(request.getAccountNumber());
-//        log.setAmount(request.getAmount().negate()); // Negative to show money leaving
-//        log.setFee(BigDecimal.ZERO); // Add fee logic here if needed (e.g. N10)
-//        log.setTransactionType(TransactionType.WALLET_WITHDRAWAL); // Ensure this Enum exists!
-//        log.setReference(reference);
-//        log.setStatus(TransactionStatus.COMPLETED);
-//        log.setDescription("Withdrawal to " + request.getAccountName());
-//        log.setCreatedAt(LocalDateTime.now());
-//
-//        transactionLogRepository.save(log);
-//
-//        // 9. Send Notification
-//        notificationService.sendNotification(
-//                userId.toString(),
-//                String.format("Debit Alert: ₦%.2f withdrawn to %s.", request.getAmount(), request.getAccountName()),
-//                NotificationType.DEBIT_ALERT,
-//                null, null, "VIEW_WALLET", "/dashboard"
-//        );
-//    }
-
-    // NOTE: This method is NOT @Transactional at the top level
-    public void withdrawToBank(Long userId, WithdrawalRequest request) {
-        // 1. Basic Validation
-        if (request.getAmount().compareTo(BigDecimal.ZERO) <= 0) {
-            throw new IllegalArgumentException("Invalid amount");
-        }
-
-        // 2. 🔒 DB LOCK: Deduct Balance First (Pessimistic Locking)
-        // We do this in a small transaction to ensure they have funds
-        String reference = "WTH-" + System.currentTimeMillis() + "-" + userId;
-        debitWalletForWithdrawal(userId, request.getAmount());
-
-        // 3. 🌐 EXTERNAL API CALL (Slow) - No DB lock here!
-        try {
-            paymentProvider.initiateTransfer(
-                    request.getBankCode(),
-                    request.getAccountNumber(),
-                    request.getAccountName(),
-                    request.getAmount(),
-                    reference,
-                    "Wallet Withdrawal"
-            );
-
-            // 4. ✅ Success: Log it
-            logWithdrawal(userId, request, reference, TransactionStatus.COMPLETED);
-
-        } catch (Exception e) {
-            logger.error("Withdrawal API Failed: {}", e.getMessage());
-
-            // 5. ↩️ FAILURE: Refund the money (Compensation Transaction)
-            refundFailedWithdrawal(userId, request.getAmount());
-
-            // Log as failed
-            logWithdrawal(userId, request, reference, TransactionStatus.FAILED);
-            throw new RuntimeException("Transfer failed, funds refunded.");
-        }
-    }
-
     @Transactional
-    public void debitWalletForWithdrawal(Long userId, BigDecimal amount) {
+    public Wallet updateSettlementAccount(Long userId, UpdateBankDetailsRequest request) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new IllegalArgumentException("User not found"));
+
         Wallet wallet = walletRepository.findByUserId(userId)
-                .orElseThrow(() -> new EntityNotFoundException("Wallet not found"));
+                .orElseThrow(() -> new IllegalArgumentException("Wallet not found"));
 
-        if (wallet.getBalance().compareTo(amount) < 0) {
-            throw new IllegalArgumentException("Insufficient funds");
+        // 1. 🛡️ SECURITY: Fetch the real account name directly from the bank network
+        String resolvedAccountName = paymentProvider.resolveAccount(request.getBankCode(), request.getAccountNumber());
+
+        // (Optional Anti-Fraud Check): You could check if `resolvedAccountName` somewhat matches `user.getName()` here
+
+        // 2. 🌐 Push the verified data to SecureWave
+        boolean isUpdated = paymentProvider.updateWithdrawalBankInfo(
+                user.getEmail(),
+                request.getBankName(),
+                resolvedAccountName,
+                request.getBankCode(),
+                request.getAccountNumber()
+        );
+
+        if (!isUpdated) {
+            throw new RuntimeException("Payment provider rejected the bank details.");
         }
-        wallet.setBalance(wallet.getBalance().subtract(amount));
-        walletRepository.save(wallet);
+
+        // 3. 💾 Save to our database
+        wallet.setSettlementAccountNumber(request.getAccountNumber());
+        wallet.setSettlementBankCode(request.getBankCode());
+        wallet.setSettlementBankName(request.getBankName());
+        wallet.setSettlementAccountName(resolvedAccountName); // The verified name!
+
+        logger.info("Successfully updated settlement account for user {}", user.getEmail());
+
+        return walletRepository.save(wallet);
     }
 
     @Transactional
-    public void refundFailedWithdrawal(Long userId, BigDecimal amount) {
-        Wallet wallet = walletRepository.findByUserId(userId).orElseThrow();
-        wallet.setBalance(wallet.getBalance().add(amount));
+    public TransactionLog processWithdrawal(Long userId, WithdrawalRequest request) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new IllegalArgumentException("User not found"));
+
+        Wallet wallet = walletRepository.findByUserId(userId)
+                .orElseThrow(() -> new IllegalArgumentException("Wallet not found"));
+
+        // 1. 🛡️ VERIFY PIN
+        if (!userService.verifyTransactionPin(user, request.getTransactionPin())) {
+            throw new IllegalArgumentException("Invalid transaction PIN");
+        }
+
+        // 2. 🏦 ENSURE BANK IS SETUP
+        if (wallet.getSettlementAccountNumber() == null || wallet.getSettlementBankCode() == null) {
+            throw new IllegalStateException("Please link a withdrawal bank account before withdrawing funds.");
+        }
+
+        // 3. 💰 CHECK BALANCE
+        if (wallet.getBalance().compareTo(request.getAmount()) < 0) {
+            throw new IllegalArgumentException("Insufficient wallet balance.");
+        }
+
+        // 4. 🌐 CALL SECUREWAVE API
+        String narration = "Wisemonie Withdrawal to " + wallet.getSettlementBankName();
+        String secureWaveRef = paymentProvider.initiateWithdrawal(
+                user.getEmail(),
+                request.getAmount(),
+                narration
+        );
+
+        // 5. 📉 DEDUCT BALANCE
+        wallet.setBalance(wallet.getBalance().subtract(request.getAmount()));
         walletRepository.save(wallet);
-    }
 
-    // Add this to the bottom of WalletService.java
+        // 6. 📝 RECORD TRANSACTION (Using your exact TransactionLog!)
+        TransactionLog logEntry = TransactionLog.builder()
+                .userId(userId)
+                // Note: budgetId and envelopeId are left null because this is a wallet-level withdrawal
+                .externalAccountId(wallet.getSettlementAccountNumber()) // Perfect place to store the destination account!
+                .amount(request.getAmount())
+                .fee(BigDecimal.ZERO) // Update this if you charge users a withdrawal fee
+                .reference(secureWaveRef)
+                .status(TransactionStatus.PROCESSING)
+                .transactionType(TransactionType.WALLET_WITHDRAWAL) // Ensure WITHDRAWAL is in your TransactionType Enum!
+                .description(narration)
+                .createdAt(LocalDateTime.now())
+                .build();
 
-    private void logWithdrawal(Long userId, WithdrawalRequest request, String reference, TransactionStatus status) {
-        TransactionLog log = new TransactionLog();
-        log.setUserId(userId);
-        log.setBudgetId(null);
-        log.setAmount(request.getAmount().negate()); // Negative to show money leaving
-        log.setFee(BigDecimal.ZERO); // Add fee logic here if needed
-
-        // Ensure you have this Enum value, or use TransactionType.WALLET_DEDUCTION
-        log.setTransactionType(TransactionType.WALLET_WITHDRAWAL);
-
-        log.setReference(reference);
-        log.setStatus(status);
-        log.setDescription("Withdrawal to " + request.getAccountName());
-        log.setCreatedAt(LocalDateTime.now());
-
-        // Optional: specific fields if your entity supports them
-        // log.setExternalAccountNumber(request.getAccountNumber());
-        // log.setBankCode(request.getBankCode());
-
-        transactionLogRepository.save(log);
+        // Make sure you inject TransactionLogRepository into your WalletService!
+        return transactionLogRepository.save(logEntry);
     }
 }
 

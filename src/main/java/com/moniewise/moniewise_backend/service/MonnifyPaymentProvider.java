@@ -4,27 +4,24 @@ import com.moniewise.moniewise_backend.dto.response.MonnifyLoginResponse;
 import com.moniewise.moniewise_backend.dto.response.MonnifyTransactionResponse;
 import com.moniewise.moniewise_backend.entity.User;
 import com.moniewise.moniewise_backend.externalTransfers.PaymentProvider;
-import com.moniewise.moniewise_backend.thirdParty.PaymentGateway;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.context.annotation.Primary;
-import org.springframework.http.*;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
-import java.util.Base64;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.Map;
+import java.util.*;
 
 @Service
-@Primary // <--- ADD THIS LINE HERE
 @Slf4j
 @RequiredArgsConstructor
-public class MonnifyPaymentProvider implements PaymentProvider, PaymentGateway {
+public abstract class MonnifyPaymentProvider implements PaymentProvider {
 
     private final RestTemplate restTemplate;
 
@@ -112,6 +109,11 @@ public class MonnifyPaymentProvider implements PaymentProvider, PaymentGateway {
         // We extract the name and email from the User entity
         String name = getSafeName(user);
         return createReservedAccount(user.getEmail(), name);
+    }
+
+    @Override
+    public List<Map<String, Object>> getSupportedBanks() {
+        return null;
     }
 
     // Helper to avoid null names

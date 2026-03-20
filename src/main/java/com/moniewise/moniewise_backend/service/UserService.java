@@ -283,59 +283,137 @@ public class UserService implements UserDetailsService {
         return userRepository.save(newUser);
     }
 
-//    @Transactional
+    @Transactional
     public User updateProfile(String email, ProfileRequest request) {
         User user = findByEmail(email);
 
-        // 1. Save Profile Data
+        // ============================================================
+        // 📱 1. GOOGLE SIGNUP PHONE NUMBER CATCHER (CRITICAL!)
+        // ============================================================
+        if (user.getPhone() == null || user.getPhone().trim().isEmpty()) {
+            String newPhone = request.getPhone();
+
+            if (newPhone == null || newPhone.trim().isEmpty()) {
+                throw new IllegalArgumentException("Phone number is required to complete your profile.");
+            }
+
+            if (userRepository.findByPhone(newPhone).isPresent()) {
+                throw new IllegalArgumentException("An account with the phone number '" + newPhone + "' already exists.");
+            }
+
+            user.setPhone(newPhone);
+        }
+
+        // ============================================================
+        // 🏦 2. KYC DATA FOR SECUREWAVE
+        // ============================================================
+        user.setBvn(request.getBvn());
+
         Map<String, Object> profileData = user.getProfileData();
         if (profileData == null) profileData = new HashMap<>();
 
-        profileData.put("name", request.getName());
+        profileData.put("name", request.getFirstName() + " " + request.getLastName());
+        profileData.put("firstName", request.getFirstName());
+        profileData.put("lastName", request.getLastName());
         profileData.put("monthlyIncome", request.getMonthlyIncome());
         profileData.put("mainExpense", request.getMainExpense());
         profileData.put("savingsGoal", request.getSavingsGoal());
         profileData.put("occupation", request.getOccupation());
+
         if(request.getDob() != null){
             profileData.put("dob", request.getDob());
         }
         user.setProfileData(profileData);
 
-        // Save first so the user entity has the name ready for the WalletService
+        // Save first so the user entity has the Phone, BVN, and Name ready for WalletService
         User savedUser = userRepository.save(user);
 
         // ============================================================
-        // 2. ⚡ CHECK & CREATE WALLET (The Missing Piece)
+        // ⚡ 3. CHECK & CREATE WALLET (Background Task)
         // ============================================================
-        Optional<Wallet> existingWallet = walletRepository.findByUser(user);
-
         if (!walletRepository.existsByUser(savedUser)) {
             CompletableFuture.runAsync(() -> {
                 try {
-                logger.info("⚡ Profile complete. Creating Wallet for: " + user.getEmail());
+                    logger.info("⚡ Profile complete. Creating Wallet for: {}", savedUser.getEmail());
 
-                // This creates the wallet using the name we just saved!
-                Wallet newWallet = walletService.createWalletForUser(savedUser);
+                    // This creates the wallet using the SecureWave Gateway!
+                    Wallet newWallet = walletService.createWalletForUser(savedUser);
 
-                // 3. 📧 Send the Welcome Email (Now that we have bank details)
-                CompletableFuture.runAsync(() -> {
-                notificationService.sendWelcomeEmail(
-                        savedUser.getEmail(),
-                        newWallet.getAccountNumber(),
-                        newWallet.getBankName(),
-                        newWallet.getBalance()
-                );
-                });
+                    // Send the Welcome Email (Already on a background thread, so no need for a second async block)
+                    notificationService.sendWelcomeEmail(
+                            savedUser.getEmail(),
+                            newWallet.getAccountNumber(),
+                            newWallet.getBankName(),
+                            newWallet.getBalance()
+                    );
 
                 } catch (Exception e) {
                     logger.error("❌ Background Wallet Creation Failed for {}: {}", savedUser.getEmail(), e.getMessage());
-                    // Optional: Add logic to retry later or flag user as "Wallet Failed"
                 }
             });
         }
 
         return savedUser;
     }
+
+//    @Transactional
+//    public User updateProfile(String email, ProfileRequest request) {
+//        User user = findByEmail(email);
+//
+//        // Save BVN directly to the entity column
+//        user.setBvn(request.getBvn());
+//
+//        // 1. Save Profile Data
+//        Map<String, Object> profileData = user.getProfileData();
+//        if (profileData == null) profileData = new HashMap<>();
+//
+//        profileData.put("name", request.getFirstName() + " " + request.getLastName());
+//        profileData.put("firstName", request.getFirstName());
+//        profileData.put("lastName", request.getLastName());
+//        profileData.put("monthlyIncome", request.getMonthlyIncome());
+//        profileData.put("mainExpense", request.getMainExpense());
+//        profileData.put("savingsGoal", request.getSavingsGoal());
+//        profileData.put("occupation", request.getOccupation());
+//        if(request.getDob() != null){
+//            profileData.put("dob", request.getDob());
+//        }
+//        user.setProfileData(profileData);
+//
+//        // Save first so the user entity has the name ready for the WalletService
+//        User savedUser = userRepository.save(user);
+//
+//        // ============================================================
+//        // 2. ⚡ CHECK & CREATE WALLET (The Missing Piece)
+//        // ============================================================
+//        Optional<Wallet> existingWallet = walletRepository.findByUser(user);
+//
+//        if (!walletRepository.existsByUser(savedUser)) {
+//            CompletableFuture.runAsync(() -> {
+//                try {
+//                logger.info("⚡ Profile complete. Creating Wallet for: " + user.getEmail());
+//
+//                // This creates the wallet using the name we just saved!
+//                Wallet newWallet = walletService.createWalletForUser(savedUser);
+//
+//                // 3. 📧 Send the Welcome Email (Now that we have bank details)
+//                CompletableFuture.runAsync(() -> {
+//                notificationService.sendWelcomeEmail(
+//                        savedUser.getEmail(),
+//                        newWallet.getAccountNumber(),
+//                        newWallet.getBankName(),
+//                        newWallet.getBalance()
+//                );
+//                });
+//
+//                } catch (Exception e) {
+//                    logger.error("❌ Background Wallet Creation Failed for {}: {}", savedUser.getEmail(), e.getMessage());
+//                    // Optional: Add logic to retry later or flag user as "Wallet Failed"
+//                }
+//            });
+//        }
+//
+//        return savedUser;
+//    }
     public User findByEmail(String email) {
         return userRepository.findByEmail(email)
                 .orElseThrow(() -> new RuntimeException("User not found with email: " + email));

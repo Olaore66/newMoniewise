@@ -1,23 +1,23 @@
 package com.moniewise.moniewise_backend.dto.request;
 
+import javax.validation.constraints.DecimalMin;
+import javax.validation.constraints.NotBlank;
+import javax.validation.constraints.NotNull;
 import java.math.BigDecimal;
 
 public class WithdrawalRequest {
+
+    @NotNull(message = "Amount is required")
+    @DecimalMin(value = "100.0", message = "Minimum withdrawal is ₦100")
     private BigDecimal amount;
-    private String bankCode;
-    private String accountNumber;
-    private String accountName; // Resolved name from frontend or backend lookup
-    private String password;    // Optional: For transaction PIN validation
+
+    @NotBlank(message = "Transaction PIN is required")
+    private String transactionPin;
 
     // Getters and Setters
     public BigDecimal getAmount() { return amount; }
     public void setAmount(BigDecimal amount) { this.amount = amount; }
-    public String getBankCode() { return bankCode; }
-    public void setBankCode(String bankCode) { this.bankCode = bankCode; }
-    public String getAccountNumber() { return accountNumber; }
-    public void setAccountNumber(String accountNumber) { this.accountNumber = accountNumber; }
-    public String getAccountName() { return accountName; }
-    public void setAccountName(String accountName) { this.accountName = accountName; }
-    public String getPassword() { return password; }
-    public void setPassword(String password) { this.password = password; }
+
+    public String getTransactionPin() { return transactionPin; }
+    public void setTransactionPin(String transactionPin) { this.transactionPin = transactionPin; }
 }
