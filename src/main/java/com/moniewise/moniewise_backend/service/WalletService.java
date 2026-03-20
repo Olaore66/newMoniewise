@@ -546,5 +546,17 @@ public class WalletService {
         // Make sure you inject TransactionLogRepository into your WalletService!
         return transactionLogRepository.save(logEntry);
     }
+    @Transactional
+    public void debitWalletForWithdrawal(Long userId, BigDecimal amount) {
+        Wallet wallet = walletRepository.findByUserId(userId)
+                // 👇 It uses IllegalArgumentException here
+                .orElseThrow(() -> new IllegalArgumentException("Wallet not found"));
+
+        if (wallet.getBalance().compareTo(amount) < 0) {
+            throw new IllegalArgumentException("Insufficient funds in wallet for this transaction.");
+        }
+        wallet.setBalance(wallet.getBalance().subtract(amount));
+        walletRepository.save(wallet);
+    }
 }
 
