@@ -198,203 +198,65 @@ public class WalletService {
 
 
     // 1. The MASTER Method (Does the actual work)
+    // 1. DELETE the old fundWallet block (Lines 149-188) entirely.
+
+    // 2. KEEP this version, but update it to be the only fundWallet method:
+    // 1. The Internal/Admin Fund Wrapper
     @Transactional
     public void fundWallet(Long userId, BigDecimal amount, String notificationMessage, boolean suppressLogAndNotification) {
-
-        // --- PART A: Always Run (The Money Move) ---
-        Optional<Wallet> walletOpt = walletRepository.findByUserId(userId);
-        if (walletOpt.isEmpty()) {
-            logger.error("Wallet not found for user ID: {}. Fee of ₦{} not credited.", userId, amount);
-            return;
-        }
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new IllegalArgumentException("User not found"));
 
         if (amount.compareTo(BigDecimal.ZERO) <= 0) {
             throw new IllegalArgumentException("Funding amount must be positive");
         }
 
-        Wallet wallet = walletOpt.get();
-        wallet.setBalance(wallet.getBalance().add(amount));
-        walletRepository.save(wallet);
+        String internalRef = "INT-" + System.currentTimeMillis() + "-" + userId;
 
-        // --- PART B: Conditional (The "Noise") ---
-        if (!suppressLogAndNotification) {
+        // Route to Master Processor: Net = Gross, Fee = 0
+        this.processSuccessfulFunding(
+                user.getEmail(),
+                amount,
+                amount,
+                BigDecimal.ZERO,
+                internalRef,
+                notificationMessage != null ? notificationMessage : "Wallet Deposit",
+                LocalDateTime.now()
+        );
 
-            // 1. Create Generic Log
-            TransactionLog transactionLog = new TransactionLog();
-            transactionLog.setUserId(userId);
-            transactionLog.setAmount(amount);
-            transactionLog.setFee(BigDecimal.ZERO);
-            transactionLog.setTransactionType(WALLET_DEPOSIT);
-            transactionLog.setReference("W-DEP-" + System.currentTimeMillis() + "-" + userId);
-            transactionLog.setStatus(TransactionStatus.COMPLETED);
-            transactionLog.setCreatedAt(LocalDateTime.now());
-            transactionLogRepository.save(transactionLog);
-
-            // 2. Send Notification
-            String message = notificationMessage != null
-                    ? notificationMessage
-                    : String.format("Account funded with ₦%.2f!", amount);
-
-            CompletableFuture.runAsync(() -> {
-                notificationService.sendNotification(
-                        userId.toString(),
-                        message,
-                        NotificationType.WALLET_FUNDED,
-                        null,
-                        null,
-                        "VIEW_WALLET",
-                        "/wallet"
-                );
-            });
-        }
-
-        logger.info("Funded wallet with ₦{} for user {} (Silent: {})", amount, userId, suppressLogAndNotification);
+        logger.info("Internal Wallet Funding triggered for user {}", userId);
     }
 
-    // 2. The Overload (For Backward Compatibility)
-// Keeps existing code working without changing every single call
+    // 2. The Overload for backward compatibility
     public void fundWallet(Long userId, BigDecimal amount, String notificationMessage) {
-        fundWallet(userId, amount, notificationMessage, false); // Default: Not Silent
+        fundWallet(userId, amount, notificationMessage, false);
     }
 
-    @Transactional
-    public void fundWalletByEmail(String email, BigDecimal amount, String narration) {
-        User user = userRepository.findByEmail(email)
-                .orElseThrow(() -> new IllegalArgumentException("User not found with email: " + email));
-        fundWallet(user.getId(), amount, narration);
-    }
-
-    // 🔴 THIS IS THE FIXED METHOD 🔴
-
-//    @Transactional
-//    public void fundWalletFromWebhook(String payloadJson) {
-//        try {
-//            JsonNode root = objectMapper.readTree(payloadJson);
-//            String eventType = root.path("eventType").asText();
-//
-//            if ("SUCCESSFUL_TRANSACTION".equals(eventType)) { //
-//                JsonNode data = root.path("eventData");
-//
-//                String email = data.path("customer").path("email").asText();
-//                BigDecimal amountPaid = data.path("amountPaid").decimalValue();
-//                String transactionReference = data.path("transactionReference").asText();
-//                String paymentDescription = data.path("paymentDescription").asText(); //
-//
-//                // 🛡️ DATE PARSING FIX (Matches Monnify Doc: "17/11/2021 3:48:10 PM")
-//                LocalDateTime transactionTime = LocalDateTime.now();
-//                try {
-//                    String paidOn = data.path("paidOn").asText();
-//                    if (paidOn != null && !paidOn.isEmpty()) {
-//                        try {
-//                            // Try Format 1 (Simulator): "2026-01-01 12:00:00.0"
-//                            DateTimeFormatter formatter1 = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.S");
-//                            transactionTime = LocalDateTime.parse(paidOn, formatter1);
-//                        } catch (Exception e1) {
-//                            // Try Format 2 (Documentation): "17/11/2021 3:48:10 PM"
-//                            DateTimeFormatter formatter2 = DateTimeFormatter.ofPattern("dd/MM/yyyy h:mm:ss a", Locale.ENGLISH);
-//                            transactionTime = LocalDateTime.parse(paidOn, formatter2);
-//                        }
-//                    }
-//                } catch (Exception e) {
-//                    logger.warn("⚠️ Date parsing failed completely for '{}', using current time.", data.path("paidOn").asText());
-//                }
-//
-//                logger.info("💰 Funding Wallet: User={} Amount={}", email, amountPaid);
-//
-//                // 1. Find User
-//                User user = userRepository.findByEmail(email)
-//                        .orElseThrow(() -> new RuntimeException("User not found: " + email));
-//
-//                // 2. Find/Create Wallet
-//                Wallet wallet = walletRepository.findByUser(user)
-//                        .orElseGet(() -> createWalletForUser(user));
-//
-//                // 3. Duplicate Check (Optional but Recommended in Doc)
-//                if (transactionLogRepository.existsByReference(transactionReference)) { //
-//                    logger.info("⚠️ Transaction {} already processed. Skipping.", transactionReference);
-//                    return;
-//                }
-//
-//                // 4. Update Balance
-//                wallet.setBalance(wallet.getBalance().add(amountPaid));
-//                walletRepository.save(wallet);
-//
-//                // 5. Create Log
-//                TransactionLog transactionLog = new TransactionLog();
-//                transactionLog.setUserId(user.getId());
-//                transactionLog.setAmount(amountPaid);
-//                transactionLog.setTransactionType(com.moniewise.moniewise_backend.enums.TransactionType.WALLET_DEPOSIT);
-//                transactionLog.setReference(transactionReference);
-//                transactionLog.setDescription(paymentDescription);
-//                transactionLog.setStatus(com.moniewise.moniewise_backend.enums.TransactionStatus.COMPLETED);
-//                transactionLog.setCreatedAt(transactionTime);
-//
-//                transactionLogRepository.save(transactionLog);
-//
-//                // 6. Notify
-////                notificationService.sendNotification(
-////                        user.getId().toString(),
-////                        "Wallet funded with ₦" + amountPaid,
-////                        NotificationType.WALLET_FUNDED
-////                );
-//
-//                // 6. Notify (FIX: Run Async + Add Route)
-//                CompletableFuture.runAsync(() -> {
-//                    try {
-//                        notificationService.sendNotification(
-//                                user.getId().toString(),
-//                                String.format("Wallet funded with ₦%.2f", amountPaid),
-//                                NotificationType.WALLET_FUNDED,
-//                                null,
-//                                null,
-//                                "VIEW_WALLET", // Ensure the app knows where to go
-//                                "/wallet"
-//                        );
-//                    } catch (Exception e) {
-//                        logger.error("Failed to send webhook notification async", e);
-//                    }
-//                });
-//
-//                logger.info("✅ Wallet Funded Successfully!");
-//            }
-//        } catch (Exception e) {
-//            logger.error("❌ WEBHOOK CRASHED: ", e);
-//            throw new RuntimeException("Webhook failed", e);
-//        }
-//    }
-
-    // Inside WalletService.java
-
-    // Remove @Transactional from the top-level method
+    // 3. The Webhook Gateway (Handles older Monnify logic)
     public void fundWalletFromWebhook(String payloadJson) {
         try {
-            // 1. 🏗️ HEAVY LIFTING (Parsing) - Do this OUTSIDE the transaction
             JsonNode root = objectMapper.readTree(payloadJson);
             String eventType = root.path("eventType").asText();
 
-            if (!"SUCCESSFUL_TRANSACTION".equals(eventType)) {
-                return;
-            }
+            if (!"SUCCESSFUL_TRANSACTION".equals(eventType)) return;
 
             JsonNode data = root.path("eventData");
             String email = data.path("customer").path("email").asText();
             BigDecimal amountPaid = data.path("amountPaid").decimalValue();
             String transactionReference = data.path("transactionReference").asText();
             String paymentDescription = data.path("paymentDescription").asText();
-
-            // Date parsing logic...
             LocalDateTime transactionTime = parseTransactionDate(data.path("paidOn").asText());
 
-            // 2. ⚡ ATOMIC TRANSACTION (Fast DB Write)
-            // We call a separate private method to handle the DB lock strictly
-            this.processSuccessfulFunding(email, amountPaid, transactionReference, paymentDescription, transactionTime);
+            this.processSuccessfulFunding(
+                    email, amountPaid, amountPaid, BigDecimal.ZERO,
+                    transactionReference, paymentDescription, transactionTime
+            );
 
         } catch (Exception e) {
             logger.error("❌ WEBHOOK CRASHED: ", e);
             throw new RuntimeException("Webhook failed", e);
         }
     }
-
     // Add this helper method to WalletService.java
 
     private LocalDateTime parseTransactionDate(String paidOn) {
@@ -418,43 +280,62 @@ public class WalletService {
     }
 
     // This method is short, fast, and transactional
+    // 4. THE ONLY MASTER PROCESSOR (Merging your two versions)
     @Transactional
-    public void processSuccessfulFunding(String email, BigDecimal amount, String ref, String desc, LocalDateTime time) {
-        // 1. Duplicate Check
+    public void processSuccessfulFunding(
+            String email,
+            BigDecimal netAmount,
+            BigDecimal grossAmount,
+            BigDecimal fee,
+            String ref,
+            String desc,
+            LocalDateTime time
+    ) {
+        // Idempotency: Don't process the same ID twice
         if (transactionLogRepository.existsByReference(ref)) {
             logger.info("⚠️ Transaction {} already processed.", ref);
             return;
         }
 
-        // 2. Update Balance
         User user = userRepository.findByEmail(email)
                 .orElseThrow(() -> new RuntimeException("User not found: " + email));
 
         Wallet wallet = walletRepository.findByUser(user)
-                .orElseGet(() -> createWalletForUser(user)); // Note: This might still block if creating wallet, but acceptable for webhook
+                .orElseGet(() -> createWalletForUser(user));
 
-        wallet.setBalance(wallet.getBalance().add(amount));
+        // Update DB balance with NET amount
+        wallet.setBalance(wallet.getBalance().add(netAmount));
+        wallet.setUpdatedAt(LocalDateTime.now());
         walletRepository.save(wallet);
 
-        // 3. Log
+        // Save detailed transaction log including Gross and Fee
         TransactionLog log = new TransactionLog();
         log.setUserId(user.getId());
-        log.setAmount(amount);
+        log.setAmount(netAmount);
+        log.setFee(fee);
         log.setTransactionType(WALLET_DEPOSIT);
         log.setReference(ref);
-        log.setDescription(desc);
+        log.setDescription(desc + " | Gross: ₦" + grossAmount);
         log.setStatus(TransactionStatus.COMPLETED);
         log.setCreatedAt(time);
         transactionLogRepository.save(log);
 
-        // 4. Notify (Async - Do not block the transaction commit!)
+        // Async Notification
         CompletableFuture.runAsync(() -> {
-            notificationService.sendNotification(
-                    user.getId().toString(),
-                    String.format("Wallet funded with ₦%.2f", amount),
-                    NotificationType.WALLET_FUNDED,
-                    null, null, "VIEW_WALLET", "/wallet"
-            );
+            try {
+                String alertMessage = String.format(
+                        "Wallet funded with ₦%.2f. (₦%.2f deposit fee applied)",
+                        netAmount, fee
+                );
+                notificationService.sendNotification(
+                        user.getId().toString(),
+                        alertMessage,
+                        NotificationType.WALLET_FUNDED,
+                        null, null, "VIEW_WALLET", "/wallet"
+                );
+            } catch (Exception e) {
+                logger.error("Failed to send credit alert", e);
+            }
         });
     }
     @Transactional

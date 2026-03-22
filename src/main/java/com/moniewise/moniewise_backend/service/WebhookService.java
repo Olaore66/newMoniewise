@@ -51,24 +51,42 @@ public class WebhookService {
             String notificationStatus = root.path("notification_status").asText();
             String transactionStatus = root.path("transaction_status").asText();
 
-            // 💰 3. CAPTURE THE CASH
+            // Inside your processSecureWaveWebhook method...
+
             if ("payment_successful".equalsIgnoreCase(notificationStatus)) {
 
                 String email = root.path("customer").path("email").asText();
-                // SecureWave sends "amount" as 100, we convert to BigDecimal
-                BigDecimal amountPaid = new BigDecimal(root.path("amount").asText());
+
+                // 🏦 SECUREWAVE MATH BREAKDOWN
+                // grossAmount: What the user sent (e.g., 100)
+                // fee: What SecureWave charged (e.g., 25)
+                // netAmount: What we actually received (e.g., 75)
+
+                BigDecimal grossAmount = new BigDecimal(root.path("amount").asText());
+                BigDecimal fee = new BigDecimal(root.path("fees").asText());
+                BigDecimal netAmount = new BigDecimal(root.path("settlement_amount").asText());
+
                 String transactionId = root.path("transaction_id").asText();
-                String description = root.path("description").asText();
 
-                logger.info("💸 PROCESSING PAYMENT: User={} Amount={} ID={}", email, amountPaid, transactionId);
+                // We update the description to be transparent with the user
+                String description = String.format("Deposit of ₦%s (minus ₦%s processing fee)",
+                        grossAmount, fee);
 
+                logger.info("💸 FUNDING NET: User={} | Gross=₦{} | Fee=₦{} | Crediting=₦{}",
+                        email, grossAmount, fee, netAmount);
+
+                // ⚡ WE ONLY CREDIT THE NET AMOUNT TO THE DB
+                // Inside WebhookService.java
                 walletService.processSuccessfulFunding(
                         email,
-                        amountPaid,
+                        netAmount,    // ₦75
+                        grossAmount,  // ₦100
+                        fee,          // ₦25
                         transactionId,
                         description,
                         LocalDateTime.now()
                 );
+
             } else {
                 logger.warn("⚠️ Ignored Notification Status: {}", notificationStatus);
             }
