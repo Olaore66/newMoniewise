@@ -84,24 +84,29 @@ public class SecureWavePaymentProvider implements PaymentProvider {
                 Object dataObj = body.get("data");
                 Map<String, Object> accountData = new HashMap<>();
 
-                // Check if SecureWave sent an Array [...] or an Object {...}
+                // Handle the Array that SecureWave sends back
                 if (dataObj instanceof List) {
                     List<?> dataList = (List<?>) dataObj;
                     if (!dataList.isEmpty()) {
-                        accountData = (Map<String, Object>) dataList.get(0); // Grab the first item in the array
+                        accountData = (Map<String, Object>) dataList.get(0);
                     }
                 } else if (dataObj instanceof Map) {
-                    accountData = (Map<String, Object>) dataObj; // It's an object, cast it safely
+                    accountData = (Map<String, Object>) dataObj;
                 }
 
-                // If we couldn't parse it, throw an error
-                if (accountData.isEmpty() || !accountData.containsKey("account_number")) {
+                // 🚨 Use the exact keys from the SecureWave docs!
+                Object accNumObj = accountData.get("account_number");
+                Object bankObj = accountData.get("account_bank"); // <--- THE MISSING LINK!
+
+                if (accNumObj == null || bankObj == null) {
+                    log.error("SecureWave Response missing keys: {}", accountData);
                     throw new RuntimeException("SecureWave did not return valid account details.");
                 }
 
                 Map<String, String> result = new HashMap<>();
-                result.put("accountNumber", accountData.get("account_number").toString());
-                result.put("bank", accountData.get("bank_name").toString());
+                result.put("accountNumber", String.valueOf(accNumObj));
+                result.put("bank", String.valueOf(bankObj));
+
                 return result;
             }
         } catch (Exception e) {
