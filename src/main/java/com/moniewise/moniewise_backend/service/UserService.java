@@ -288,7 +288,7 @@ public class UserService implements UserDetailsService {
         User user = findByEmail(email);
 
         // ============================================================
-        // 📱 1. GOOGLE SIGNUP PHONE NUMBER CATCHER (CRITICAL!)
+        // 📱 1. GOOGLE SIGNUP PHONE NUMBER CATCHER
         // ============================================================
         if (user.getPhone() == null || user.getPhone().trim().isEmpty()) {
             String newPhone = request.getPhone();
@@ -307,7 +307,18 @@ public class UserService implements UserDetailsService {
         // ============================================================
         // 🏦 2. KYC DATA FOR SECUREWAVE
         // ============================================================
-        user.setBvn(request.getBvn());
+
+        // Only set the BVN if it's currently empty.
+        // If they already have one, don't let them overwrite it!
+        if (user.getBvn() == null || user.getBvn().trim().isEmpty()) {
+            if (request.getBvn() == null || request.getBvn().trim().isEmpty()) {
+                throw new IllegalArgumentException("BVN is required to complete your profile.");
+            }
+            user.setBvn(request.getBvn());
+        } else if (request.getBvn() != null && !user.getBvn().equals(request.getBvn())) {
+            // If they try to send a different BVN later, reject it.
+            throw new IllegalArgumentException("BVN cannot be modified after initial setup. Contact support.");
+        }
 
         Map<String, Object> profileData = user.getProfileData();
         if (profileData == null) profileData = new HashMap<>();
@@ -325,37 +336,36 @@ public class UserService implements UserDetailsService {
         }
         user.setProfileData(profileData);
 
-        // Save first so the user entity has the Phone, BVN, and Name ready for WalletService
+        // Save the user entity so it's ready for WalletService
         User savedUser = userRepository.save(user);
 
         // ============================================================
-        // ⚡ 3. CHECK & CREATE WALLET (Background Task)
+        // ⚡ 3. CHECK & CREATE WALLET (Synchronous)
         // ============================================================
         if (!walletRepository.existsByUser(savedUser)) {
+            logger.info("⚡ Profile complete. Creating Wallet for: {}", savedUser.getEmail());
+
+            // We do this synchronously. If SecureWave fails, it throws an error to the frontend!
+            Wallet newWallet = walletService.createWalletForUser(savedUser);
+
+            // We can keep the EMAIL sending asynchronous, because we don't want the user
+            // to wait on an SMTP server to finish loading.
             CompletableFuture.runAsync(() -> {
                 try {
-                    logger.info("⚡ Profile complete. Creating Wallet for: {}", savedUser.getEmail());
-
-                    // This creates the wallet using the SecureWave Gateway!
-                    Wallet newWallet = walletService.createWalletForUser(savedUser);
-
-                    // Send the Welcome Email (Already on a background thread, so no need for a second async block)
                     notificationService.sendWelcomeEmail(
                             savedUser.getEmail(),
                             newWallet.getAccountNumber(),
                             newWallet.getBankName(),
                             newWallet.getBalance()
                     );
-
                 } catch (Exception e) {
-                    logger.error("❌ Background Wallet Creation Failed for {}: {}", savedUser.getEmail(), e.getMessage());
+                    logger.error("❌ Failed to send welcome email to {}: {}", savedUser.getEmail(), e.getMessage());
                 }
             });
         }
 
         return savedUser;
     }
-
 //    @Transactional
 //    public User updateProfile(String email, ProfileRequest request) {
 //        User user = findByEmail(email);
