@@ -6,6 +6,7 @@ import com.moniewise.moniewise_backend.externalTransfers.PaymentProvider;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.context.annotation.Primary;
 import org.springframework.http.*;
 import org.springframework.stereotype.Service;
@@ -226,6 +227,7 @@ public class SecureWavePaymentProvider implements PaymentProvider {
     // 5. GET BANKS (With In-Memory Caching)
     // ==========================================================
     @Override
+    @Cacheable(value = "banks")
     public List<Map<String, Object>> getSupportedBanks() {
         // Using the base URL from your environment variables
         String url = baseUrl + "/banks";
