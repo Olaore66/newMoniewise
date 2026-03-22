@@ -100,7 +100,7 @@ public class SecureWavePaymentProvider implements PaymentProvider {
     // 2. RESOLVE ACCOUNT (The KYC Verification Step)
     // ==========================================================
     // ==========================================================
-    // 2. RESOLVE ACCOUNT (The KYC Verification Step)
+    // 2. RESOLVE ACCOUNT (The KYC Verification Step - X-RAY EDITION)
     // ==========================================================
     @Override
     public String resolveAccount(String bankCode, String accountNumber) {
@@ -114,9 +114,22 @@ public class SecureWavePaymentProvider implements PaymentProvider {
             payloadMap.put("account_number", accountNumber);
             String jsonBody = mapper.writeValueAsString(payloadMap);
 
-            // 2. Force the headers to declare this is JSON
+            // 2. Get the headers
             HttpHeaders headers = getSecureWaveHeaders();
             headers.setContentType(MediaType.APPLICATION_JSON);
+
+            // 🕵️‍♂️ THE X-RAY: Print EXACTLY what we are sending
+            // We mask the middle of the keys so you don't leak them in logs, but we show the start/end to catch spaces!
+            String safeSecret = secretKey != null && secretKey.length() > 8
+                    ? secretKey.substring(0, 6) + "..." + secretKey.substring(secretKey.length() - 2) : "INVALID_KEY";
+            String authHeaderValue = headers.getFirst("Authorization");
+
+            log.info("================ SECUREWAVE OUTGOING X-RAY ================");
+            log.info("URL:         --> '{}'", url);
+            log.info("Raw Secret:  --> '{}'", safeSecret);
+            log.info("Auth Header: --> '{}'", authHeaderValue);
+            log.info("Payload:     --> {}", jsonBody);
+            log.info("===========================================================");
 
             // 3. Send the pristine JSON String
             ResponseEntity<Map> response = restTemplate.exchange(
@@ -142,15 +155,19 @@ public class SecureWavePaymentProvider implements PaymentProvider {
             throw new RuntimeException("Could not verify account name. Please check the details.");
 
         } catch (org.springframework.web.client.HttpClientErrorException e) {
-            // 🚨 THIS IS THE WIRETAP!
-            log.error("SecureWave REJECTED the request. Status: {}, Body: {}", e.getStatusCode(), e.getResponseBodyAsString());
-            throw new RuntimeException("Account verification failed. Ensure the account number is correct.");
+            // 🚨 CAPTURE THE EXACT ERROR FROM THE PROVIDER
+            log.error("❌ SecureWave REJECTED the request.");
+            log.error("HTTP Status: {}", e.getStatusCode());
+            log.error("Response Body: {}", e.getResponseBodyAsString());
+
+            // Pass the actual message back up so you can see it in Postman
+            throw new RuntimeException("SecureWave API Error: " + e.getResponseBodyAsString());
+
         } catch (Exception e) {
             log.error("SecureWave Account Resolution Failed: {}", e.getMessage(), e);
             throw new RuntimeException("An internal error occurred during verification.");
         }
     }
-
     // ==========================================================
     // 3. WITHDRAWAL (The Closed-Loop Payout Step)
     // ==========================================================
