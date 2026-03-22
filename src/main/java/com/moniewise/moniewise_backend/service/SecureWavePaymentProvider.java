@@ -97,9 +97,6 @@ public class SecureWavePaymentProvider implements PaymentProvider {
     }
 
     // ==========================================================
-    // 2. RESOLVE ACCOUNT (The KYC Verification Step)
-    // ==========================================================
-    // ==========================================================
     // 2. RESOLVE ACCOUNT (The KYC Verification Step - X-RAY EDITION)
     // ==========================================================
     @Override

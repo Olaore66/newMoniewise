@@ -9,6 +9,7 @@ import com.moniewise.moniewise_backend.entity.Wallet;
 import com.moniewise.moniewise_backend.externalTransfers.PaymentProvider;
 import com.moniewise.moniewise_backend.service.UserService;
 import com.moniewise.moniewise_backend.service.WalletService;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
@@ -20,6 +21,7 @@ import java.util.List;
 import java.util.Map;
 
 @RestController
+@Slf4j
 @RequestMapping("/wallets")
 public class WalletController {
 
@@ -77,10 +79,17 @@ public class WalletController {
     /**
      * GET: Resolve Account Name (KYC Check)
      */
+    /**
+     * GET: Resolve Account Name (KYC Check)
+     */
     @GetMapping("/resolve-account")
     public ResponseEntity<?> resolveBankAccount(
             @RequestParam String bankCode,
             @RequestParam String accountNumber) {
+
+        // 🚨 THE ALARM: This proves Postman is hitting the right server!
+        log.error("\n\n🚨🚨🚨 ALARM: WALLET CONTROLLER HIT! 🚨🚨🚨\nBank: {}, Account: {}\n\n", bankCode, accountNumber);
+
         try {
             String accountName = paymentProvider.resolveAccount(bankCode, accountNumber);
             return ResponseEntity.ok(Map.of("accountName", accountName));
