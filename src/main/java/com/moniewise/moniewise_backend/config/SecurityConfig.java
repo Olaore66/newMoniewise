@@ -175,12 +175,12 @@ public class SecurityConfig {
 //                .antMatchers("/webhooks/paystack").permitAll() // Open for Paystack
 
                 .antMatchers("/api/webhooks/monnify").permitAll()
+                .antMatchers("/api/webhooks/securewave").permitAll()
 
                 .antMatchers("/auth/logout", "/auth/refresh", "/auth/delete").authenticated()
 //              .antMatchers("/tnc/**").authenticated()
                 .antMatchers("/users/**").authenticated()
                 .antMatchers("/notifications/**").authenticated()
-                .antMatchers("/api/webhooks/**").authenticated()
                 .antMatchers("/disbursements/**").authenticated()
                 .antMatchers("/transactions/**").authenticated()
                 .antMatchers("/legal/**").authenticated()
