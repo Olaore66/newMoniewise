@@ -165,6 +165,7 @@ public class SecureWavePaymentProvider implements PaymentProvider {
             throw new RuntimeException("An internal error occurred during verification.");
         }
     }
+
     // ==========================================================
     // 3. WITHDRAWAL (The Closed-Loop Payout Step)
     // ==========================================================

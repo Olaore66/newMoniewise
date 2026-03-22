@@ -79,16 +79,20 @@ public class WalletController {
     /**
      * GET: Resolve Account Name (KYC Check)
      */
-    /**
-     * GET: Resolve Account Name (KYC Check)
-     */
-    @GetMapping("/resolve-account")
-    public ResponseEntity<?> resolveBankAccount(
-            @RequestParam String bankCode,
-            @RequestParam String accountNumber) {
+    @PostMapping("/resolve-account")
+    public ResponseEntity<?> resolveBankAccount(@RequestBody Map<String, String> payload) {
 
-        // 🚨 THE ALARM: This proves Postman is hitting the right server!
-        log.error("\n\n🚨🚨🚨 ALARM: WALLET CONTROLLER HIT! 🚨🚨🚨\nBank: {}, Account: {}\n\n", bankCode, accountNumber);
+        // Extract the values from the JSON body
+        String bankCode = payload.get("bankCode");
+        String accountNumber = payload.get("accountNumber");
+
+        // 🚨 THE ALARM: Let's keep this so we know for sure it gets hit!
+        log.error("\n\n🚨🚨🚨 ALARM: WALLET CONTROLLER HIT (POST)! 🚨🚨🚨\nBank: {}, Account: {}\n\n", bankCode, accountNumber);
+
+        // Quick validation just in case Postman sends an empty body
+        if (bankCode == null || accountNumber == null) {
+            return ResponseEntity.badRequest().body(Map.of("error", "bankCode and accountNumber are required."));
+        }
 
         try {
             String accountName = paymentProvider.resolveAccount(bankCode, accountNumber);
