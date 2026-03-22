@@ -80,13 +80,28 @@ public class SecureWavePaymentProvider implements PaymentProvider {
 
             if (response.getStatusCode() == HttpStatus.OK || response.getStatusCode() == HttpStatus.CREATED) {
                 Map<String, Object> body = response.getBody();
-                
-                // ⚠️ NOTE: You must verify these exact keys ("account_number", "bank_name") match SecureWave's actual JSON response!
-                Map<String, Object> data = (Map<String, Object>) body.get("data"); // Assuming data is wrapped in a "data" object
-                
+
+                Object dataObj = body.get("data");
+                Map<String, Object> accountData = new HashMap<>();
+
+                // Check if SecureWave sent an Array [...] or an Object {...}
+                if (dataObj instanceof List) {
+                    List<?> dataList = (List<?>) dataObj;
+                    if (!dataList.isEmpty()) {
+                        accountData = (Map<String, Object>) dataList.get(0); // Grab the first item in the array
+                    }
+                } else if (dataObj instanceof Map) {
+                    accountData = (Map<String, Object>) dataObj; // It's an object, cast it safely
+                }
+
+                // If we couldn't parse it, throw an error
+                if (accountData.isEmpty() || !accountData.containsKey("account_number")) {
+                    throw new RuntimeException("SecureWave did not return valid account details.");
+                }
+
                 Map<String, String> result = new HashMap<>();
-                result.put("accountNumber", data.get("account_number").toString());
-                result.put("bank", data.get("bank_name").toString());
+                result.put("accountNumber", accountData.get("account_number").toString());
+                result.put("bank", accountData.get("bank_name").toString());
                 return result;
             }
         } catch (Exception e) {
