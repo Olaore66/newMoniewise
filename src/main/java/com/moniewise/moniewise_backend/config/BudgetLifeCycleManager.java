@@ -374,37 +374,106 @@ public class BudgetLifeCycleManager {
             logger.info("Chained next {} task for envelope {} at {}", taskType, envelope.getId(), nextTime);
         }
     }
+//    private void processBudgetExpiry(Budget budget, List<Budget> budgetsToUpdate, List<Envelope> envelopesToUpdate,
+//                                     List<TransactionLog> logsToSave) {
+//        User user = budget.getUser();
+//
+//        // 🛡️ DEFENSIVE CHECK 1: Does user exist?
+//        if (user == null || user.getId() == null) {
+//            throw new IllegalStateException("Budget " + budget.getId() + " has no valid user linked.");
+//        }
+//
+//        LocalDateTime now = fetchCurrentDateTimeFromDatabase();
+//        BigDecimal totalRefunded = BigDecimal.ZERO;
+//        List<Envelope> envelopes = envelopeRepository.findByBudgetId(budget.getId());
+//
+//        for (Envelope envelope : envelopes) {
+//            BigDecimal remainingAmount = envelope.getTotalRemainingAmount();
+//
+//            // 🛡️ DEFENSIVE CHECK 2: Ignore negative/zero balances safely
+//            if (remainingAmount != null && remainingAmount.compareTo(BigDecimal.ZERO) > 0) {
+//
+//                try {
+//                    // Attempt Refund
+//                    walletService.fundWallet(
+//                            user.getId(), remainingAmount,
+//                            String.format("Refund from '%s' (Budget: %s)", envelope.getName(), budget.getName()), true
+//                    );
+//                } catch (Exception e) {
+//                    // If wallet funding fails, we MUST throw exception to trigger Quarantine
+//                    throw new RuntimeException("Wallet funding failed for user " + user.getId() + ": " + e.getMessage(), e);
+//                }
+//
+//                // Log the Refund
+//                TransactionLog refundLog = new TransactionLog();
+//                refundLog.setUserId(user.getId());
+//                refundLog.setBudgetId(budget.getId());
+//                refundLog.setSourceEnvelopeId(envelope.getId());
+//                refundLog.setAmount(remainingAmount);
+//                refundLog.setTransactionType(BUDGET_COMPLETION_REFUND);
+//                refundLog.setStatus(COMPLETED);
+//                refundLog.setCreatedAt(now);
+//                refundLog.setReference("MW-REF-" + UUID.randomUUID().toString());
+//                logsToSave.add(refundLog);
+//
+//                totalRefunded = totalRefunded.add(remainingAmount);
+//            }
+//
+//            // Clear envelope balance
+//            envelope.setRemainingAmount(BigDecimal.ZERO);
+//            envelope.setTotalRemainingAmount(BigDecimal.ZERO);
+//            envelopesToUpdate.add(envelope);
+//
+//            // Clean tasks
+//            scheduledTaskRepository.deleteByEnvelopeId(envelope.getId());
+//        }
+//
+//        // Mark Success
+//        budget.setStatus(BudgetStatus.COMPLETED);
+//        budget.setRemainingAmount(BigDecimal.ZERO);
+//        budgetsToUpdate.add(budget);
+//
+//        // Notify User
+//        if (totalRefunded.compareTo(BigDecimal.ZERO) > 0) {
+//
+//            Map<String, Object> compParams = new HashMap<>();
+//            compParams.put("budgetName", budget.getName() != null ? budget.getName() : "Budget");
+//            compParams.put("refunded", String.format("%,.2f", totalRefunded));
+//
+//            eventPublisher.publishEvent(new GenericNotificationEvent(
+//                    this, user.getId().toString(), NotificationType.BUDGET_COMPLETED,
+//                    compParams, budget.getId(), null, "/budgets/" + budget.getId()
+//            ));
+//        } else {
+//            notificationService.sendNotification(
+//                    user.getId().toString(),
+//                    String.format("Your budget '%s' has ended with no unused funds to refund.", budget.getName()),
+//                    NotificationType.BUDGET_COMPLETED
+//            );
+//        }
+//
+//        logger.info("Budget {} completed for user {}. Refunded ₦{}", budget.getId(), user.getId(), totalRefunded);
+//    }
+
     private void processBudgetExpiry(Budget budget, List<Budget> budgetsToUpdate, List<Envelope> envelopesToUpdate,
                                      List<TransactionLog> logsToSave) {
         User user = budget.getUser();
 
-        // 🛡️ DEFENSIVE CHECK 1: Does user exist?
         if (user == null || user.getId() == null) {
             throw new IllegalStateException("Budget " + budget.getId() + " has no valid user linked.");
         }
 
         LocalDateTime now = fetchCurrentDateTimeFromDatabase();
-        BigDecimal totalRefunded = BigDecimal.ZERO;
+        BigDecimal totalRefunded = BigDecimal.ZERO; // 🧮 Accumulator
         List<Envelope> envelopes = envelopeRepository.findByBudgetId(budget.getId());
 
+        // 1. 🔄 LOOP ONLY FOR CALCULATION AND LOGGING
         for (Envelope envelope : envelopes) {
             BigDecimal remainingAmount = envelope.getTotalRemainingAmount();
 
-            // 🛡️ DEFENSIVE CHECK 2: Ignore negative/zero balances safely
             if (remainingAmount != null && remainingAmount.compareTo(BigDecimal.ZERO) > 0) {
 
-                try {
-                    // Attempt Refund
-                    walletService.fundWallet(
-                            user.getId(), remainingAmount,
-                            String.format("Refund from '%s' (Budget: %s)", envelope.getName(), budget.getName()), true
-                    );
-                } catch (Exception e) {
-                    // If wallet funding fails, we MUST throw exception to trigger Quarantine
-                    throw new RuntimeException("Wallet funding failed for user " + user.getId() + ": " + e.getMessage(), e);
-                }
-
-                // Log the Refund
+                // Create the log entry for this specific envelope
                 TransactionLog refundLog = new TransactionLog();
                 refundLog.setUserId(user.getId());
                 refundLog.setBudgetId(budget.getId());
@@ -416,43 +485,39 @@ public class BudgetLifeCycleManager {
                 refundLog.setReference("MW-REF-" + UUID.randomUUID().toString());
                 logsToSave.add(refundLog);
 
-                totalRefunded = totalRefunded.add(remainingAmount);
+                totalRefunded = totalRefunded.add(remainingAmount); // Add to total
             }
 
-            // Clear envelope balance
+            // Reset envelope states
             envelope.setRemainingAmount(BigDecimal.ZERO);
             envelope.setTotalRemainingAmount(BigDecimal.ZERO);
             envelopesToUpdate.add(envelope);
-
-            // Clean tasks
             scheduledTaskRepository.deleteByEnvelopeId(envelope.getId());
         }
 
-        // Mark Success
+        // 2. 💰 FUND WALLET ONCE (Outside the loop!)
+        if (totalRefunded.compareTo(BigDecimal.ZERO) > 0) {
+            try {
+                // This triggers ONLY ONE push notification for the entire budget
+                String summaryMsg = String.format("Total refund of ₦%,.2f from ended budget: %s", totalRefunded, budget.getName());
+
+                walletService.fundWallet(
+                        user.getId(),
+                        totalRefunded,
+                        summaryMsg,
+                        false // false = send the notification
+                );
+            } catch (Exception e) {
+                throw new RuntimeException("Wallet funding failed for user " + user.getId() + ": " + e.getMessage(), e);
+            }
+        }
+
+        // 3. Finalize Budget State
         budget.setStatus(BudgetStatus.COMPLETED);
         budget.setRemainingAmount(BigDecimal.ZERO);
         budgetsToUpdate.add(budget);
 
-        // Notify User
-        if (totalRefunded.compareTo(BigDecimal.ZERO) > 0) {
-
-            Map<String, Object> compParams = new HashMap<>();
-            compParams.put("budgetName", budget.getName() != null ? budget.getName() : "Budget");
-            compParams.put("refunded", String.format("%,.2f", totalRefunded));
-
-            eventPublisher.publishEvent(new GenericNotificationEvent(
-                    this, user.getId().toString(), NotificationType.BUDGET_COMPLETED,
-                    compParams, budget.getId(), null, "/budgets/" + budget.getId()
-            ));
-        } else {
-            notificationService.sendNotification(
-                    user.getId().toString(),
-                    String.format("Your budget '%s' has ended with no unused funds to refund.", budget.getName()),
-                    NotificationType.BUDGET_COMPLETED
-            );
-        }
-
-        logger.info("Budget {} completed for user {}. Refunded ₦{}", budget.getId(), user.getId(), totalRefunded);
+        logger.info("Budget {} completed. Single refund of ₦{} sent to user {}.", budget.getId(), totalRefunded, user.getId());
     }
 
     private void processEnvelopeDisbursement(Envelope envelope, LocalDate today, List<Envelope> envelopesToUpdate,
