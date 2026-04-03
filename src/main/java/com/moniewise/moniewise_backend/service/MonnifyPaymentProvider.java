@@ -6,7 +6,6 @@ import com.moniewise.moniewise_backend.entity.User;
 import com.moniewise.moniewise_backend.externalTransfers.PaymentProvider;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
@@ -25,19 +24,19 @@ public abstract class MonnifyPaymentProvider implements PaymentProvider {
 
     private final RestTemplate restTemplate;
 
-    @Value("${monnify.base-url}")
+//    @Value("${monnify.base-url}")
     private String baseUrl;
 
-    @Value("${monnify.api-key}")
+//    @Value("${monnify.api-key}")
     private String apiKey;
 
-    @Value("${monnify.secret-key}")
+//    @Value("${monnify.secret-key}")
     private String secretKey;
 
-    @Value("${monnify.contract-code}")
+//    @Value("${monnify.contract-code}")
     private String contractCode;
 
-    @Value("${monnify.wallet-account-number}")
+//    @Value("${monnify.wallet-account-number}")
     private String sourceAccountNumber;
 
     // 1. LOGIN (Get the Token)
