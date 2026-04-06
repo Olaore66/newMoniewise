@@ -3,9 +3,9 @@ package com.moniewise.moniewise_backend.controller;
 import com.moniewise.moniewise_backend.dto.request.UpdateBankDetailsRequest;
 import com.moniewise.moniewise_backend.dto.request.WithdrawalRequest;
 import com.moniewise.moniewise_backend.dto.response.WalletResponse;
-import com.moniewise.moniewise_backend.entity.TransactionLog;
 import com.moniewise.moniewise_backend.entity.User;
 import com.moniewise.moniewise_backend.entity.Wallet;
+import com.moniewise.moniewise_backend.entity.Withdrawal;
 import com.moniewise.moniewise_backend.externalTransfers.PaymentProvider;
 import com.moniewise.moniewise_backend.service.UserService;
 import com.moniewise.moniewise_backend.service.WalletService;
@@ -136,13 +136,23 @@ public class WalletController {
         try {
             User user = userService.findByEmail(principal.getName());
 
-            TransactionLog transactionLog = walletService.processWithdrawal(user.getId(), request);
+            Withdrawal withdrawal = walletService.processWithdrawal(user.getId(), request);
 
             return ResponseEntity.ok(Map.of(
-                    "status", "success",
-                    "message", "Withdrawal initiated successfully",
-                    "reference", transactionLog.getReference(),
-                    "amount", transactionLog.getAmount()
+                    "status", true,
+                    "message", "Withdrawal successful",
+                    "data", Map.of(
+                            "status", true,
+                            "message", "Withdrawal request has been received and being processed",
+                            "data", Map.of(
+                                    "withdrawalId", withdrawal.getId(),
+                                    "clientReference", withdrawal.getClientReference(),
+                                    "reference", withdrawal.getProviderReference(),
+                                    "amount", withdrawal.getAmount(),
+                                    "narration", withdrawal.getNarration(),
+                                    "status", withdrawal.getStatus().name()
+                            )
+                    )
             ));
 
         } catch (IllegalArgumentException | IllegalStateException e) {
