@@ -33,6 +33,8 @@ public class PasswordResetService {
         int otpCode = 100000 + secureRandom.nextInt(900000);
         String token = String.valueOf(otpCode);
 
+        tokenRepository.deleteByEmail(email);
+
         // Save to DB
         PasswordResetToken resetToken = new PasswordResetToken();
         resetToken.setEmail(email);
@@ -42,26 +44,29 @@ public class PasswordResetService {
         return tokenRepository.save(resetToken);
     }
 
-    public boolean isValidToken(String token) {
-        return tokenRepository.findByToken(token)
-                .filter(t -> !t.isUsed() && t.getExpiresAt().isAfter(LocalDateTime.now()))
-                .isPresent();
+    public boolean isValidToken(String email, String token) {
+        return findValidToken(email, token).isPresent();
     }
 
-    public void markTokenAsUsed(String token) {
-        tokenRepository.findByToken(token).ifPresent(t -> {
-            t.setUsed(true);
-            tokenRepository.save(t);
+    public void markTokenAsUsed(String email, String token) {
+        PasswordResetToken resetToken = findValidToken(email, token)
+                .orElseThrow(() -> new IllegalArgumentException("Invalid or expired OTP"));
+        resetToken.setUsed(true);
+        tokenRepository.save(resetToken);
+    }
+
+    public void updateUserPassword(String email, String token, String newPassword) {
+        PasswordResetToken resetToken = findValidToken(email, token)
+                .orElseThrow(() -> new IllegalArgumentException("Invalid or expired OTP"));
+
+        userRepository.findByEmail(resetToken.getEmail()).ifPresent(user -> {
+            user.setPassword(passwordEncoder.encode(newPassword));
+            userRepository.save(user);
         });
     }
 
-    // Overloaded method to support finding by Token directly (used in AuthController)
-    public void updateUserPassword(String token, String newPassword) {
-        tokenRepository.findByToken(token).ifPresent(resetToken -> {
-            userRepository.findByEmail(resetToken.getEmail()).ifPresent(user -> {
-                user.setPassword(passwordEncoder.encode(newPassword));
-                userRepository.save(user);
-            });
-        });
+    private java.util.Optional<PasswordResetToken> findValidToken(String email, String token) {
+        return tokenRepository.findByEmailAndToken(email, token)
+                .filter(t -> !t.isUsed() && t.getExpiresAt().isAfter(LocalDateTime.now()));
     }
 }

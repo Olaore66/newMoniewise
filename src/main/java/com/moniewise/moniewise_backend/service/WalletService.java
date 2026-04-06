@@ -156,21 +156,6 @@ public class WalletService {
         logger.info("Deducted ₦{} from wallet for user {}", amount, userId);
     }
 
-    @PostConstruct
-    public void initExistingUsersWallets() {
-        List<User> users = userRepository.findAll();
-        users.forEach(user -> {
-            if (!walletRepository.existsByUser(user)) {
-                try {
-                    createWalletForUser(user);
-                    logger.info("Initialized missing wallet for user {}", user.getId());
-                } catch (Exception e) {
-                    logger.error("Failed to init wallet for user {}: {}", user.getId(), e.getMessage());
-                }
-            }
-        });
-    }
-
 //     MONNIFY HOW CREATE VIRTUAL ACCOUNT..... SWITCHING TO SECUREWAVE NG SERVICES
     @Transactional
     public Wallet createWalletForUser(User user) {

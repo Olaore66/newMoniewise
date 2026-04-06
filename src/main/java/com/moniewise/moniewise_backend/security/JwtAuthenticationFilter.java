@@ -57,11 +57,11 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         }
 
         if (email != null && SecurityContextHolder.getContext().getAuthentication() == null) {
-            // 1. Load standard UserDetails (for Spring Security)
-            UserDetails userDetails = userService.loadUserByUsername(email);
-
-            // 2. Load your custom User entity (to check the Session ID)
+            // 1. Load your custom User entity first so deactivated accounts are blocked
             User user = userService.findByEmail(email);
+
+            // 2. Load standard UserDetails (for Spring Security)
+            UserDetails userDetails = userService.loadUserByUsername(email);
 
             // 3. Extract Session ID from the incoming Token
             String tokenSessionId = jwtUtil.extractSessionId(token);

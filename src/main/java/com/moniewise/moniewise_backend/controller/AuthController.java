@@ -94,13 +94,7 @@ public class AuthController {
             // Note: We pass newSessionId here!
             String token = jwtUtil.generateToken(userDetails, newSessionId);
 
-//            boolean needsProfileUpdate = (user.getProfileData() == null);
-            boolean needsProfileUpdate = true;
-
-            if (user.getProfileData() != null && !user.getProfileData().isEmpty()) {
-                needsProfileUpdate = user.getProfileData().values().stream()
-                        .allMatch(value -> value == null || value.toString().isBlank());
-            }
+            boolean needsProfileUpdate = needsProfileUpdate(user);
 
             // Return both token and profile completion flag
             return ResponseEntity.ok(Map.of(
@@ -173,7 +167,7 @@ public class AuthController {
 
         // 1. Check User
         Optional<User> userOpt = userRepository.findByEmail(email);
-        if (userOpt.isEmpty()) {
+        if (userOpt.isEmpty() || userOpt.get().isDeleted()) {
             return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("error", "No account found for this email."));
         }
         User user = userOpt.get();
@@ -192,15 +186,17 @@ public class AuthController {
     // ✅ NEW ENDPOINT: Step 2 - Verify OTP (Called by Flutter App)
     @PostMapping("/verify-reset-otp")
     public ResponseEntity<?> verifyResetOtp(@RequestBody Map<String, String> body) {
+        String email = body.get("email");
         String otp = body.get("otp");
 
-        boolean isValid = resetService.isValidToken(otp);
+        boolean isValid = resetService.isValidToken(email, otp);
 
         if (isValid) {
             return ResponseEntity.ok(Map.of(
                     "status", "success",
                     "message", "OTP Verified",
-                    "token", otp // Pass this back so app can use it in Step 3
+                    "token", otp,
+                    "email", email
             ));
         } else {
             return ResponseEntity.badRequest().body(Map.of("error", "Invalid or expired OTP"));
@@ -210,18 +206,19 @@ public class AuthController {
     // ✅ REFACTORED: Step 3 - Change Password
     @PostMapping("/reset-password")
     public ResponseEntity<String> resetPassword(@RequestBody Map<String, String> body) {
+        String email = body.get("email");
         String token = body.get("token"); // This is the OTP string (e.g., "123456")
         String newPassword = body.get("password");
 
-        if (!resetService.isValidToken(token)) {
+        if (!resetService.isValidToken(email, token)) {
             return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("Invalid or expired session");
         }
 
         // Update Password
-        resetService.updateUserPassword(token, newPassword);
+        resetService.updateUserPassword(email, token, newPassword);
 
         // Invalidate OTP
-        resetService.markTokenAsUsed(token);
+        resetService.markTokenAsUsed(email, token);
 
         return ResponseEntity.ok("Password reset successful");
     }
@@ -295,11 +292,7 @@ public class AuthController {
 
             String token = jwtUtil.generateToken(userDetails, newSessionId);
 
-            boolean needsProfileUpdate = true;
-            if (user.getProfileData() != null && !user.getProfileData().isEmpty()) {
-                needsProfileUpdate = user.getProfileData().values().stream()
-                        .allMatch(value -> value == null || value.toString().isBlank());
-            }
+            boolean needsProfileUpdate = needsProfileUpdate(user);
 
             return ResponseEntity.ok(Map.of(
                     "token", token,
@@ -341,6 +334,30 @@ public class AuthController {
 //                "needsProfileUpdate", needsProfileUpdate
 //        ));
 //    }
+
+    private boolean needsProfileUpdate(User user) {
+        Map<String, Object> profileData = user.getProfileData();
+        String firstName = readProfileValue(profileData, "firstName");
+        String lastName = readProfileValue(profileData, "lastName");
+
+        return isBlank(user.getPhone())
+                || isBlank(user.getBvn())
+                || isBlank(firstName)
+                || isBlank(lastName);
+    }
+
+    private String readProfileValue(Map<String, Object> profileData, String key) {
+        if (profileData == null) {
+            return null;
+        }
+
+        Object value = profileData.get(key);
+        return value != null ? value.toString() : null;
+    }
+
+    private boolean isBlank(String value) {
+        return value == null || value.isBlank();
+    }
 
     @DeleteMapping("/delete") // Endpoint: DELETE /auth/delete
     public ResponseEntity<?> deleteMyAccount(@AuthenticationPrincipal UserDetails userDetails) {

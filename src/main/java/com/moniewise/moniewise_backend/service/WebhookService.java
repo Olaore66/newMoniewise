@@ -28,6 +28,9 @@ public class WebhookService {
     }
 
     public void processSecureWaveWebhook(String signatureHeader, String rawPayload) {
+        if (secureWaveSecretKey == null || secureWaveSecretKey.isBlank()) {
+            throw new IllegalStateException("SecureWave webhook secret is not configured");
+        }
         // 🚨 1. CLEAN THE PAYLOAD (Crucial for the "Failed" status we saw)
         String cleanPayload = rawPayload.trim();
         if (cleanPayload.startsWith("\"") && cleanPayload.endsWith("\"")) {
@@ -42,7 +45,7 @@ public class WebhookService {
         String calculatedHash = calculateHmacSha256(cleanPayload, secureWaveSecretKey);
         if (!calculatedHash.equalsIgnoreCase(signatureHeader)) {
             logger.error("🚨 SIGNATURE MISMATCH! Calculated: {} vs Received: {}", calculatedHash, signatureHeader);
-            // During debugging, we let it slide, but keep an eye on the logs!
+            throw new SecurityException("Invalid SecureWave webhook signature");
         }
 
         try {

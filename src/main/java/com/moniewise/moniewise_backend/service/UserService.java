@@ -224,6 +224,10 @@ public class UserService implements UserDetailsService {
                 .orElseGet(() -> userRepository.findByPhone(emailOrPhone)
                         .orElseThrow(() -> new RuntimeException("User not found")));
 
+        if (user.isDeleted()) {
+            throw new RuntimeException("Account has been deactivated");
+        }
+
         // Validate password directly
         if (!passwordEncoder.matches(password, user.getPassword())) {
             throw new RuntimeException("Invalid credentials");
@@ -425,8 +429,14 @@ public class UserService implements UserDetailsService {
 //        return savedUser;
 //    }
     public User findByEmail(String email) {
-        return userRepository.findByEmail(email)
+        User user = userRepository.findByEmail(email)
                 .orElseThrow(() -> new RuntimeException("User not found with email: " + email));
+
+        if (user.isDeleted()) {
+            throw new RuntimeException("User account is deactivated");
+        }
+
+        return user;
     }
 
     @Override
