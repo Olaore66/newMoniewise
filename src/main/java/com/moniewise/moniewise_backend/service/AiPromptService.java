@@ -141,7 +141,7 @@ public class AiPromptService {
             - If there is an active budget, reviewing it is usually strong.
             - If there are no budgets at all, creating a budget is usually strong.
             - If wallet balance is zero or less, funding the wallet can be strong.
-            - If settlement account is not linked, setting account can be strong.
+            - If settlement account is not linked, setting account can be strong, but avoid recommending it when it would duplicate an already obvious primary dashboard shortcut unless it is the most urgent blocker.
             - Keep title under 55 characters.
             - Keep message under 140 characters.
             - CTA label should be 2 to 4 words.

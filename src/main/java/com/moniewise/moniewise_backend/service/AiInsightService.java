@@ -96,6 +96,12 @@ public class AiInsightService {
             return buildFallback(context);
         }
 
+        if ("set_account".equals(response.getActionType())
+            && context.activeBudget != null
+            && context.walletBalance.compareTo(BigDecimal.ZERO) > 0) {
+            return buildFallback(context);
+        }
+
         if (response.getTitle() == null || response.getTitle().isBlank()) {
             response.setTitle(defaultTitleFor(response.getActionType(), context));
         }
@@ -144,23 +150,23 @@ public class AiInsightService {
             return response;
         }
 
-        if (!context.hasLinkedSettlementAccount) {
-            response.setTitle("Link your payout account");
-            response.setMessage("Set your account details now so withdrawals stay fast and friction-free when you need them.");
-            response.setCtaLabel("Set account");
-            response.setActionType("set_account");
-            response.setPriority("normal");
-            return response;
-        }
-
         if (context.activeBudget != null) {
             response.setTitle("Review " + context.activeBudget.getName());
             response.setMessage("Check your most recent active budget and make sure each envelope still reflects today's priorities.");
             response.setCtaLabel("Review budget");
             response.setActionType("review_active_budget");
-            response.setPriority("normal");
+            response.setPriority("high");
             response.setBudgetId(context.activeBudget.getId());
             response.setBudgetName(context.activeBudget.getName());
+            return response;
+        }
+
+        if (!context.hasLinkedSettlementAccount && context.walletBalance.compareTo(new BigDecimal("50000")) <= 0) {
+            response.setTitle("Link your payout account");
+            response.setMessage("Set your account details now so withdrawals stay fast and friction-free when you need them.");
+            response.setCtaLabel("Set account");
+            response.setActionType("set_account");
+            response.setPriority("normal");
             return response;
         }
 
@@ -241,7 +247,7 @@ public class AiInsightService {
 
     private String defaultPriorityFor(String actionType) {
         return switch (actionType) {
-            case "fund_wallet", "create_budget" -> "high";
+            case "fund_wallet", "create_budget", "review_active_budget" -> "high";
             case "open_notifications" -> "urgent";
             default -> "normal";
         };
@@ -255,4 +261,3 @@ public class AiInsightService {
         private Budget completedBudget;
     }
 }
-
