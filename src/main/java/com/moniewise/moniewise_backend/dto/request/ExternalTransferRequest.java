@@ -15,4 +15,5 @@ public class ExternalTransferRequest {
     private String recipientName; // The name resolved from the "Resolve Account" step
     private String narration;     // Optional note
     private String withdrawalReason; // New Field
+    private String transactionPin;
 }

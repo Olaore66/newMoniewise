@@ -184,6 +184,7 @@ public class SecurityConfig {
                 .antMatchers("/disbursements/**").authenticated()
                 .antMatchers("/transactions/**").authenticated()
                 .antMatchers("/legal/**").authenticated()
+                .antMatchers("/ai/**").authenticated()
 
 //              .antMatchers("/users/otp/generate", "/users/otp/verify").authenticated()
                 .antMatchers("/budgets/**").authenticated()

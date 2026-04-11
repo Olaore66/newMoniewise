@@ -164,6 +164,8 @@ public class BudgetController {
         private ExternalAccount externalAccount;
         private Double amount;
         private String withdrawalReason;
+        private String narration;
+        private String transactionPin;
     }
 
     @Data

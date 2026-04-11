@@ -16,6 +16,7 @@ import com.moniewise.moniewise_backend.security.JwtUtil;
 import com.moniewise.moniewise_backend.service.EmailService;
 import com.moniewise.moniewise_backend.service.NotificationService;
 import com.moniewise.moniewise_backend.service.PasswordResetService;
+import com.moniewise.moniewise_backend.service.AuthSessionService;
 import com.moniewise.moniewise_backend.service.UserService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -51,6 +52,9 @@ public class AuthController {
     @Autowired
     private NotificationService notificationService; // Add this
 
+    @Autowired
+    private AuthSessionService authSessionService;
+
     // 👇 ADD THIS SECTION HERE
     @Value("${spring.security.oauth2.client.registration.google.client-id}")
     private String googleClientId;
@@ -83,15 +87,7 @@ public class AuthController {
             User user = userService.login(request.getEmailOrPhone(), request.getPassword());
             UserDetails userDetails = userService.loadUserByUsername(user.getEmail());
 
-            // 2. Generate a Unique Session ID (UUID)
-            String newSessionId = java.util.UUID.randomUUID().toString();
-
-            // 3. Save it to the Database (Invalidates all other devices)
-            user.setCurrentSessionId(newSessionId);
-            userRepository.save(user);
-
-            // 4. Generate Token WITH the Session ID
-            // Note: We pass newSessionId here!
+            String newSessionId = authSessionService.createSession(user);
             String token = jwtUtil.generateToken(userDetails, newSessionId);
 
             boolean needsProfileUpdate = needsProfileUpdate(user);
@@ -117,9 +113,15 @@ public class AuthController {
             if (authHeader == null || !authHeader.startsWith("Bearer ")) {
                 throw new RuntimeException("Invalid or missing token");
             }
+            String token = authHeader.substring(7);
+            String sessionId = jwtUtil.extractSessionId(token);
+            if (sessionId == null || sessionId.isBlank()) {
+                throw new RuntimeException("Invalid session");
+            }
+            authSessionService.revokeSession(sessionId);
             return ResponseEntity.ok(new LogoutResponse("Logged out successfully. Please discard your token."));
         } catch (Exception e) {
-            return ResponseEntity.badRequest().body(e.getMessage());
+            return ResponseEntity.badRequest().body(Map.of("message", e.getMessage()));
         }
     }
 
@@ -141,18 +143,12 @@ public class AuthController {
             String email = jwtUtil.extractEmail(oldToken);
             String oldSessionId = jwtUtil.extractSessionId(oldToken); // <--- Get Session ID from old token
 
-            // 3. Get User from DB (Source of Truth)
-            User user = userService.findByEmail(email);
-
-            // 4. SECURITY CHECK: Single Device Enforcement 🔒
-            // If the DB has a different Session ID, it means they logged in somewhere else.
-            if (user.getCurrentSessionId() == null || !user.getCurrentSessionId().equals(oldSessionId)) {
+            if (!authSessionService.isSessionActive(email, oldSessionId)) {
                 throw new RuntimeException("Session expired: You have logged in on another device.");
             }
 
-            // 5. Generate New Token (Keeping the SAME Session ID)
             UserDetails userDetails = userService.loadUserByUsername(email);
-            String newToken = jwtUtil.generateToken(userDetails, oldSessionId); // <--- Pass the ID here!
+            String newToken = jwtUtil.generateToken(userDetails, oldSessionId);
 
             return ResponseEntity.ok(new AuthResponse(newToken));
         } catch (Exception e) {
@@ -285,11 +281,7 @@ public class AuthController {
             System.out.println("⚡ Generating Response for: " + user.getEmail());
 
             UserDetails userDetails = userService.loadUserByUsername(user.getEmail());
-            String newSessionId = UUID.randomUUID().toString();
-
-            user.setCurrentSessionId(newSessionId);
-            userRepository.save(user); // <--- ⚠️ Suspect: DB Save might be failing
-
+            String newSessionId = authSessionService.createSession(user);
             String token = jwtUtil.generateToken(userDetails, newSessionId);
 
             boolean needsProfileUpdate = needsProfileUpdate(user);

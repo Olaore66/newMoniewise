@@ -6,6 +6,8 @@ import com.moniewise.moniewise_backend.entity.User;
 import com.moniewise.moniewise_backend.entity.Wallet;
 import com.moniewise.moniewise_backend.repository.UserRepository;
 import com.moniewise.moniewise_backend.repository.WalletRepository;
+import com.moniewise.moniewise_backend.security.JwtUtil;
+import com.moniewise.moniewise_backend.service.AuthSessionService;
 import com.moniewise.moniewise_backend.service.OtpService;
 import com.moniewise.moniewise_backend.service.UserService;
 import lombok.RequiredArgsConstructor; // ✅ Added for cleaner code
@@ -30,6 +32,8 @@ public class UserController {
     private final OtpService otpService;
     private final UserRepository userRepository;
     private final WalletRepository walletRepository;
+    private final JwtUtil jwtUtil;
+    private final AuthSessionService authSessionService;
 
     // =========================================================================
     // 1. GET CURRENT USER (Updated to ensure Profile Image is included)
@@ -172,14 +176,49 @@ public class UserController {
     }
 
     @PostMapping("/fcm-token")
-    public ResponseEntity<?> updateFcmToken(@RequestBody Map<String, String> payload, Authentication authentication) {
-        String token = payload.get("token");
-        if (token == null || token.isEmpty()) {
-            return ResponseEntity.badRequest().body(Map.of("error", "Token is required"));
+    public ResponseEntity<?> updateFcmToken(
+            @RequestBody Map<String, String> payload,
+            Authentication authentication,
+            @RequestHeader("Authorization") String authHeader
+    ) {
+        try {
+            String token = payload.get("token");
+            if (token == null || token.isEmpty()) {
+                return ResponseEntity.badRequest().body(Map.of("error", "Token is required"));
+            }
+            String email = authentication.getName();
+            String sessionId = extractSessionId(authHeader);
+            authSessionService.attachFcmToken(email, sessionId, token);
+            return ResponseEntity.ok(Map.of("message", "FCM token updated successfully"));
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }
-        String email = authentication.getName();
-        userService.updateFcmToken(email, token);
-        return ResponseEntity.ok(Map.of("message", "FCM token updated successfully"));
+    }
+
+    @DeleteMapping("/fcm-token")
+    public ResponseEntity<?> deleteFcmToken(
+            @RequestBody(required = false) Map<String, String> payload,
+            Authentication authentication,
+            @RequestHeader("Authorization") String authHeader
+    ) {
+        try {
+            String email = authentication.getName();
+            String sessionId = extractSessionId(authHeader);
+            String token = payload != null ? payload.get("token") : null;
+            authSessionService.clearSessionFcmTokenByValue(email, sessionId, token);
+            return ResponseEntity.ok(Map.of("message", "FCM token removed successfully"));
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @DeleteMapping("/device-token")
+    public ResponseEntity<?> deleteDeviceToken(
+            @RequestBody(required = false) Map<String, String> payload,
+            Authentication authentication,
+            @RequestHeader("Authorization") String authHeader
+    ) {
+        return deleteFcmToken(payload, authentication, authHeader);
     }
 
     // =========================================================================
@@ -190,6 +229,18 @@ public class UserController {
         String email = authentication.getName();
         Map<String, Object> result = userService.getMostRecentBudgets(email);
         return ResponseEntity.ok(result);
+    }
+
+    private String extractSessionId(String authHeader) {
+        if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+            throw new IllegalArgumentException("Invalid or missing token");
+        }
+        String token = authHeader.substring(7);
+        String sessionId = jwtUtil.extractSessionId(token);
+        if (sessionId == null || sessionId.isBlank()) {
+            throw new IllegalArgumentException("Invalid session");
+        }
+        return sessionId;
     }
 }
 

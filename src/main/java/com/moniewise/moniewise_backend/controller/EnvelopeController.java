@@ -4,6 +4,7 @@ import com.moniewise.moniewise_backend.dto.request.EnvelopeRequest;
 import com.moniewise.moniewise_backend.dto.request.ExternalTransferRequest;
 import com.moniewise.moniewise_backend.dto.request.P2PTransferRequest;
 import com.moniewise.moniewise_backend.dto.response.EnvelopeResponse;
+import com.moniewise.moniewise_backend.dto.response.ExternalTransferResponse;
 import com.moniewise.moniewise_backend.repository.BudgetRepository;
 import com.moniewise.moniewise_backend.service.EnvelopeService;
 import org.slf4j.Logger;
@@ -64,20 +65,42 @@ public class EnvelopeController {
             // CORRECT:
             validateTransferRequest(request);
 
-            String withdrawalReason = request.getWithdrawalReason();
-            envelopeService.transferToExternal(id, request.getExternalAccount(), request.getAmount(), email, withdrawalReason);
-            return ResponseEntity.ok("Transfer to external account initiated successfully");
+            ExternalTransferResponse transfer = envelopeService.transferToExternal(
+                    id,
+                    request.getExternalAccount(),
+                    request.getAmount(),
+                    email,
+                    request.getWithdrawalReason(),
+                    request.getNarration(),
+                    request.getTransactionPin()
+            );
+            return ResponseEntity.ok(Map.of(
+                    "status", true,
+                    "message", "Transfer successful",
+                    "data", Map.of(
+                            "status", true,
+                            "message", "Transfer request has been received and is being processed",
+                            "data", Map.of(
+                                    "clientReference", transfer.getClientReference(),
+                                    "reference", transfer.getProviderReference(),
+                                    "amount", transfer.getAmount(),
+                                    "recipientName", transfer.getRecipientName(),
+                                    "bankName", transfer.getBankName(),
+                                    "status", transfer.getStatus().name()
+                            )
+                    )
+            ));
 
         } catch (IllegalArgumentException e) {
             logger.warn("Invalid transfer request for envelope {}: {}", id, e.getMessage());
-            return ResponseEntity.badRequest().body(e.getMessage());
+            return ResponseEntity.badRequest().body(Map.of("message", e.getMessage()));
         } catch (SecurityException e) {
             logger.warn("Unauthorized transfer attempt for envelope {}: {}", id, e.getMessage());
-            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(e.getMessage());
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of("message", e.getMessage()));
         } catch (Exception e) {
             logger.error("Error initiating transfer for envelope {}: {}", id, e.getMessage(), e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body("Error initiating transfer: " + (e.getMessage() != null ? e.getMessage() : "Unknown error"));
+                    .body(Map.of("message", "Error initiating transfer: " + (e.getMessage() != null ? e.getMessage() : "Unknown error")));
         }
     }
 
@@ -87,6 +110,9 @@ public class EnvelopeController {
         }
         if (request.getExternalAccount() == null) {
             throw new IllegalArgumentException("External account details are required");
+        }
+        if (request.getTransactionPin() == null || request.getTransactionPin().isBlank()) {
+            throw new IllegalArgumentException("Transaction PIN is required");
         }
         BudgetController.ExternalAccount account = request.getExternalAccount();
         if (account.getAccountNumber() == null || account.getAccountNumber().isBlank()) {
@@ -169,18 +195,31 @@ public class EnvelopeController {
         beneficiary.setRecipientName(request.getRecipientName());
 
         // 2. Call the Service
-        envelopeService.transferToExternal(
+        ExternalTransferResponse transfer = envelopeService.transferToExternal(
                 request.getSourceEnvelopeId(),
                 beneficiary,
-                request.getAmount().doubleValue(), // Convert BigDecimal to Double if your service demands Double
+                request.getAmount().doubleValue(),
                 email,
-                request.getWithdrawalReason()
+                request.getWithdrawalReason(),
+                request.getNarration(),
+                request.getTransactionPin()
         );
 
         return ResponseEntity.ok(Map.of(
-                "status", "success",
-                "message", "Transfer processed successfully",
-                "amount", request.getAmount()
+                "status", true,
+                "message", "Transfer successful",
+                "data", Map.of(
+                        "status", true,
+                        "message", "Transfer request has been received and is being processed",
+                        "data", Map.of(
+                                "clientReference", transfer.getClientReference(),
+                                "reference", transfer.getProviderReference(),
+                                "amount", transfer.getAmount(),
+                                "recipientName", transfer.getRecipientName(),
+                                "bankName", transfer.getBankName(),
+                                "status", transfer.getStatus().name()
+                        )
+                )
         ));
     }
 

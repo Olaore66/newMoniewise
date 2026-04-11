@@ -1,6 +1,7 @@
 package com.moniewise.moniewise_backend.security;
 
 import com.moniewise.moniewise_backend.entity.User; // Import your User entity
+import com.moniewise.moniewise_backend.service.AuthSessionService;
 import com.moniewise.moniewise_backend.service.UserService;
 import io.jsonwebtoken.ExpiredJwtException;
 import org.slf4j.Logger;
@@ -24,10 +25,12 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     private static final Logger log = LoggerFactory.getLogger(JwtAuthenticationFilter.class);
     private final JwtUtil jwtUtil;
     private final UserService userService;
+    private final AuthSessionService authSessionService;
 
-    public JwtAuthenticationFilter(JwtUtil jwtUtil, UserService userService) {
+    public JwtAuthenticationFilter(JwtUtil jwtUtil, UserService userService, AuthSessionService authSessionService) {
         this.jwtUtil = jwtUtil;
         this.userService = userService;
+        this.authSessionService = authSessionService;
     }
 
     @Override
@@ -66,10 +69,8 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             // 3. Extract Session ID from the incoming Token
             String tokenSessionId = jwtUtil.extractSessionId(token);
 
-            // 4. THE CRITICAL CHECK: Does Token ID match Database ID?
-            // If user.getCurrentSessionId() is null, it means no valid session exists.
             boolean isSessionValid = tokenSessionId != null &&
-                    tokenSessionId.equals(user.getCurrentSessionId());
+                    authSessionService.isSessionActive(email, tokenSessionId);
 
             if (jwtUtil.validateToken(token, userDetails) && isSessionValid) {
                 UsernamePasswordAuthenticationToken auth = new UsernamePasswordAuthenticationToken(

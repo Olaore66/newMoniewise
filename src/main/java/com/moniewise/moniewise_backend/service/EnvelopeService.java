@@ -1408,6 +1408,7 @@ import com.moniewise.moniewise_backend.controller.BudgetController;
 import com.moniewise.moniewise_backend.dto.request.EnvelopeRequest;
 import com.moniewise.moniewise_backend.dto.request.P2PTransferRequest;
 import com.moniewise.moniewise_backend.dto.response.EnvelopeResponse;
+import com.moniewise.moniewise_backend.dto.response.ExternalTransferResponse;
 import com.moniewise.moniewise_backend.entity.*;
 import com.moniewise.moniewise_backend.enums.*;
 import com.moniewise.moniewise_backend.exception.EntityNotFoundException;
@@ -1926,11 +1927,22 @@ public class EnvelopeService {
     }
 
     @Transactional(rollbackFor = Exception.class)
-    public void transferToExternal(Long sourceId, BudgetController.ExternalAccount externalAccount, Double amountDouble, String email, String withdrawalReason) {
+    public ExternalTransferResponse transferToExternal(
+            Long sourceId,
+            BudgetController.ExternalAccount externalAccount,
+            Double amountDouble,
+            String email,
+            String withdrawalReason,
+            String narration,
+            String transactionPin
+    ) {
         BigDecimal amount = BigDecimal.valueOf(amountDouble);
         if (amount.compareTo(BigDecimal.ZERO) <= 0) throw new IllegalArgumentException("Amount must be positive");
 
         User user = userService.findByEmail(email);
+        if (!userService.verifyTransactionPin(user, transactionPin)) {
+            throw new IllegalArgumentException("Invalid transaction PIN");
+        }
         Envelope source = envelopeRepository.findByIdAndBudget_UserEmail(sourceId, email)
                 .orElseThrow(() -> new EntityNotFoundException("Envelope not found"));
 
@@ -1950,10 +1962,6 @@ public class EnvelopeService {
             throw new IllegalArgumentException("Invalid Account Number");
         }
 
-        source.setTotalRemainingAmount(source.getTotalRemainingAmount().subtract(amount));
-        source.setRemainingAmount(source.getRemainingAmount().subtract(amount));
-        envelopeRepository.save(source);
-
         String myReference = "EXT-" + java.util.UUID.randomUUID().toString();
         String description;
         String type = (String) source.getConditions().getOrDefault("type", "");
@@ -1967,6 +1975,10 @@ public class EnvelopeService {
         } else {
             description = "Transfer to " + resolvedName + " (" + externalAccount.getBankName() + ")";
         }
+
+        source.setTotalRemainingAmount(source.getTotalRemainingAmount().subtract(amount));
+        source.setRemainingAmount(source.getRemainingAmount().subtract(amount));
+        envelopeRepository.save(source);
 
         TransactionLog txn = TransactionLog.builder()
                 .userId(user.getId())
@@ -1983,16 +1995,19 @@ public class EnvelopeService {
                 .build();
         transactionLogRepository.save(txn);
 
+        String providerRef;
         try {
-            String providerRef = paymentProvider.initiateTransfer(
+            providerRef = paymentProvider.initiateTransfer(
                     externalAccount.getBankCode(),
                     externalAccount.getAccountNumber(),
                     resolvedName,
                     amount,
                     myReference,
-                    "Payment from " + user.getName()
+                    narration != null && !narration.trim().isEmpty()
+                            ? narration.trim()
+                            : "Transfer from " + source.getName()
             );
-            txn.setStatus(TransactionStatus.COMPLETED);
+            txn.setStatus(TransactionStatus.PROCESSING);
             transactionLogRepository.save(txn);
             // ✅ ADD NEW EVENT
             Map<String, Object> params = Map.of(
@@ -2011,8 +2026,24 @@ public class EnvelopeService {
             ));
         } catch (Exception e) {
             logger.error("External transfer failed: {}", e.getMessage());
+            source.setTotalRemainingAmount(source.getTotalRemainingAmount().add(amount));
+            source.setRemainingAmount(source.getRemainingAmount().add(amount));
+            envelopeRepository.save(source);
+
+            txn.setStatus(TransactionStatus.FAILED);
+            txn.setDescription(description + " | Failed: " + e.getMessage());
+            transactionLogRepository.save(txn);
             throw new RuntimeException("Transfer failed: " + e.getMessage());
         }
+
+        return new ExternalTransferResponse(
+                myReference,
+                providerRef,
+                amount,
+                resolvedName,
+                externalAccount.getBankName(),
+                TransactionStatus.PROCESSING
+        );
     }
 
     @Transactional

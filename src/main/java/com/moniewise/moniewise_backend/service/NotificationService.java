@@ -3,7 +3,6 @@ package com.moniewise.moniewise_backend.service;
 import com.google.firebase.messaging.*;
 import com.moniewise.moniewise_backend.config.GenericNotificationEvent;
 import com.moniewise.moniewise_backend.entity.Notification;
-import com.moniewise.moniewise_backend.entity.User;
 import com.moniewise.moniewise_backend.enums.NotificationPriority;
 import com.moniewise.moniewise_backend.enums.NotificationType;
 import com.moniewise.moniewise_backend.repository.NotificationRepository;
@@ -27,6 +26,7 @@ import javax.mail.MessagingException;
 import javax.mail.internet.MimeMessage;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Map;
 
 @Service
@@ -37,6 +37,7 @@ public class NotificationService {
     private final FirebaseMessaging firebaseMessaging;
     private final UserRepository userRepository;
     private final NotificationRepository notificationRepository;
+    private final AuthSessionService authSessionService;
     private final JavaMailSender mailSender;
     private final TemplateEngine templateEngine;
 
@@ -60,11 +61,13 @@ public class NotificationService {
             @Autowired(required = false) FirebaseMessaging firebaseMessaging,
             UserRepository userRepository,
             NotificationRepository notificationRepository,
+            AuthSessionService authSessionService,
             @Autowired(required = false) JavaMailSender mailSender,
             TemplateEngine templateEngine) {
         this.firebaseMessaging = firebaseMessaging;
         this.userRepository = userRepository;
         this.notificationRepository = notificationRepository;
+        this.authSessionService = authSessionService;
         this.mailSender = mailSender;
         this.templateEngine = templateEngine;
     }
@@ -161,14 +164,16 @@ public class NotificationService {
             // 2. Send FCM Push (Only for HIGH or MEDIUM priority)
             if (priority == NotificationPriority.HIGH || priority == NotificationPriority.MEDIUM) {
                 Long userId = Long.valueOf(event.getUserId());
-                String fcmToken = userRepository.findFcmTokenById(userId);
+                List<String> fcmTokens = authSessionService.getActiveFcmTokens(userId);
 
                 if ("stub".equals(activeProfile)) {
                     logger.info("🛑 [STUB MODE] Simulated Push Notification to User {}: {}", userId, message);
-                } else if (fcmToken != null && !fcmToken.isEmpty()) {
+                } else if (!fcmTokens.isEmpty()) {
                     if (firebaseMessaging != null) {
                         String dynamicTitle = getNotificationTitle(event.getType());
-                        sendFCMMessage(fcmToken, dynamicTitle, message, null, event.getActionUrl(), event.getType(), userId);
+                        for (String fcmToken : fcmTokens) {
+                            sendFCMMessage(fcmToken, dynamicTitle, message, null, event.getActionUrl(), event.getType(), userId);
+                        }
                     } else {
                         logger.warn("⚠️ FCM is not initialized. Cannot send push.");
                     }
@@ -356,14 +361,14 @@ public class NotificationService {
 
             // Send Push
             if (priority == NotificationPriority.HIGH) {
-                User user = userRepository.findById(uId).orElse(null);
+                List<String> fcmTokens = authSessionService.getActiveFcmTokens(uId);
 
-                if (user != null && user.getFcmToken() != null && !user.getFcmToken().isEmpty() && !"stub".equals(activeProfile)) {
+                if (!fcmTokens.isEmpty() && !"stub".equals(activeProfile)) {
                     if (firebaseMessaging != null) {
-                        // ✅ FIXED: Use the lightweight query here too
-                        String fcmToken = userRepository.findFcmTokenById(uId);
                         String dynamicTitle = getNotificationTitle(type);
-                        sendFCMMessage(fcmToken, dynamicTitle, message, actionType, redirectUrl, type, uId);
+                        for (String fcmToken : fcmTokens) {
+                            sendFCMMessage(fcmToken, dynamicTitle, message, actionType, redirectUrl, type, uId);
+                        }
                     } else {
                         logger.warn("⚠️ Skipping FCM: Firebase is not initialized.");
                     }
@@ -436,10 +441,9 @@ public class NotificationService {
         } catch (FirebaseMessagingException e) {
             String errorCode = e.getMessagingErrorCode().toString();
             if (errorCode.equals("UNREGISTERED") || errorCode.equals("NOT_FOUND") || errorCode.equals("INVALID_ARGUMENT")) {
-                logger.warn("🚨 Token for user {} is dead. Removing it.", userId);
-                // ✅ FIXED: Direct DB update instead of fetching User entity
+                logger.warn("🚨 Token for user {} is dead. Removing it from active sessions.", userId);
                 try {
-                    userRepository.clearFcmToken(userId);
+                    authSessionService.clearDeadFcmToken(fcmToken);
                 } catch (Exception ex) {
                     logger.error("Failed to clear dead token for user {}", userId, ex);
                 }
