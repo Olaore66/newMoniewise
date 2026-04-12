@@ -100,9 +100,12 @@ public class User {
     public boolean isDeleted() { return isDeleted; }
     public void setDeleted(boolean deleted) { isDeleted = deleted; }
 
-    // 2. ENSURE this exists (You already have it) 👇
+    // 2. ENSURE this exists (You already have it) ðŸ‘‡
     @Column(name = "profile_image_url", columnDefinition = "TEXT")
     private String profileImageUrl;
+
+    @Column(name = "profile_image_blob_name", columnDefinition = "TEXT")
+    private String profileImageBlobName;
 
     // For JwtUtil compatibility (pass email as token subject)
     public String getUsername() {

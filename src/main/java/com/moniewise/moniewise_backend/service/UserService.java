@@ -171,7 +171,7 @@ public class UserService implements UserDetailsService {
     //==============================================================
 
     // ==============================================================
-    // ✅ SAFE SEARCH (Fixes Memory Crash)
+    // âœ… SAFE SEARCH (Fixes Memory Crash)
 //     ==============================================================
     public List<UserSummaryResponse> searchUsers(String query, String currentEmail) {
         if (query == null || query.trim().isEmpty()) {
@@ -246,17 +246,17 @@ public class UserService implements UserDetailsService {
     }
 
     public User findOrCreateOAuthUser(String email, String name) {
-        // 1. 🔍 SEARCH GLOBALLY (Active AND Deleted users)
+        // 1. ðŸ” SEARCH GLOBALLY (Active AND Deleted users)
         // We use the custom method to find users hidden by the @Where clause
         Optional<User> existingUserOpt = userRepository.findGlobalByEmail(email);
 
         if (existingUserOpt.isPresent()) {
             User user = existingUserOpt.get();
 
-            // 2. 🧟 REACTIVATION CHECK
+            // 2. ðŸ§Ÿ REACTIVATION CHECK
             // If the user exists but was "Soft Deleted", we bring them back.
             if (user.isDeleted()) {
-                logger.info("♻️ Reactivating returning user: " + email);
+                logger.info("â™»ï¸ Reactivating returning user: " + email);
                 user.setDeleted(false); // Mark as Active
                 // We do NOT create a new wallet/password. We reuse the old data.
                 return userRepository.save(user);
@@ -266,7 +266,7 @@ public class UserService implements UserDetailsService {
             return user;
         }
 
-        // 3. 🆕 CREATE FRESH USER
+        // 3. ðŸ†• CREATE FRESH USER
         // Only runs if the email has TRULY never been seen before.
         User newUser = new User();
         newUser.setEmail(email);
@@ -292,7 +292,7 @@ public class UserService implements UserDetailsService {
         User user = findByEmail(email);
 
         // ============================================================
-        // 📱 1. GOOGLE SIGNUP PHONE NUMBER CATCHER
+        // ðŸ“± 1. GOOGLE SIGNUP PHONE NUMBER CATCHER
         // ============================================================
         if (user.getPhone() == null || user.getPhone().trim().isEmpty()) {
             String newPhone = request.getPhone();
@@ -309,7 +309,7 @@ public class UserService implements UserDetailsService {
         }
 
         // ============================================================
-        // 🏦 2. KYC DATA FOR SECUREWAVE
+        // ðŸ¦ 2. KYC DATA FOR SECUREWAVE
         // ============================================================
 
         // Only set the BVN if it's currently empty.
@@ -344,10 +344,10 @@ public class UserService implements UserDetailsService {
         User savedUser = userRepository.save(user);
 
         // ============================================================
-        // ⚡ 3. CHECK & CREATE WALLET (Synchronous)
+        // âš¡ 3. CHECK & CREATE WALLET (Synchronous)
         // ============================================================
         if (!walletRepository.existsByUser(savedUser)) {
-            logger.info("⚡ Profile complete. Creating Wallet for: {}", savedUser.getEmail());
+            logger.info("âš¡ Profile complete. Creating Wallet for: {}", savedUser.getEmail());
 
             // We do this synchronously. If SecureWave fails, it throws an error to the frontend!
             Wallet newWallet = walletService.createWalletForUser(savedUser);
@@ -363,7 +363,7 @@ public class UserService implements UserDetailsService {
                             newWallet.getBalance()
                     );
                 } catch (Exception e) {
-                    logger.error("❌ Failed to send welcome email to {}: {}", savedUser.getEmail(), e.getMessage());
+                    logger.error("âŒ Failed to send welcome email to {}: {}", savedUser.getEmail(), e.getMessage());
                 }
             });
         }
@@ -397,19 +397,19 @@ public class UserService implements UserDetailsService {
 //        User savedUser = userRepository.save(user);
 //
 //        // ============================================================
-//        // 2. ⚡ CHECK & CREATE WALLET (The Missing Piece)
+//        // 2. âš¡ CHECK & CREATE WALLET (The Missing Piece)
 //        // ============================================================
 //        Optional<Wallet> existingWallet = walletRepository.findByUser(user);
 //
 //        if (!walletRepository.existsByUser(savedUser)) {
 //            CompletableFuture.runAsync(() -> {
 //                try {
-//                logger.info("⚡ Profile complete. Creating Wallet for: " + user.getEmail());
+//                logger.info("âš¡ Profile complete. Creating Wallet for: " + user.getEmail());
 //
 //                // This creates the wallet using the name we just saved!
 //                Wallet newWallet = walletService.createWalletForUser(savedUser);
 //
-//                // 3. 📧 Send the Welcome Email (Now that we have bank details)
+//                // 3. ðŸ“§ Send the Welcome Email (Now that we have bank details)
 //                CompletableFuture.runAsync(() -> {
 //                notificationService.sendWelcomeEmail(
 //                        savedUser.getEmail(),
@@ -420,7 +420,7 @@ public class UserService implements UserDetailsService {
 //                });
 //
 //                } catch (Exception e) {
-//                    logger.error("❌ Background Wallet Creation Failed for {}: {}", savedUser.getEmail(), e.getMessage());
+//                    logger.error("âŒ Background Wallet Creation Failed for {}: {}", savedUser.getEmail(), e.getMessage());
 //                    // Optional: Add logic to retry later or flag user as "Wallet Failed"
 //                }
 //            });
@@ -444,7 +444,7 @@ public class UserService implements UserDetailsService {
         User user = userRepository.findByEmail(username)
                 .orElseThrow(() -> new UsernameNotFoundException("User not found with email: " + username));
 
-        // 2. 🛡️ CRITICAL FIX: Handle NULL passwords
+        // 2. ðŸ›¡ï¸ CRITICAL FIX: Handle NULL passwords
         // If the user came from Google, their password might be null in the DB.
         // We give Spring a "dummy" password just to keep it happy.
         // (This doesn't change the DB, just the in-memory object).
@@ -508,6 +508,7 @@ public class UserService implements UserDetailsService {
 
     // 1. UPLOAD IMAGE TO FIREBASE
     public String uploadProfileImage(Long userId, MultipartFile file) {
+        validateProfileImage(file);
         try {
             User user = userRepository.findById(userId)
                     .orElseThrow(() -> new RuntimeException("User not found"));
@@ -537,11 +538,12 @@ public class UserService implements UserDetailsService {
             // Note: This requires the bucket or object to be publicly readable via IAM or Rules.
             // For simple apps, we often construct the public token manually or use signed URLs.
             // Let's use the Signed URL approach as it works out of the box with the Admin SDK.
-            URL signedUrl = blob.signUrl(7300, TimeUnit.DAYS); // Valid for 20 years
+            URL signedUrl = blob.signUrl(12, TimeUnit.HOURS); // Short-lived signed URL
             String publicUrl = signedUrl.toString();
 
             // Save the URL to Database
             user.setProfileImageUrl(publicUrl);
+            user.setProfileImageBlobName(fileName);
 
             // Remove legacy byte data if it exists to free up space
             user.setProfileImage(null);
@@ -560,31 +562,38 @@ public class UserService implements UserDetailsService {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new RuntimeException("User not found"));
 
-        String currentUrl = user.getProfileImageUrl();
+        String blobName = user.getProfileImageBlobName();
 
-        if (currentUrl != null && !currentUrl.isEmpty()) {
+        if (blobName != null && !blobName.isEmpty()) {
             try {
-                // Extract file path from URL (Rough logic, depends on Option A or B above)
-                // If using Signed URL, the path is hidden inside.
-                // Better strategy: Store the 'fileName' (path) in DB as well if you need strict deletion.
-
-                // For now, we will just clear the DB reference.
-                // To actually delete from storage, you need the exact "blob name" (e.g., profile_images/1_12345.jpg).
-                // If you want to support deletion, save the 'blobName' in your User entity too.
-
-                // Example deletion if you knew the name:
-                // Bucket bucket = StorageClient.getInstance().bucket();
-                // bucket.get("profile_images/old_file_name.jpg").delete();
-
+                Bucket bucket = StorageClient.getInstance().bucket();
+                Blob blob = bucket.get(blobName);
+                if (blob != null) {
+                    blob.delete();
+                }
             } catch (Exception e) {
                 logger.error("Error deleting file from Firebase", e);
             }
         }
 
+        user.setProfileImageBlobName(null);
         user.setProfileImageUrl(null);
         userRepository.save(user);
     }
 
+
+    private void validateProfileImage(MultipartFile file) {
+        if (file == null || file.isEmpty()) {
+            throw new IllegalArgumentException("Please choose an image to upload");
+        }
+        if (file.getSize() > 5 * 1024 * 1024) {
+            throw new IllegalArgumentException("Profile images must be 5MB or smaller");
+        }
+        String contentType = file.getContentType();
+        if (contentType == null || !Set.of("image/jpeg", "image/png", "image/webp").contains(contentType.toLowerCase())) {
+            throw new IllegalArgumentException("Only JPG, PNG, and WEBP images are allowed");
+        }
+    }
     /**
      * Updates the user's session ID to enforce Single Device Login.
      * Called by SecurityConfig on successful OAuth2 login.
@@ -598,7 +607,7 @@ public class UserService implements UserDetailsService {
     public void deleteUserAccount(String email) {
         User user = findByEmail(email);
 
-        // 🛡️ SOFT DELETE: Don't remove the row. Just hide it.
+        // ðŸ›¡ï¸ SOFT DELETE: Don't remove the row. Just hide it.
         user.setDeleted(true);
 
         // Optional: Clear sensitive data if required by law (GDPR),
@@ -606,11 +615,11 @@ public class UserService implements UserDetailsService {
         // user.setPassword("");
 
         userRepository.save(user);
-        logger.info("❌ Soft-deleted user account: " + email);
+        logger.info("âŒ Soft-deleted user account: " + email);
     }
 
     // ==============================================================
-    // ✅ GET MOST RECENT BUDGETS (Active & Completed)
+    // âœ… GET MOST RECENT BUDGETS (Active & Completed)
     // ==============================================================
     @Transactional(readOnly = true)
     public Map<String, Object> getMostRecentBudgets(String email) {

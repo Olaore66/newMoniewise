@@ -149,7 +149,7 @@ public class EnvelopeController {
     ) {
         String email = authentication.getName();
 
-        // 🛑 FORCE RECALCULATION ON VIEW 🛑
+        // Ã°Å¸â€ºâ€˜ FORCE RECALCULATION ON VIEW Ã°Å¸â€ºâ€˜
         // This ensures the user sees the "Vault Cap" corrected balance immediately.
         envelopeService.getRemainingLimit(envelopeId, email);
 
@@ -248,7 +248,8 @@ public class EnvelopeController {
     ) {
         // You will need to add this simple lookup method to EnvelopeService
         // It returns the PendingDisbursement object if one exists and isn't expired
-        var pending = envelopeService.findPendingDisbursementByEnvelopeId(id);
+        String email = authentication.getName();
+        var pending = envelopeService.findPendingDisbursementByEnvelopeId(id, email);
 
         if (pending == null) {
             return ResponseEntity.noContent().build(); // No button needed

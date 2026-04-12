@@ -7,10 +7,11 @@ import com.moniewise.moniewise_backend.entity.Wallet;
 import com.moniewise.moniewise_backend.repository.UserRepository;
 import com.moniewise.moniewise_backend.repository.WalletRepository;
 import com.moniewise.moniewise_backend.security.JwtUtil;
+import com.moniewise.moniewise_backend.service.AbuseProtectionService;
 import com.moniewise.moniewise_backend.service.AuthSessionService;
 import com.moniewise.moniewise_backend.service.OtpService;
 import com.moniewise.moniewise_backend.service.UserService;
-import lombok.RequiredArgsConstructor; // ✅ Added for cleaner code
+import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
@@ -19,13 +20,15 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
+import javax.servlet.http.HttpServletRequest;
 import javax.validation.Valid;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 @RestController
 @RequestMapping("/users")
-@RequiredArgsConstructor // ✅ Autowires everything automatically
+@RequiredArgsConstructor
 public class UserController {
 
     private final UserService userService;
@@ -34,116 +37,70 @@ public class UserController {
     private final WalletRepository walletRepository;
     private final JwtUtil jwtUtil;
     private final AuthSessionService authSessionService;
+    private final AbuseProtectionService abuseProtectionService;
 
-    // =========================================================================
-    // 1. GET CURRENT USER (Updated to ensure Profile Image is included)
-    // =========================================================================
     @GetMapping("/me")
     public ResponseEntity<UserResponse> getCurrentUser() {
         String email = SecurityContextHolder.getContext().getAuthentication().getName();
-
-        User user = userRepository.findByEmail(email)
-                .orElseThrow(() -> new RuntimeException("User not found"));
-
+        User user = userRepository.findByEmail(email).orElseThrow(() -> new RuntimeException("User not found"));
         Wallet wallet = walletRepository.findByUser(user).orElse(null);
-
-        // ✅ UserResponse MUST include 'profileImageUrl' in its constructor/fields
         return ResponseEntity.ok(new UserResponse(user, wallet));
     }
 
-    // =========================================================================
-    // 2. UPLOAD PROFILE IMAGE (Returns New URL Immediately)
-    // =========================================================================
     @PostMapping("/image")
-    public ResponseEntity<?> uploadProfileImage(
-            @RequestParam("file") MultipartFile file,
-            Authentication authentication
-    ) {
-        // 1. Get the User
+    public ResponseEntity<?> uploadProfileImage(@RequestParam("file") MultipartFile file, Authentication authentication) {
         String email = authentication.getName();
         User user = userService.findByEmail(email);
-
-        // 2. Upload to Cloud & Save to DB
-        // (Your UserService handles the logic and returns the signed URL)
         String imageUrl = userService.uploadProfileImage(user.getId(), file);
-
-        // 3. Return the URL so the Frontend can update state instantly
-        return ResponseEntity.ok(Map.of(
-                "status", "success",
-                "message", "Profile image updated successfully",
-                "imageUrl", imageUrl
-        ));
+        return ResponseEntity.ok(Map.of("status", "success", "message", "Profile image updated successfully", "imageUrl", imageUrl));
     }
 
-    // =========================================================================
-    // 3. GET PROFILE IMAGE ONLY (Specific Endpoint)
-    // =========================================================================
     @GetMapping("/image")
     public ResponseEntity<?> getProfileImage(Authentication authentication) {
         String email = authentication.getName();
         User user = userService.findByEmail(email);
-
         String imageUrl = user.getProfileImageUrl();
-
         if (imageUrl == null) {
-            return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                    .body(Map.of("message", "No profile image set"));
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("message", "No profile image set"));
         }
-
         return ResponseEntity.ok(Map.of("imageUrl", imageUrl));
     }
 
-    // =========================================================================
-    // 4. DELETE IMAGE
-    // =========================================================================
     @DeleteMapping("/image")
     public ResponseEntity<?> deleteProfileImage(Authentication authentication) {
         String email = authentication.getName();
         User user = userService.findByEmail(email);
-
         userService.deleteProfileImage(user.getId());
-
-        return ResponseEntity.ok(Map.of(
-                "status", "success",
-                "message", "Profile image removed"
-        ));
+        return ResponseEntity.ok(Map.of("status", "success", "message", "Profile image removed"));
     }
 
-    // =========================================================================
-    // 5. OTHER EXISTING ENDPOINTS (Kept as is)
-    // =========================================================================
-
     @PostMapping("/otp/generate")
-    public ResponseEntity<OtpResponse> generateOtp(@Valid @RequestBody OtpGenerateRequest request) {
-        User user = userRepository.findByEmail(request.getEmailOrPhone())
-                .orElseGet(() -> userRepository.findByPhone(request.getEmailOrPhone())
-                        .orElseThrow(() -> new RuntimeException("User not found")));
-
-        String otpCode = otpService.generateOtp(user.getId());
-        return ResponseEntity.ok(new OtpResponse("OTP generated: " + otpCode));
+    public ResponseEntity<OtpResponse> generateOtp(@Valid @RequestBody OtpGenerateRequest request, HttpServletRequest httpRequest) {
+        String throttleKey = abuseProtectionService.buildKey(request.getEmailOrPhone(), httpRequest.getRemoteAddr());
+        abuseProtectionService.checkAllowed(AbuseProtectionService.OTP_GENERATE, throttleKey);
+        Optional<User> userOpt = userRepository.findByEmail(request.getEmailOrPhone()).or(() -> userRepository.findByPhone(request.getEmailOrPhone()));
+        if (userOpt.isPresent()) {
+            otpService.generateOtp(userOpt.get().getId());
+        }
+        abuseProtectionService.recordSuccess(AbuseProtectionService.OTP_GENERATE, throttleKey);
+        return ResponseEntity.ok(new OtpResponse("If the account exists, a verification code has been sent."));
     }
 
     @PostMapping("/otp/verify")
-    public ResponseEntity<?> verifyOtp(@Valid @RequestBody OtpVerifyRequest request) {
-        try {
-            User user = userRepository.findByEmail(request.getEmailOrPhone())
-                    .orElseGet(() -> userRepository.findByPhone(request.getEmailOrPhone())
-                            .orElseThrow(() -> new RuntimeException("User not found")));
-
-            if (!otpService.verifyOtp(user.getId(), request.getOtpCode())) {
-                // Using RuntimeException here for simplicity based on your snippet
-                throw new RuntimeException("Invalid OTP");
-            }
-
-            user.setVerified(true);
-            userRepository.save(user);
-            otpService.clearOtp(user.getId());
-
-            return ResponseEntity.ok(Map.of("message", "OTP verified successfully"));
-        } catch (Exception e) {
-            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                    .body(Map.of("error", e.getMessage()));
+    public ResponseEntity<?> verifyOtp(@Valid @RequestBody OtpVerifyRequest request, HttpServletRequest httpRequest) {
+        String throttleKey = abuseProtectionService.buildKey(request.getEmailOrPhone(), httpRequest.getRemoteAddr());
+        abuseProtectionService.checkAllowed(AbuseProtectionService.OTP_VERIFY, throttleKey);
+        Optional<User> userOpt = userRepository.findByEmail(request.getEmailOrPhone()).or(() -> userRepository.findByPhone(request.getEmailOrPhone()));
+        if (userOpt.isEmpty() || !otpService.verifyOtp(userOpt.get().getId(), request.getOtpCode())) {
+            abuseProtectionService.recordFailure(AbuseProtectionService.OTP_VERIFY, throttleKey);
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of("error", "Invalid OTP"));
         }
+        User user = userOpt.get();
+        user.setVerified(true);
+        userRepository.save(user);
+        otpService.clearOtp(user.getId());
+        abuseProtectionService.recordSuccess(AbuseProtectionService.OTP_VERIFY, throttleKey);
+        return ResponseEntity.ok(Map.of("message", "OTP verified successfully"));
     }
 
     @PostMapping("/profile")
@@ -164,11 +121,7 @@ public class UserController {
     }
 
     @GetMapping("/search")
-    public ResponseEntity<List<UserSummaryResponse>> searchUsers(
-            @RequestParam String query,
-            @AuthenticationPrincipal String email // Note: Ensure your security config populates this
-    ) {
-        // Fallback if AuthenticationPrincipal is null (depends on config)
+    public ResponseEntity<List<UserSummaryResponse>> searchUsers(@RequestParam String query, @AuthenticationPrincipal String email) {
         if (email == null) {
             email = SecurityContextHolder.getContext().getAuthentication().getName();
         }
@@ -176,11 +129,7 @@ public class UserController {
     }
 
     @PostMapping("/fcm-token")
-    public ResponseEntity<?> updateFcmToken(
-            @RequestBody Map<String, String> payload,
-            Authentication authentication,
-            @RequestHeader("Authorization") String authHeader
-    ) {
+    public ResponseEntity<?> updateFcmToken(@RequestBody Map<String, String> payload, Authentication authentication, @RequestHeader("Authorization") String authHeader) {
         try {
             String token = payload.get("token");
             if (token == null || token.isEmpty()) {
@@ -196,11 +145,7 @@ public class UserController {
     }
 
     @DeleteMapping("/fcm-token")
-    public ResponseEntity<?> deleteFcmToken(
-            @RequestBody(required = false) Map<String, String> payload,
-            Authentication authentication,
-            @RequestHeader("Authorization") String authHeader
-    ) {
+    public ResponseEntity<?> deleteFcmToken(@RequestBody(required = false) Map<String, String> payload, Authentication authentication, @RequestHeader("Authorization") String authHeader) {
         try {
             String email = authentication.getName();
             String sessionId = extractSessionId(authHeader);
@@ -213,17 +158,10 @@ public class UserController {
     }
 
     @DeleteMapping("/device-token")
-    public ResponseEntity<?> deleteDeviceToken(
-            @RequestBody(required = false) Map<String, String> payload,
-            Authentication authentication,
-            @RequestHeader("Authorization") String authHeader
-    ) {
+    public ResponseEntity<?> deleteDeviceToken(@RequestBody(required = false) Map<String, String> payload, Authentication authentication, @RequestHeader("Authorization") String authHeader) {
         return deleteFcmToken(payload, authentication, authHeader);
     }
 
-    // =========================================================================
-    // 6. GET RECENT BUDGETS (1 Active, 1 Completed)
-    // =========================================================================
     @GetMapping("/budgets/recent")
     public ResponseEntity<?> getRecentBudgets(Authentication authentication) {
         String email = authentication.getName();
@@ -243,4 +181,3 @@ public class UserController {
         return sessionId;
     }
 }
-

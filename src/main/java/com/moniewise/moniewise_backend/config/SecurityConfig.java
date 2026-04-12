@@ -1,109 +1,10 @@
-//package com.moniewise.moniewise_backend.config;
-//
-//import com.moniewise.moniewise_backend.entity.User;
-//import com.moniewise.moniewise_backend.security.JwtAuthenticationFilter;
-//import com.moniewise.moniewise_backend.security.JwtUtil;
-//import com.moniewise.moniewise_backend.service.UserService;
-//import org.springframework.context.annotation.Bean;
-//import org.springframework.context.annotation.Configuration;
-//import org.springframework.context.annotation.Lazy;
-//import org.springframework.http.HttpStatus;
-//import org.springframework.security.authentication.AuthenticationManager;
-//import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
-//import org.springframework.security.config.annotation.web.builders.HttpSecurity;
-//import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
-//import org.springframework.security.config.http.SessionCreationPolicy;
-//import org.springframework.security.core.userdetails.UserDetails;
-//import org.springframework.security.core.userdetails.UserDetailsService;
-//import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
-//import org.springframework.security.crypto.password.PasswordEncoder;
-//import org.springframework.security.oauth2.client.oidc.userinfo.OidcUserService;
-//import org.springframework.security.oauth2.core.oidc.user.DefaultOidcUser;
-//import org.springframework.security.web.SecurityFilterChain;
-//import org.springframework.security.web.authentication.HttpStatusEntryPoint;
-//import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
-//
-//import java.util.Set;
-//
-//@Configuration
-//@EnableWebSecurity
-//public class SecurityConfig {
-//
-//    private final JwtAuthenticationFilter jwtAuthenticationFilter;
-//    private final JwtUtil jwtUtil;
-//    private final UserDetailsService userDetailsService;
-//    private final UserService userService;
-//
-//    public SecurityConfig(
-//            @Lazy  JwtAuthenticationFilter jwtAuthenticationFilter,
-//            JwtUtil jwtUtil,
-//            UserDetailsService userDetailsService,
-//            UserService userService
-//    ) {
-//        this.jwtAuthenticationFilter = jwtAuthenticationFilter;
-//        this.jwtUtil = jwtUtil;
-//        this.userDetailsService = userDetailsService;
-//        this.userService = userService;
-//    }
-//
-//    @Bean
-//    public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
-//        http
-//                .csrf().disable()
-//                .sessionManagement().sessionCreationPolicy(SessionCreationPolicy.STATELESS)
-//                .and()
-//                .exceptionHandling()
-//                .authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED)) // Add this
-//                .and()
-//                .authorizeRequests()
-//                .antMatchers("/auth/signup", "/auth/login", "/auth/oauth2/**").permitAll() // Only login and OAuth open
-//                .antMatchers("/auth/logout", "/auth/refresh").authenticated()  // Require JWT for logout
-//                .antMatchers("/tnc/**").authenticated()  // Require JWT for tnc
-//                .antMatchers("/users/**").authenticated()  // Require JWT for tnc
-//                .antMatchers("/budgets/**").authenticated()
-//                .antMatchers("/wallets/**").authenticated()  // Require JWT for tnc
-//                .antMatchers("/webhooks/**").authenticated()  // Require JWT for tnc
-//                .anyRequest().authenticated()
-//                .and()
-//                .oauth2Login()
-//                .userInfoEndpoint()
-//                .oidcUserService(oidcUserService())
-//                .and()
-//                .successHandler((request, response, authentication) -> {
-//                    DefaultOidcUser oidcUser = (DefaultOidcUser) authentication.getPrincipal();
-//                    String email = oidcUser.getEmail();
-//                    User user = userService.findOrCreateOAuthUser(email); // Ensure user exists
-//                    UserDetails userDetails = userService.loadUserByUsername(email); // Get UserDetails
-//                    String token = jwtUtil.generateToken(userDetails); // Pass UserDetails
-//                    response.setContentType("application/json");
-//                    response.getWriter().write("{\"token\":\"" + token + "\"}");
-//                })
-//                .and()
-//                .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
-//
-//        return http.build();
-//    }
-//
-//    @Bean
-//    public OidcUserService oidcUserService() {
-//        OidcUserService oidcUserService = new OidcUserService();
-//        oidcUserService.setAccessibleScopes(Set.of("email", "profile"));
-//        return oidcUserService;
-//    }
-//
-//    @Bean
-//    public AuthenticationManager authenticationManager(AuthenticationConfiguration authConfig) throws Exception {
-//        return authConfig.getAuthenticationManager();
-//    }
-//}
-
-
 package com.moniewise.moniewise_backend.config;
 
 import com.moniewise.moniewise_backend.entity.User;
 import com.moniewise.moniewise_backend.security.JwtAuthenticationFilter;
 import com.moniewise.moniewise_backend.security.JwtUtil;
 import com.moniewise.moniewise_backend.service.UserService;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Lazy;
@@ -126,7 +27,9 @@ import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
 import java.util.Arrays;
+import java.util.List;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 @Configuration
 @EnableWebSecurity
@@ -137,12 +40,13 @@ public class SecurityConfig {
     private final UserDetailsService userDetailsService;
     private final UserService userService;
 
-    public SecurityConfig(
-            @Lazy JwtAuthenticationFilter jwtAuthenticationFilter,
-            JwtUtil jwtUtil,
-            UserDetailsService userDetailsService,
-            UserService userService
-    ) {
+    @Value("${app.security.dev-mode:true}")
+    private boolean devMode;
+
+    @Value("${app.security.allowed-origins:}")
+    private String allowedOrigins;
+
+    public SecurityConfig(@Lazy JwtAuthenticationFilter jwtAuthenticationFilter, JwtUtil jwtUtil, UserDetailsService userDetailsService, UserService userService) {
         this.jwtAuthenticationFilter = jwtAuthenticationFilter;
         this.jwtUtil = jwtUtil;
         this.userDetailsService = userDetailsService;
@@ -152,101 +56,61 @@ public class SecurityConfig {
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
-                .cors().and() // Enable CORS
+                .cors().and()
                 .csrf().disable()
                 .sessionManagement().sessionCreationPolicy(SessionCreationPolicy.STATELESS)
                 .and()
-                .exceptionHandling()
-                .authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED))
+                .exceptionHandling().authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED))
                 .and()
                 .authorizeRequests()
-                .antMatchers(
-                        "/auth/signup",
-                        "/auth/login",
-                        "/auth/oauth2/**",
-                        "/tnc/**",
-                        "/users/otp/generate",  // Add this
-                        "/users/otp/verify",
-                        "/auth/forgot-password",
-                        "/auth/verify-reset-otp",  // <--- NEW: Verify OTP
-                        "/auth/reset-password",    // <--- NEW: Set New Password
-                        "/auth/google"
-                ).permitAll()
-//                .antMatchers("/webhooks/paystack").permitAll() // Open for Paystack
-
-                .antMatchers("/api/webhooks/monnify").permitAll()
-                .antMatchers("/api/webhooks/securewave").permitAll()
-
+                .antMatchers("/auth/signup", "/auth/login", "/auth/oauth2/**", "/tnc/**", "/users/otp/generate", "/users/otp/verify", "/auth/forgot-password", "/auth/verify-reset-otp", "/auth/reset-password", "/auth/google").permitAll()
+                .antMatchers("/api/webhooks/monnify", "/api/webhooks/securewave").permitAll()
                 .antMatchers("/auth/logout", "/auth/refresh", "/auth/delete").authenticated()
-//              .antMatchers("/tnc/**").authenticated()
-                .antMatchers("/users/**").authenticated()
-                .antMatchers("/notifications/**").authenticated()
-                .antMatchers("/disbursements/**").authenticated()
-                .antMatchers("/transactions/**").authenticated()
-                .antMatchers("/legal/**").authenticated()
-                .antMatchers("/ai/**").authenticated()
-
-//              .antMatchers("/users/otp/generate", "/users/otp/verify").authenticated()
-                .antMatchers("/budgets/**").authenticated()
-                .antMatchers("/envelopes/**").authenticated()
-                .antMatchers("/wallets/**").authenticated()
-                .antMatchers("/transactions/pin/**").authenticated()
-
-                .antMatchers("/beneficiaries/**").authenticated()
-                .antMatchers("/savings/**").authenticated() // Handles savings...
-
-                .antMatchers(HttpMethod.PATCH, "/users/tnc").authenticated() // Explicitly secure TNC
+                .antMatchers("/users/**", "/notifications/**", "/disbursements/**", "/transactions/**", "/legal/**", "/ai/**", "/budgets/**", "/envelopes/**", "/wallets/**", "/transactions/pin/**", "/beneficiaries/**", "/savings/**").authenticated()
+                .antMatchers(HttpMethod.PATCH, "/users/tnc").authenticated()
                 .anyRequest().authenticated()
                 .and()
                 .oauth2Login()
-                .userInfoEndpoint()
-                .oidcUserService(oidcUserService())
+                .userInfoEndpoint().oidcUserService(oidcUserService())
                 .and()
                 .successHandler((request, response, authentication) -> {
                     DefaultOidcUser oidcUser = (DefaultOidcUser) authentication.getPrincipal();
                     String email = oidcUser.getEmail();
-
-                    // 1. Extract Name from OIDC User
-                    String name = oidcUser.getFullName(); // or oidcUser.getAttribute("name");
-
-                    // 2. Pass Name to Service (Fixes the compile error)
+                    String name = oidcUser.getFullName();
                     User user = userService.findOrCreateOAuthUser(email, name);
                     UserDetails userDetails = userService.loadUserByUsername(email);
-
-                    // 2. [NEW] Generate & Save Session ID (The Single Device Logic)
                     String sessionId = java.util.UUID.randomUUID().toString();
                     user.setCurrentSessionId(sessionId);
-
-                    // Note: You might need to expose a save method in UserService or use the Repository directly here
-                    // userService.save(user); OR userRepository.save(user);
-                    userService.updateUserSession(user); // <--- Make sure this method exists!
-
-                    // 3. [NEW] Generate Token WITH Session ID
+                    userService.updateUserSession(user);
                     String token = jwtUtil.generateToken(userDetails, sessionId);
-
                     response.setContentType("application/json");
                     response.getWriter().write("{\"token\":\"" + token + "\"}");
                 })
                 .and()
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
-
         return http.build();
     }
 
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();
-        configuration.addAllowedOriginPattern("*"); // Spring Boot 2.4+
-//        configuration.setAllowedOrigins(Arrays.asList("http://localhost:5000", "https://your-flutter-app.com")); // Adjust for Flutter
-        configuration.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "DELETE", "OPTIONS"));
-        configuration.setAllowedHeaders(Arrays.asList("*"));
+        if (devMode) {
+            configuration.addAllowedOriginPattern("*");
+        } else {
+            List<String> origins = Arrays.stream(allowedOrigins.split(",")).map(String::trim).filter(origin -> !origin.isEmpty()).collect(Collectors.toList());
+            if (origins.isEmpty()) {
+                throw new IllegalStateException("Production CORS requires explicit app.security.allowed-origins");
+            }
+            configuration.setAllowedOrigins(origins);
+        }
+        configuration.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
+        configuration.setAllowedHeaders(Arrays.asList("Authorization", "Content-Type", "Accept", "Origin", "X-Requested-With", "X-Signature", "monnify-signature"));
         configuration.setAllowCredentials(true);
+        configuration.setMaxAge(3600L);
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", configuration);
         return source;
     }
-
-
 
     @Bean
     public OidcUserService oidcUserService() {
@@ -259,9 +123,4 @@ public class SecurityConfig {
     public AuthenticationManager authenticationManager(AuthenticationConfiguration authConfig) throws Exception {
         return authConfig.getAuthenticationManager();
     }
-
-//    @Bean
-//    public PasswordEncoder passwordEncoder() {
-//        return new BCryptPasswordEncoder();
-//    }
 }
