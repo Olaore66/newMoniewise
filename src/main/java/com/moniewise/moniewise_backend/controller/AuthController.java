@@ -1,5 +1,4 @@
 package com.moniewise.moniewise_backend.controller;
-
 import com.google.api.client.googleapis.auth.oauth2.GoogleIdToken;
 import com.google.api.client.googleapis.auth.oauth2.GoogleIdTokenVerifier;
 import com.google.api.client.http.javanet.NetHttpTransport;
@@ -28,21 +27,18 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.web.bind.annotation.*;
-
 import javax.servlet.http.HttpServletRequest;
 import java.io.IOException;
 import java.security.GeneralSecurityException;
 import java.util.Collections;
+import java.util.Date;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
-
 @RestController
 @RequestMapping("/auth")
 public class AuthController {
-
     private static final Logger logger = LoggerFactory.getLogger(AuthController.class);
-
     @Autowired private UserService userService;
     @Autowired private JwtUtil jwtUtil;
     @Autowired private PasswordResetService resetService;
@@ -51,10 +47,12 @@ public class AuthController {
     @Autowired private NotificationService notificationService;
     @Autowired private AuthSessionService authSessionService;
     @Autowired private AbuseProtectionService abuseProtectionService;
-
-    @Value("${spring.security.oauth2.client.registration.google.client-id}")
+    @Value("")
     private String googleClientId;
-
+    @Value("")
+    private long idleTimeoutSeconds;
+    @Value("")
+    private long warningLeadSeconds;
     @PostMapping("/signup")
     public ResponseEntity<Map<String, Object>> signup(@RequestBody AuthRequest request) {
         try {
@@ -72,7 +70,6 @@ public class AuthController {
             return ResponseEntity.badRequest().body(error);
         }
     }
-
     @PostMapping("/login")
     public ResponseEntity<?> login(@RequestBody AuthRequest request, HttpServletRequest httpRequest) {
         String throttleKey = abuseProtectionService.buildKey(request.getEmailOrPhone(), httpRequest.getRemoteAddr());
@@ -84,7 +81,7 @@ public class AuthController {
             String token = jwtUtil.generateToken(userDetails, newSessionId);
             abuseProtectionService.recordSuccess(AbuseProtectionService.LOGIN, throttleKey);
             boolean needsProfileUpdate = needsProfileUpdate(user);
-            return ResponseEntity.ok(Map.of("token", token, "needsProfileUpdate", needsProfileUpdate));
+            return ResponseEntity.ok(buildAuthPayload(token, needsProfileUpdate));
         } catch (RuntimeException e) {
             abuseProtectionService.recordFailure(AbuseProtectionService.LOGIN, throttleKey);
             if ("OTP verification required".equals(e.getMessage())) {
@@ -93,7 +90,6 @@ public class AuthController {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Map.of("error", "Invalid credentials"));
         }
     }
-
     @PostMapping("/logout")
     public ResponseEntity<?> logout(@RequestHeader("Authorization") String authHeader) {
         try {
@@ -108,7 +104,6 @@ public class AuthController {
             return ResponseEntity.badRequest().body(Map.of("message", "Unable to logout with the provided token"));
         }
     }
-
     @PostMapping("/refresh")
     public ResponseEntity<?> refreshToken(@RequestHeader("Authorization") String authHeader) {
         try {
@@ -123,13 +118,17 @@ public class AuthController {
             }
             UserDetails userDetails = userService.loadUserByUsername(email);
             String newToken = jwtUtil.generateToken(userDetails, oldSessionId);
-            return ResponseEntity.ok(new AuthResponse(newToken));
+            return ResponseEntity.ok(new AuthResponse(
+                    newToken,
+                    jwtUtil.extractExpiration(newToken).getTime(),
+                    idleTimeoutSeconds,
+                    warningLeadSeconds
+            ));
         } catch (Exception e) {
             logger.warn("Token refresh failed: {}", e.getMessage());
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Map.of("error", "Please log in again"));
         }
     }
-
     @PostMapping("/forgot-password")
     public ResponseEntity<Map<String, String>> forgotPassword(@RequestBody Map<String, String> body, HttpServletRequest httpRequest) {
         String email = body.get("email");
@@ -151,7 +150,6 @@ public class AuthController {
             return ResponseEntity.ok(Map.of("message", "If an account exists, a reset code has been sent."));
         }
     }
-
     @PostMapping("/verify-reset-otp")
     public ResponseEntity<?> verifyResetOtp(@RequestBody Map<String, String> body, HttpServletRequest httpRequest) {
         String email = body.get("email");
@@ -166,7 +164,6 @@ public class AuthController {
         abuseProtectionService.recordFailure(AbuseProtectionService.RESET_VERIFY, throttleKey);
         return ResponseEntity.badRequest().body(Map.of("error", "Invalid or expired OTP"));
     }
-
     @PostMapping("/reset-password")
     public ResponseEntity<?> resetPassword(@RequestBody Map<String, String> body) {
         String email = body.get("email");
@@ -179,7 +176,6 @@ public class AuthController {
         resetService.markTokenAsUsed(email, token);
         return ResponseEntity.ok(Map.of("message", "Password reset successful"));
     }
-
     @PostMapping("/google")
     public ResponseEntity<?> googleLogin(@RequestBody Map<String, String> payload, HttpServletRequest httpRequest) {
         String idTokenString = payload.get("token");
@@ -210,44 +206,48 @@ public class AuthController {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(Map.of("error", "Google authentication failed"));
         }
     }
-
     private ResponseEntity<?> generateAuthResponse(User user) {
         try {
             UserDetails userDetails = userService.loadUserByUsername(user.getEmail());
             String newSessionId = authSessionService.createSession(user);
             String token = jwtUtil.generateToken(userDetails, newSessionId);
             boolean needsProfileUpdate = needsProfileUpdate(user);
-            return ResponseEntity.ok(Map.of("token", token, "needsProfileUpdate", needsProfileUpdate));
+            return ResponseEntity.ok(buildAuthPayload(token, needsProfileUpdate));
         } catch (Exception e) {
             logger.error("Failed to generate auth response for {}", user.getEmail(), e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(Map.of("error", "Login generation failed"));
         }
     }
-
+    private Map<String, Object> buildAuthPayload(String token, boolean needsProfileUpdate) {
+        Date expiration = jwtUtil.extractExpiration(token);
+        Map<String, Object> response = new HashMap<>();
+        response.put("token", token);
+        response.put("needsProfileUpdate", needsProfileUpdate);
+        response.put("expiresAt", expiration.getTime());
+        response.put("idleTimeoutSeconds", idleTimeoutSeconds);
+        response.put("warningLeadSeconds", warningLeadSeconds);
+        return response;
+    }
     private boolean needsProfileUpdate(User user) {
         Map<String, Object> profileData = user.getProfileData();
         String firstName = readProfileValue(profileData, "firstName");
         String lastName = readProfileValue(profileData, "lastName");
         return isBlank(user.getPhone()) || isBlank(user.getBvn()) || isBlank(firstName) || isBlank(lastName);
     }
-
     private String readProfileValue(Map<String, Object> profileData, String key) {
         if (profileData == null) return null;
         Object value = profileData.get(key);
         return value != null ? value.toString() : null;
     }
-
     private boolean isBlank(String value) {
         return value == null || value.isBlank();
     }
-
     private String extractBearerToken(String authHeader) {
         if (authHeader == null || !authHeader.startsWith("Bearer ")) {
             throw new RuntimeException("Invalid or missing token");
         }
         return authHeader.substring(7);
     }
-
     @DeleteMapping("/delete")
     public ResponseEntity<?> deleteMyAccount(@AuthenticationPrincipal UserDetails userDetails) {
         String email = userDetails.getUsername();
