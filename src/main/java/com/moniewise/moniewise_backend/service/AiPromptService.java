@@ -17,16 +17,22 @@ public class AiPromptService {
             Do not include markdown.
             Do not include commentary outside JSON.
 
+            Objective:
+            Create a practical starter envelope plan that feels personalized to the user's actual goal, amount, duration, and context.
+
             Rules:
-            - Suggest between 3 and 6 envelopes
+            - Suggest between 4 and 7 envelopes
             - Total percentage must not exceed 100
             - Each percentage must be greater than 0
-            - Use only these categories:
-              savings, security, food, car, home, education, flight, tools, gift, work, internet, faith, groceries, lunch, more
-            - Use only these condition types:
-              daily, weekly, dynamic, emergency
             - Recommendations must be realistic for a Nigerian budgeting context
-            - Keep envelope names short and user-friendly
+            - Keep envelope names short, user-friendly, and specific to the user's goal
+            - Avoid repeating the same generic set of envelopes unless the goal truly calls for them
+            - Use more specific names where appropriate, for example Rent, School Runs, Groceries, Data, Tithe, Emergency Buffer, Client Transport
+            - If the user's goal includes an existing draft, rebalance it thoughtfully instead of ignoring it
+            - Only use condition types from: daily, weekly, dynamic, emergency
+            - Only use categories from: savings, security, food, car, home, education, flight, tools, gift, work, internet, faith, groceries, lunch, more
+            - reasoning should explain why this mix fits the user's budget in 1 or 2 short sentences
+            - title should sound like a fresh personalized draft, not a generic template label
 
             Input:
             - totalBudget: %s
@@ -69,17 +75,19 @@ public class AiPromptService {
             Suggest a clean budget allocation plan for a Nigerian user.
 
             Rules:
-            - Suggest between 3 and 6 envelopes
-            - Total percentage must be between 70 and 100
+            - Suggest between 4 and 7 envelopes
+            - Total percentage must be between 75 and 100
             - Each percentage must be greater than 0
-            - Use only these categories:
-              savings, security, food, car, home, education, flight, tools, gift, work, internet, faith, groceries, lunch, more
-            - Use only these condition types:
-              daily, weekly, dynamic, emergency
             - Recommendations must feel realistic for the stated goal, amount, and duration
-            - Prioritize essentials before lifestyle envelopes
+            - Prioritize essentials before lifestyle envelopes when the goal suggests discipline or stability
+            - Increase savings or emergency cover when the goal suggests caution, buffering, or discipline
+            - Use more specific envelope names when the goal clearly points to them
+            - Avoid returning the same generic mix unless it is genuinely the best fit
             - Keep envelope names short and user-friendly
             - reasoning should explain the allocation logic in 1 or 2 short sentences
+            - title should feel like a personalized plan name, not a boilerplate label
+            - Only use condition types from: daily, weekly, dynamic, emergency
+            - Only use categories from: savings, security, food, car, home, education, flight, tools, gift, work, internet, faith, groceries, lunch, more
 
             Input:
             - totalBudget: %s
