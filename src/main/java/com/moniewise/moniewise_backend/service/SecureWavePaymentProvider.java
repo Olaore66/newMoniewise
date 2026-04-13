@@ -295,6 +295,32 @@ public class SecureWavePaymentProvider implements PaymentProvider {
         throw new RuntimeException("Failed to update bank details with the payment provider.");
     }
 
+
+    @Override
+    public Map<String, Object> getWithdrawalBankInfo(String email) {
+        String url = baseUrl + "/customer_withdrawals/bank-info";
+
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("customer_email", email);
+
+        try {
+            HttpEntity<Map<String, Object>> requestEntity = new HttpEntity<>(payload, getSecureWaveHeaders());
+            ResponseEntity<Map> response = restTemplate.exchange(url, HttpMethod.GET, requestEntity, Map.class);
+
+            if (response.getStatusCode() == HttpStatus.OK && response.getBody() != null) {
+                Map<String, Object> body = response.getBody();
+                Boolean status = (Boolean) body.get("status");
+                Object dataObj = body.get("data");
+                if (status != null && status && dataObj instanceof Map) {
+                    return new HashMap<>((Map<String, Object>) dataObj);
+                }
+            }
+        } catch (Exception e) {
+            log.error("SecureWave Fetch Bank Info Failed: {}", e.getMessage());
+        }
+
+        return Map.of();
+    }
     // ==========================================================
     // 7. INITIATE WITHDRAWAL (Closed-Loop)
     // ==========================================================
@@ -339,3 +365,4 @@ public class SecureWavePaymentProvider implements PaymentProvider {
         throw new RuntimeException("Withdrawal processing failed.");
     }
 }
+

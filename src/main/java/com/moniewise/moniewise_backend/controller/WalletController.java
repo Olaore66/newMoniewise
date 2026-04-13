@@ -54,8 +54,40 @@ public class WalletController {
         ));
     }
 
+
+    @GetMapping("/bank-info")
+    public ResponseEntity<?> getLinkedBankInfo(Principal principal) {
+        try {
+            User user = userService.findByEmail(principal.getName());
+            Map<String, Object> linkedBankInfo = walletService.getLinkedBankInfo(user.getId(), user.getEmail());
+
+            if (linkedBankInfo == null || linkedBankInfo.isEmpty()) {
+                return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of(
+                        "status", false,
+                        "message", "No linked bank account found"
+                ));
+            }
+
+            return ResponseEntity.ok(Map.of(
+                    "status", true,
+                    "message", "Linked bank account fetched successfully",
+                    "data", linkedBankInfo
+            ));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of(
+                    "status", false,
+                    "message", e.getMessage()
+            ));
+        } catch (RuntimeException e) {
+            return ResponseEntity.status(HttpStatus.BAD_GATEWAY).body(Map.of(
+                    "status", false,
+                    "message", e.getMessage()
+            ));
+        }
+    }
     // =========================================================================
     // SECUREWAVE CLOSED-LOOP WITHDRAWAL ENDPOINTS
+
     // =========================================================================
 
     /**
@@ -162,3 +194,6 @@ public class WalletController {
         }
     }
 }
+
+
+

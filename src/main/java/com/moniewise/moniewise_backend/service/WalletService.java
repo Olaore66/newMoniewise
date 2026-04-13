@@ -83,6 +83,44 @@ public class WalletService {
         return walletRepository.findByUserId(userId)
                 .orElseThrow(() -> new IllegalArgumentException("Wallet not found for user ID: " + userId));
     }
+    public Map<String, Object> getLinkedBankInfo(Long userId, String email) {
+        Wallet wallet = walletRepository.findByUserId(userId)
+                .orElseThrow(() -> new IllegalArgumentException("Wallet not found for user ID: " + userId));
+
+        Map<String, Object> providerInfo = null;
+        try {
+            providerInfo = paymentProvider.getWithdrawalBankInfo(email);
+        } catch (RuntimeException e) {
+            logger.warn("Falling back to stored settlement account for {}: {}", email, e.getMessage());
+        }
+
+        if (providerInfo != null && !providerInfo.isEmpty()) {
+            String bankName = safeString(providerInfo.get("bank_name"));
+            String bankCode = safeString(providerInfo.get("bank_code"));
+            String accountNumber = safeString(providerInfo.get("account_number"));
+            String accountName = safeString(providerInfo.get("account_name"));
+
+            wallet.setSettlementBankName(bankName);
+            wallet.setSettlementBankCode(bankCode);
+            wallet.setSettlementAccountNumber(accountNumber);
+            wallet.setSettlementAccountName(accountName);
+            walletRepository.save(wallet);
+
+            return providerInfo;
+        }
+
+        if (hasStoredSettlementAccount(wallet)) {
+            Map<String, Object> fallback = new HashMap<>();
+            fallback.put("bank_name", wallet.getSettlementBankName());
+            fallback.put("bank_code", wallet.getSettlementBankCode());
+            fallback.put("account_number", wallet.getSettlementAccountNumber());
+            fallback.put("account_name", wallet.getSettlementAccountName());
+            return fallback;
+        }
+
+        return Map.of();
+    }
+
 
     @PostConstruct
     @Transactional
@@ -331,6 +369,14 @@ public class WalletService {
         });
     }
 
+    private boolean hasStoredSettlementAccount(Wallet wallet) {
+        return wallet.getSettlementAccountNumber() != null && !wallet.getSettlementAccountNumber().isBlank()
+                && wallet.getSettlementBankName() != null && !wallet.getSettlementBankName().isBlank();
+    }
+
+    private String safeString(Object value) {
+        return value == null ? "" : value.toString().trim();
+    }
     @Transactional
     public Wallet updateSettlementAccount(Long userId, UpdateBankDetailsRequest request) {
         User user = userRepository.findById(userId)
@@ -517,3 +563,4 @@ public class WalletService {
         return "WD-" + userId + "-" + System.currentTimeMillis();
     }
 }
+

@@ -8,6 +8,9 @@ public class AiDashboardNextActionResponse {
     private String priority;
     private Long budgetId;
     private String budgetName;
+    private String envelopeName;
+    private String nextAvailableAt;
+    private String countdownText;
 
     public String getTitle() {
         return title;
@@ -63,5 +66,29 @@ public class AiDashboardNextActionResponse {
 
     public void setBudgetName(String budgetName) {
         this.budgetName = budgetName;
+    }
+
+    public String getEnvelopeName() {
+        return envelopeName;
+    }
+
+    public void setEnvelopeName(String envelopeName) {
+        this.envelopeName = envelopeName;
+    }
+
+    public String getNextAvailableAt() {
+        return nextAvailableAt;
+    }
+
+    public void setNextAvailableAt(String nextAvailableAt) {
+        this.nextAvailableAt = nextAvailableAt;
+    }
+
+    public String getCountdownText() {
+        return countdownText;
+    }
+
+    public void setCountdownText(String countdownText) {
+        this.countdownText = countdownText;
     }
 }

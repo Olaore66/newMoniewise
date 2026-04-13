@@ -20,9 +20,9 @@ public interface PaymentProvider {
     // 2. Send the Money
     String initiateTransfer(String bankCode, String accountNumber, String accountName, BigDecimal amount, String uniqueReference, String narration);
 
-    // Add this to your PaymentProvider interface
     boolean updateWithdrawalBankInfo(String email, String bankName, String accountName, String bankCode, String accountNumber);
 
-    // Add this to PaymentProvider.java
+    Map<String, Object> getWithdrawalBankInfo(String email);
+
     String initiateWithdrawal(String email, BigDecimal amount, String narration);
 }

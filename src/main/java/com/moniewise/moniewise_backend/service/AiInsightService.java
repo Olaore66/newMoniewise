@@ -3,6 +3,7 @@ package com.moniewise.moniewise_backend.service;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.moniewise.moniewise_backend.dto.response.AiDashboardNextActionResponse;
 import com.moniewise.moniewise_backend.entity.Budget;
+import com.moniewise.moniewise_backend.entity.Envelope;
 import com.moniewise.moniewise_backend.entity.User;
 import com.moniewise.moniewise_backend.entity.Wallet;
 import com.moniewise.moniewise_backend.enums.BudgetStatus;
@@ -11,10 +12,21 @@ import com.moniewise.moniewise_backend.repository.WalletRepository;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.time.Duration;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 @Service
 public class AiInsightService {
+
+    private static final ZoneId LAGOS_ZONE = ZoneId.of("Africa/Lagos");
+    private static final DateTimeFormatter NEXT_AVAILABLE_FORMATTER =
+        DateTimeFormatter.ofPattern("EEE, d MMM - h:mm a");
 
     private final UserService userService;
     private final BudgetRepository budgetRepository;
@@ -41,6 +53,11 @@ public class AiInsightService {
 
     public AiDashboardNextActionResponse getDashboardNextAction(String email) {
         DashboardActionContext context = buildContext(email);
+
+        AiDashboardNextActionResponse deterministic = buildDeterministicRecommendation(context);
+        if (deterministic != null) {
+            return deterministic;
+        }
 
         try {
             String prompt = aiPromptService.buildDashboardNextActionPrompt(
@@ -74,6 +91,11 @@ public class AiInsightService {
             .findTopByUserIdAndStatusOrderByCreatedAtDesc(user.getId(), BudgetStatus.COMPLETED)
             .orElse(null);
 
+        List<Budget> budgetsWithEnvelopes = budgetRepository.findByUserIdWithEnvelopes(user.getId());
+        List<Budget> activeBudgets = budgetsWithEnvelopes.stream()
+            .filter(budget -> budget.getStatus() == BudgetStatus.ACTIVE)
+            .toList();
+
         DashboardActionContext context = new DashboardActionContext();
         context.userName = user.getName() != null && !user.getName().isBlank()
             ? user.getName()
@@ -85,7 +107,65 @@ public class AiInsightService {
             .orElse(false);
         context.activeBudget = activeBudget;
         context.completedBudget = completedBudget;
+        context.hasBudgetHistory = !activeBudgets.isEmpty() || completedBudget != null;
+        context.spendableEnvelope = findSpendableEnvelope(activeBudgets);
+        context.upcomingEnvelope = findUpcomingEnvelope(activeBudgets);
         return context;
+    }
+
+    private EnvelopeSnapshot findSpendableEnvelope(List<Budget> activeBudgets) {
+        return activeBudgets.stream()
+            .flatMap(budget -> budget.getEnvelopes().stream()
+                .map(envelope -> new EnvelopeSnapshot(budget, envelope)))
+            .filter(snapshot -> isEnvelopeSpendable(snapshot.envelope()))
+            .sorted(
+                Comparator
+                    .comparing((EnvelopeSnapshot snapshot) -> snapshot.envelope().getLastDisbursedAt(),
+                        Comparator.nullsLast(Comparator.reverseOrder()))
+                    .thenComparing(snapshot -> snapshot.envelope().getNextDisbursementAt(),
+                        Comparator.nullsLast(Comparator.naturalOrder()))
+                    .thenComparing(snapshot -> snapshot.budget().getCreatedAt(), Comparator.reverseOrder())
+            )
+            .findFirst()
+            .orElse(null);
+    }
+
+    private EnvelopeSnapshot findUpcomingEnvelope(List<Budget> activeBudgets) {
+        LocalDateTime now = LocalDateTime.now(LAGOS_ZONE);
+        return activeBudgets.stream()
+            .flatMap(budget -> budget.getEnvelopes().stream()
+                .map(envelope -> new EnvelopeSnapshot(budget, envelope)))
+            .filter(snapshot -> snapshot.envelope().getNextDisbursementAt() != null)
+            .filter(snapshot -> snapshot.envelope().getNextDisbursementAt().isAfter(now))
+            .filter(snapshot -> hasFutureValue(snapshot.envelope()))
+            .sorted(
+                Comparator
+                    .comparing((EnvelopeSnapshot snapshot) -> snapshot.envelope().getNextDisbursementAt())
+                    .thenComparing(snapshot -> snapshot.budget().getCreatedAt(), Comparator.reverseOrder())
+            )
+            .findFirst()
+            .orElse(null);
+    }
+
+    private boolean isEnvelopeSpendable(Envelope envelope) {
+        return envelope != null
+            && envelope.getRemainingAmount() != null
+            && envelope.getRemainingAmount().compareTo(BigDecimal.ZERO) > 0
+            && !Boolean.TRUE.equals(envelope.getHasMatured());
+    }
+
+    private boolean hasFutureValue(Envelope envelope) {
+        if (envelope == null) {
+            return false;
+        }
+
+        BigDecimal totalRemaining = envelope.getTotalRemainingAmount();
+        BigDecimal amount = envelope.getAmount();
+        BigDecimal remaining = envelope.getRemainingAmount();
+
+        return (totalRemaining != null && totalRemaining.compareTo(BigDecimal.ZERO) > 0)
+            || (amount != null && amount.compareTo(BigDecimal.ZERO) > 0)
+            || (remaining != null && remaining.compareTo(BigDecimal.ZERO) > 0);
     }
 
     private AiDashboardNextActionResponse sanitizeResponse(
@@ -96,10 +176,9 @@ public class AiInsightService {
             return buildFallback(context);
         }
 
-        if ("set_account".equals(response.getActionType())
-            && context.activeBudget != null
-            && context.walletBalance.compareTo(BigDecimal.ZERO) > 0) {
-            return buildFallback(context);
+        AiDashboardNextActionResponse deterministic = buildDeterministicRecommendation(context);
+        if (deterministic != null) {
+            return deterministic;
         }
 
         if (response.getTitle() == null || response.getTitle().isBlank()) {
@@ -124,12 +203,81 @@ public class AiInsightService {
         } else {
             response.setBudgetId(null);
             response.setBudgetName(null);
+            response.setEnvelopeName(null);
+            response.setNextAvailableAt(null);
+            response.setCountdownText(null);
         }
 
         return response;
     }
 
+    private AiDashboardNextActionResponse buildDeterministicRecommendation(DashboardActionContext context) {
+        if (context.hasBudgetHistory && context.walletBalance.compareTo(BigDecimal.ZERO) <= 0) {
+            AiDashboardNextActionResponse response = baseAction(
+                "Fund your wallet first",
+                "Your wallet balance is zero right now. Add money so your active budget and upcoming spending plan can keep moving.",
+                "Fund wallet",
+                "fund_wallet",
+                "high"
+            );
+            return response;
+        }
+
+        if (context.spendableEnvelope != null) {
+            EnvelopeSnapshot snapshot = context.spendableEnvelope;
+            AiDashboardNextActionResponse response = baseAction(
+                "Spend from " + snapshot.envelope().getName(),
+                snapshot.budget().getName() + " currently has unlocked money in "
+                    + snapshot.envelope().getName()
+                    + ". Open it now to move or spend from the live allocation.",
+                "Open budget",
+                "review_active_budget",
+                "high"
+            );
+            response.setBudgetId(snapshot.budget().getId());
+            response.setBudgetName(snapshot.budget().getName());
+            response.setEnvelopeName(snapshot.envelope().getName());
+            return response;
+        }
+
+        if (context.upcomingEnvelope != null) {
+            EnvelopeSnapshot snapshot = context.upcomingEnvelope;
+            LocalDateTime nextDisbursementAt = snapshot.envelope().getNextDisbursementAt();
+            String formattedTime = formatNextAvailableAt(nextDisbursementAt);
+            String countdownText = formatCountdown(nextDisbursementAt);
+
+            AiDashboardNextActionResponse response = baseAction(
+                "No spendable amount yet",
+                "Sorry, you don't have any spendable amount now. Your nearest disbursement is from Budget "
+                    + snapshot.budget().getName()
+                    + " in envelope "
+                    + snapshot.envelope().getName()
+                    + " at "
+                    + formattedTime
+                    + ", and it is coming up "
+                    + countdownText
+                    + ".",
+                "View budget",
+                "review_active_budget",
+                "high"
+            );
+            response.setBudgetId(snapshot.budget().getId());
+            response.setBudgetName(snapshot.budget().getName());
+            response.setEnvelopeName(snapshot.envelope().getName());
+            response.setNextAvailableAt(formattedTime);
+            response.setCountdownText(countdownText);
+            return response;
+        }
+
+        return null;
+    }
+
     private AiDashboardNextActionResponse buildFallback(DashboardActionContext context) {
+        AiDashboardNextActionResponse deterministic = buildDeterministicRecommendation(context);
+        if (deterministic != null) {
+            return deterministic;
+        }
+
         AiDashboardNextActionResponse response = new AiDashboardNextActionResponse();
 
         if (context.activeBudget == null && context.completedBudget == null) {
@@ -137,15 +285,6 @@ public class AiInsightService {
             response.setMessage("Turn your wallet balance into a clear spending plan with envelopes that match your goals.");
             response.setCtaLabel("Start budget");
             response.setActionType("create_budget");
-            response.setPriority("high");
-            return response;
-        }
-
-        if (context.walletBalance.compareTo(BigDecimal.ZERO) <= 0) {
-            response.setTitle("Fund your wallet first");
-            response.setMessage("Add money so your next budget or transfer can move forward without interruption.");
-            response.setCtaLabel("Fund wallet");
-            response.setActionType("fund_wallet");
             response.setPriority("high");
             return response;
         }
@@ -176,6 +315,58 @@ public class AiInsightService {
         response.setActionType("create_budget");
         response.setPriority("normal");
         return response;
+    }
+
+    private AiDashboardNextActionResponse baseAction(
+        String title,
+        String message,
+        String ctaLabel,
+        String actionType,
+        String priority
+    ) {
+        AiDashboardNextActionResponse response = new AiDashboardNextActionResponse();
+        response.setTitle(title);
+        response.setMessage(message);
+        response.setCtaLabel(ctaLabel);
+        response.setActionType(actionType);
+        response.setPriority(priority);
+        return response;
+    }
+
+    private String formatNextAvailableAt(LocalDateTime dateTime) {
+        if (dateTime == null) {
+            return "soon";
+        }
+        return dateTime.atZone(LAGOS_ZONE).format(NEXT_AVAILABLE_FORMATTER);
+    }
+
+    private String formatCountdown(LocalDateTime dateTime) {
+        if (dateTime == null) {
+            return "soon";
+        }
+
+        Duration duration = Duration.between(LocalDateTime.now(LAGOS_ZONE), dateTime);
+        if (duration.isNegative() || duration.isZero()) {
+            return "right now";
+        }
+
+        long totalMinutes = duration.toMinutes();
+        long days = totalMinutes / (60 * 24);
+        long hours = (totalMinutes % (60 * 24)) / 60;
+        long minutes = totalMinutes % 60;
+
+        StringBuilder builder = new StringBuilder("in ");
+        if (days > 0) {
+            builder.append(days).append("d ");
+        }
+        if (hours > 0) {
+            builder.append(hours).append("h ");
+        }
+        if (minutes > 0 || (days == 0 && hours == 0)) {
+            builder.append(minutes).append("m");
+        }
+
+        return builder.toString().trim();
     }
 
     private String cleanJson(String rawText) {
@@ -257,7 +448,12 @@ public class AiInsightService {
         private String userName;
         private BigDecimal walletBalance;
         private boolean hasLinkedSettlementAccount;
+        private boolean hasBudgetHistory;
         private Budget activeBudget;
         private Budget completedBudget;
+        private EnvelopeSnapshot spendableEnvelope;
+        private EnvelopeSnapshot upcomingEnvelope;
     }
+
+    private record EnvelopeSnapshot(Budget budget, Envelope envelope) {}
 }
