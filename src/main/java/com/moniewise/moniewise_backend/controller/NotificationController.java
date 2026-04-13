@@ -41,13 +41,11 @@ public class NotificationController {
 
     @GetMapping("/unread")
     public ResponseEntity<List<Notification>> getUnreadNotifications(
-            @AuthenticationPrincipal UserDetails userDetails) {
+            @AuthenticationPrincipal UserDetails userDetails,
+            @PageableDefault(size = 10, sort = "createdAt", direction = DESC) Pageable pageable) {
         Long userId = getUserIdFromUserDetails(userDetails);
-
-        // REMOVED: .filter(this::isImportantNotification)
-        // Trust the DB data.
         return ResponseEntity.ok(
-                notificationRepository.findByUserIdAndIsReadFalseOrderByCreatedAtDesc(userId)
+                notificationRepository.findByUserIdAndIsReadFalse(userId, pageable).getContent()
         );
     }
 
@@ -78,9 +76,7 @@ public class NotificationController {
     @PutMapping("/read-all")
     public ResponseEntity<Void> markAllNotificationsAsRead(@AuthenticationPrincipal UserDetails userDetails) {
         Long userId = getUserIdFromUserDetails(userDetails);
-        List<Notification> unreadNotifications = notificationRepository.findByUserIdAndIsReadFalseOrderByCreatedAtDesc(userId);
-        unreadNotifications.forEach(notification -> notification.setRead(true));
-        notificationRepository.saveAll(unreadNotifications);
+        notificationRepository.markAllAsReadForUser(userId);
         return ResponseEntity.ok().build();
     }
 
@@ -92,3 +88,4 @@ public class NotificationController {
     }
 
 }
+

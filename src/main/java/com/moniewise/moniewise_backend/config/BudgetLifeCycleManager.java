@@ -250,7 +250,7 @@ public class BudgetLifeCycleManager {
         }
     }
     // ✅ NEW SAFE VERSION
-    @Scheduled(fixedRate = 30000)
+    @Scheduled(fixedRateString = "${moniewise.scheduler.critical-tasks.fixed-rate-ms:30000}")
     public void processScheduledTasks() {
         long startTime = System.nanoTime();
         LocalDateTime now = fetchCurrentDateTimeFromDatabase();
@@ -796,7 +796,7 @@ public class BudgetLifeCycleManager {
         notificationRepository.deleteByCreatedAtBefore(threshold);
         logger.info("Cleaned notifications older than {}", threshold);
     }
-//    @Scheduled(fixedRate = 60000)
+//    @Scheduled(fixedRateString = "${moniewise.scheduler.pending-disbursement.fixed-rate-ms:120000}")
     @Transactional
     public void checkAndHandleMaturedEnvelopes() {
         LocalDateTime now = fetchCurrentDateTimeFromDatabase();
@@ -855,7 +855,7 @@ public class BudgetLifeCycleManager {
         ));
     }
 
-    @Scheduled(fixedRate = 60000)
+    @Scheduled(fixedRateString = "${moniewise.scheduler.pending-disbursement.fixed-rate-ms:120000}")
     @Transactional
     public void refundExpiredPendingDisbursements() {
         LocalDateTime now = fetchCurrentDateTimeFromDatabase();
@@ -1108,3 +1108,5 @@ public class BudgetLifeCycleManager {
 
 
 }
+
+

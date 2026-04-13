@@ -930,68 +930,41 @@ public class BudgetService {
         String timeOfDay = hour < 12 ? "Morning" : hour < 17 ? "Afternoon" : "Evening";
         return String.format("Good %s, %s!", timeOfDay, name);
     }
-
     public Map<String, Object> getDashboard(String email) {
         User user = userService.findByEmail(email);
-        // Use name from profile_data, fallback to email prefix
         String name = user.getName() != null ? user.getName() : user.getEmail().split("@")[0];
         String greeting = getTimeBasedGreeting(name);
 
-        List<Budget> budgets = budgetRepository.findByUserIdWithEnvelopes(user.getId());
-        Map<String, List<BudgetResponse>> budgetMap = new HashMap<>();
+        List<Object[]> rows = budgetRepository.findDashboardSummariesByUserId(user.getId());
+        Map<String, List<Map<String, Object>>> budgetMap = new HashMap<>();
         budgetMap.put("active", new ArrayList<>());
         budgetMap.put("completed", new ArrayList<>());
 
         LocalDate today = LocalDate.now();
-        for (Budget budget : budgets) {
-            BigDecimal remaining = budget.getEnvelopes().stream()
-                    .map(Envelope::getRemainingAmount)
-                    .reduce(BigDecimal.ZERO, BigDecimal::add);
-            BudgetResponse response = new BudgetResponse(
-                    budget.getId(),
-                    budget.getName(),
-                    budget.getTotalAmount(),
-                    budget.getAllocatedAmount(),
-                    remaining,
-                    Integer.valueOf((int) ChronoUnit.DAYS.between(budget.getStartDate(), budget.getEndDate())),
-                    budget.getStartDate(),
-                    budget.getEndDate(),
-                    budget.getStatus(),
-                    budget.getCreatedAt(),
-                    user.getId(),
-                    budget.getLastTopupTime(),
-                    budget.getEnvelopes().stream()
-                            .map(e -> new EnvelopeResponse(
-                                    e.getId(),
-                                    budget.getId(),
-                                    e.getName(),
-                                    e.getAmount(), // Fixed: Initial amount
-                                    e.getRemainingAmount(),
+        for (Object[] row : rows) {
+            Long budgetId = ((Number) row[0]).longValue();
+            String budgetName = (String) row[1];
+            BudgetStatus status = (BudgetStatus) row[2];
+            LocalDate startDate = (LocalDate) row[3];
+            LocalDate endDate = (LocalDate) row[4];
+            BigDecimal allocatedAmount = (BigDecimal) row[5];
+            int envelopeCount = ((Number) row[6]).intValue();
 
-                                    // New fields
-                                    e.getAmount(),                    // ← initialAmount
-                                    e.getTotalRemainingAmount(),      // ← totalRemaining
-                                    e.getRemainingAmount(),           // ← periodRemaining
-//                                    getPeriodLimit(e),                // ← periodLimit
-                                    calculatePeriodLimit(e, budget),
-                                    getUsedThisPeriod(e),             // ← usedThisPeriod
+            Map<String, Object> budgetSummary = new HashMap<>();
+            budgetSummary.put("id", budgetId);
+            budgetSummary.put("name", budgetName);
+            budgetSummary.put("status", status.name());
+            budgetSummary.put("startDate", startDate.toString());
+            budgetSummary.put("endDate", endDate != null ? endDate.toString() : startDate.toString());
+            budgetSummary.put("allocatedAmount", allocatedAmount);
+            budgetSummary.put("envelopeCount", envelopeCount);
 
-                                    e.getConditions(),
-                                    e.getCreatedAt(),
-                                    e.getLastDisbursedAt(),
-                                    e.getNextDisbursementAt()
-                            ))
-                            .collect(Collectors.toList())
-            );
-            if (budget.getStatus() == BudgetStatus.ACTIVE && budget.getEndDate().isAfter(today)) {
-                budgetMap.get("active").add(response);
+            if (status == BudgetStatus.ACTIVE && endDate != null && endDate.isAfter(today)) {
+                budgetMap.get("active").add(budgetSummary);
             } else {
-                budgetMap.get("completed").add(response);
+                budgetMap.get("completed").add(budgetSummary);
             }
         }
-
-        budgetMap.get("active").sort((a, b) -> b.getCreatedAt().compareTo(a.getCreatedAt()));
-        budgetMap.get("completed").sort((a, b) -> b.getCreatedAt().compareTo(a.getCreatedAt()));
 
         return Map.of(
                 "greeting", greeting,
@@ -1253,4 +1226,5 @@ public class BudgetService {
     }
 
 }
+
 

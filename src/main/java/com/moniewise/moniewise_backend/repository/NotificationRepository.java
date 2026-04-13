@@ -17,6 +17,7 @@ import java.util.Optional;
 public interface NotificationRepository extends JpaRepository<Notification, Long> {
     List<Notification> findByUserIdOrderByCreatedAtDesc(Long userId);
     List<Notification> findByUserIdAndIsReadFalseOrderByCreatedAtDesc(Long userId);
+    Page<Notification> findByUserIdAndIsReadFalse(Long userId, Pageable pageable);
     List<Notification> findByUserIdAndTypeOrderByCreatedAtDesc(Long userId, String type);
     Optional<Notification> findByIdAndUserId(Long id, Long userId);
     void deleteByCreatedAtBefore(LocalDateTime threshold);
@@ -26,3 +27,5 @@ public interface NotificationRepository extends JpaRepository<Notification, Long
     @Query("UPDATE Notification n SET n.isRead = true WHERE n.userId = :userId AND n.isRead = false")
     void markAllAsReadForUser(@Param("userId") Long userId);
 }
+
+
