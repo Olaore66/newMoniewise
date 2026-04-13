@@ -123,8 +123,7 @@ public class AiPromptService {
         boolean hasActiveBudget,
         boolean hasCompletedBudget,
         boolean hasLinkedSettlementAccount,
-        String activeBudgetName,
-        long activeBudgetId
+        String candidatesJson
     ) {
         return """
             You are a product strategist for Wisemonie, a modern Nigerian fintech budgeting app.
@@ -134,8 +133,8 @@ public class AiPromptService {
             Do not include commentary outside JSON.
 
             Goal:
-            Pick the single best next action to show on the dashboard right now.
-            The recommendation should feel practical, financially responsible, and product-native.
+            Pick the single best next action to show on the dashboard right now from the server-ranked candidates provided below.
+            The recommendation should feel practical, financially responsible, product-native, and immediately useful.
 
             Allowed action types:
             - create_budget
@@ -144,17 +143,18 @@ public class AiPromptService {
             - set_account
             - open_notifications
 
-            Rules:
-            - Prefer action types that help the user make progress immediately.
-            - If there is an active budget, reviewing it is usually strong.
-            - If there are no budgets at all, creating a budget is usually strong.
-            - If wallet balance is zero or less, funding the wallet can be strong.
-            - If settlement account is not linked, setting account can be strong, but avoid recommending it when it would duplicate an already obvious primary dashboard shortcut unless it is the most urgent blocker.
+            Hard rules:
+            - You must choose the primary action from the provided candidates.
+            - You may lightly improve the wording of title, message, and CTA label, but do not invent a new unsupported route or identifier.
             - Keep title under 55 characters.
-            - Keep message under 140 characters.
+            - Keep message under 160 characters.
             - CTA label should be 2 to 4 words.
             - Priority must be one of: normal, high, urgent.
-            - Only include budgetId and budgetName when actionType is review_active_budget.
+            - Confidence must be a decimal between 0 and 1.
+            - reason should explain in one short sentence why this is the strongest next move.
+            - Include up to 2 alternatives chosen only from the provided candidates.
+            - Keep budgetId, budgetName, envelopeId, and envelopeName aligned with the chosen candidate when applicable.
+            - If a candidate says no envelope is spendable right now, preserve its timing fields.
 
             User snapshot:
             - userName: %s
@@ -162,8 +162,9 @@ public class AiPromptService {
             - hasActiveBudget: %s
             - hasCompletedBudget: %s
             - hasLinkedSettlementAccount: %s
-            - activeBudgetName: %s
-            - activeBudgetId: %s
+
+            Ranked candidates JSON:
+            %s
 
             Return this exact JSON shape:
             {
@@ -172,8 +173,28 @@ public class AiPromptService {
               "ctaLabel": "string",
               "actionType": "create_budget|review_active_budget|fund_wallet|set_account|open_notifications",
               "priority": "normal|high|urgent",
+              "reason": "string",
+              "source": "ai",
+              "confidence": 0.0,
               "budgetId": 0,
-              "budgetName": "string"
+              "budgetName": "string",
+              "envelopeId": 0,
+              "envelopeName": "string",
+              "amountValue": 0.0,
+              "nextAvailableAt": "string",
+              "countdownText": "string",
+              "alternatives": [
+                {
+                  "title": "string",
+                  "actionType": "create_budget|review_active_budget|fund_wallet|set_account|open_notifications",
+                  "ctaLabel": "string",
+                  "reason": "string",
+                  "budgetId": 0,
+                  "budgetName": "string",
+                  "envelopeId": 0,
+                  "envelopeName": "string"
+                }
+              ]
             }
             """.formatted(
                 userName,
@@ -181,8 +202,7 @@ public class AiPromptService {
                 hasActiveBudget,
                 hasCompletedBudget,
                 hasLinkedSettlementAccount,
-                activeBudgetName,
-                activeBudgetId
+                candidatesJson
         );
     }
 }

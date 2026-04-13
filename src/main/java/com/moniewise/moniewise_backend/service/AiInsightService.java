@@ -12,13 +12,20 @@ import com.moniewise.moniewise_backend.repository.WalletRepository;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 @Service
 public class AiInsightService {
@@ -54,19 +61,19 @@ public class AiInsightService {
         DashboardActionContext context = buildContext(email);
 
         AiDashboardNextActionResponse deterministic = buildDeterministicRecommendation(context);
-        if (deterministic != null) {
-            return deterministic;
+        if (context.candidates.isEmpty()) {
+            return deterministic != null ? deterministic : buildFallback(context);
         }
 
         try {
+            String candidatesJson = objectMapper.writeValueAsString(buildCandidatePayloads(context.candidates));
             String prompt = aiPromptService.buildDashboardNextActionPrompt(
                 context.userName,
                 context.walletBalance.doubleValue(),
                 context.activeBudget != null,
                 context.completedBudget != null,
                 context.hasLinkedSettlementAccount,
-                context.activeBudget != null ? context.activeBudget.getName() : "none",
-                context.activeBudget != null ? context.activeBudget.getId() : 0L
+                candidatesJson
             );
 
             String rawText = geminiService.generateText(prompt);
@@ -74,9 +81,9 @@ public class AiInsightService {
             AiDashboardNextActionResponse response =
                 objectMapper.readValue(cleanedText, AiDashboardNextActionResponse.class);
 
-            return sanitizeResponse(response, context);
+            return sanitizeResponse(response, context, deterministic);
         } catch (Exception e) {
-            return buildFallback(context);
+            return deterministic != null ? deterministic : buildFallback(context);
         }
     }
 
@@ -107,43 +114,374 @@ public class AiInsightService {
         context.activeBudget = activeBudget;
         context.completedBudget = completedBudget;
         context.hasBudgetHistory = !activeBudgets.isEmpty() || completedBudget != null;
-        context.spendableEnvelope = findSpendableEnvelope(activeBudgets);
-        context.upcomingEnvelope = findUpcomingEnvelope(activeBudgets);
+        context.activeBudgets = activeBudgets;
+        context.candidates = rankCandidates(context);
         return context;
     }
 
-    private EnvelopeSnapshot findSpendableEnvelope(List<Budget> activeBudgets) {
-        return activeBudgets.stream()
-            .flatMap(budget -> budget.getEnvelopes().stream()
-                .map(envelope -> new EnvelopeSnapshot(budget, envelope)))
-            .filter(snapshot -> isEnvelopeSpendable(snapshot.envelope()))
-            .sorted(
-                Comparator
-                    .comparing((EnvelopeSnapshot snapshot) -> snapshot.envelope().getLastDisbursedAt(),
-                        Comparator.nullsLast(Comparator.reverseOrder()))
-                    .thenComparing(snapshot -> snapshot.envelope().getNextDisbursementAt(),
-                        Comparator.nullsLast(Comparator.naturalOrder()))
-                    .thenComparing(snapshot -> snapshot.budget().getCreatedAt(), Comparator.reverseOrder())
-            )
-            .findFirst()
-            .orElse(null);
+    private List<ActionCandidate> rankCandidates(DashboardActionContext context) {
+        List<ActionCandidate> candidates = new ArrayList<>();
+
+        if (context.hasBudgetHistory && context.walletBalance.compareTo(BigDecimal.ZERO) <= 0) {
+            candidates.add(baseCandidate(
+                "Fund your wallet first",
+                "Your wallet balance is zero right now. Add money so your active budget and spending plan can keep moving.",
+                "Fund wallet",
+                "fund_wallet",
+                "high",
+                "Wallet balance is zero while the user still has budget history.",
+                1000
+            ));
+        }
+
+        candidates.addAll(buildSpendableEnvelopeCandidates(context.activeBudgets));
+        candidates.addAll(buildUpcomingEnvelopeCandidates(context.activeBudgets));
+
+        if (context.activeBudget == null && context.completedBudget == null) {
+            candidates.add(baseCandidate(
+                "Create your first budget",
+                "Turn your wallet balance into a clear spending plan with envelopes that match your goals.",
+                "Start budget",
+                "create_budget",
+                "high",
+                "The user has no budget history yet.",
+                800
+            ));
+        }
+
+        if (context.activeBudget == null && context.completedBudget != null) {
+            candidates.add(baseCandidate(
+                "Plan the next budget cycle",
+                "You have completed a budget before. Start the next one while your recent spending pattern is still fresh.",
+                "Create budget",
+                "create_budget",
+                "high",
+                "The user has budget history but no active budget right now.",
+                700
+            ));
+        }
+
+        if (!context.hasLinkedSettlementAccount) {
+            double score = context.walletBalance.compareTo(new BigDecimal("50000")) > 0 ? 620 : 420;
+            candidates.add(baseCandidate(
+                "Link your payout account",
+                "Set your account details now so withdrawals stay fast and friction-free when you need them.",
+                "Set account",
+                "set_account",
+                "normal",
+                "The user has not linked a payout account yet.",
+                score
+            ));
+        }
+
+        Map<String, ActionCandidate> unique = new LinkedHashMap<>();
+        for (ActionCandidate candidate : candidates) {
+            unique.putIfAbsent(candidate.uniqueKey(), candidate);
+        }
+
+        List<ActionCandidate> ranked = new ArrayList<>(unique.values());
+        ranked.sort(Comparator.comparingDouble(ActionCandidate::score).reversed());
+        return ranked.size() > 5 ? ranked.subList(0, 5) : ranked;
     }
 
-    private EnvelopeSnapshot findUpcomingEnvelope(List<Budget> activeBudgets) {
+    private List<ActionCandidate> buildSpendableEnvelopeCandidates(List<Budget> activeBudgets) {
         LocalDateTime now = LocalDateTime.now(LAGOS_ZONE);
-        return activeBudgets.stream()
-            .flatMap(budget -> budget.getEnvelopes().stream()
-                .map(envelope -> new EnvelopeSnapshot(budget, envelope)))
-            .filter(snapshot -> snapshot.envelope().getNextDisbursementAt() != null)
-            .filter(snapshot -> snapshot.envelope().getNextDisbursementAt().isAfter(now))
-            .filter(snapshot -> hasFutureValue(snapshot.envelope()))
-            .sorted(
-                Comparator
-                    .comparing((EnvelopeSnapshot snapshot) -> snapshot.envelope().getNextDisbursementAt())
-                    .thenComparing(snapshot -> snapshot.budget().getCreatedAt(), Comparator.reverseOrder())
-            )
-            .findFirst()
-            .orElse(null);
+        List<ActionCandidate> candidates = new ArrayList<>();
+
+        for (Budget budget : activeBudgets) {
+            if (budget.getEnvelopes() == null) {
+                continue;
+            }
+            for (Envelope envelope : budget.getEnvelopes()) {
+                if (!isEnvelopeSpendable(envelope) || !hasHealthyRemaining(envelope)) {
+                    continue;
+                }
+
+                BigDecimal availableAmount = resolveSpendableAmount(envelope);
+                double score = scoreSpendableEnvelope(budget, envelope, now, availableAmount);
+                ActionCandidate candidate = baseCandidate(
+                    "Spend from " + envelope.getName(),
+                    "Budget " + budget.getName() + " has " + formatMoney(availableAmount) + " available now in envelope " + envelope.getName() + ".",
+                    "Go to " + envelope.getName(),
+                    "review_active_budget",
+                    "high",
+                    "This envelope is currently unlocked and still has healthy spendable balance.",
+                    score
+                );
+                candidate.budgetId = budget.getId();
+                candidate.budgetName = budget.getName();
+                candidate.envelopeId = envelope.getId();
+                candidate.envelopeName = envelope.getName();
+                candidate.amountValue = availableAmount != null ? availableAmount.doubleValue() : null;
+                candidates.add(candidate);
+            }
+        }
+
+        candidates.sort(Comparator.comparingDouble(ActionCandidate::score).reversed());
+        return candidates.size() > 3 ? candidates.subList(0, 3) : candidates;
+    }
+
+    private List<ActionCandidate> buildUpcomingEnvelopeCandidates(List<Budget> activeBudgets) {
+        LocalDateTime now = LocalDateTime.now(LAGOS_ZONE);
+        List<ActionCandidate> candidates = new ArrayList<>();
+
+        for (Budget budget : activeBudgets) {
+            if (budget.getEnvelopes() == null) {
+                continue;
+            }
+            for (Envelope envelope : budget.getEnvelopes()) {
+                LocalDateTime nextDisbursementAt = envelope.getNextDisbursementAt();
+                if (nextDisbursementAt == null || !nextDisbursementAt.isAfter(now) || !hasFutureValue(envelope)) {
+                    continue;
+                }
+
+                BigDecimal upcomingAmount = resolveUpcomingAmount(envelope);
+                double score = scoreUpcomingEnvelope(budget, envelope, upcomingAmount, now);
+                ActionCandidate candidate = baseCandidate(
+                    "No envelope is spendable right now",
+                    "Sorry, you don't have any spendable amount now. Your nearest disbursement is from Budget "
+                        + budget.getName() + " in envelope " + envelope.getName() + ".",
+                    "Go to " + envelope.getName(),
+                    "review_active_budget",
+                    "high",
+                    "This is the nearest upcoming envelope that will unlock usable money next.",
+                    score
+                );
+                candidate.budgetId = budget.getId();
+                candidate.budgetName = budget.getName();
+                candidate.envelopeId = envelope.getId();
+                candidate.envelopeName = envelope.getName();
+                candidate.amountValue = upcomingAmount != null ? upcomingAmount.doubleValue() : null;
+                candidate.nextAvailableAt = formatNextAvailableAt(nextDisbursementAt);
+                candidate.countdownText = formatCountdown(nextDisbursementAt);
+                candidates.add(candidate);
+            }
+        }
+
+        candidates.sort(Comparator.comparingDouble(ActionCandidate::score).reversed());
+        return candidates.size() > 2 ? candidates.subList(0, 2) : candidates;
+    }
+
+    private AiDashboardNextActionResponse sanitizeResponse(
+        AiDashboardNextActionResponse response,
+        DashboardActionContext context,
+        AiDashboardNextActionResponse deterministic
+    ) {
+        if (response == null || !isAllowedActionType(response.getActionType())) {
+            return deterministic != null ? deterministic : buildFallback(context);
+        }
+
+        ActionCandidate selectedCandidate = findMatchingCandidate(response, context.candidates);
+        if (selectedCandidate == null) {
+            return deterministic != null ? deterministic : buildFallback(context);
+        }
+
+        AiDashboardNextActionResponse sanitized = mergeWithCandidate(response, selectedCandidate, "ai");
+        sanitized.setAlternatives(resolveAlternatives(response.getAlternatives(), context.candidates, selectedCandidate));
+        return sanitized;
+    }
+
+    private ActionCandidate findMatchingCandidate(
+        AiDashboardNextActionResponse response,
+        List<ActionCandidate> candidates
+    ) {
+        for (ActionCandidate candidate : candidates) {
+            if (!candidate.actionType.equals(response.getActionType())) {
+                continue;
+            }
+            if (candidate.envelopeId != null && response.getEnvelopeId() != null
+                && candidate.envelopeId.equals(response.getEnvelopeId())) {
+                return candidate;
+            }
+            if (candidate.budgetId != null && response.getBudgetId() != null
+                && candidate.budgetId.equals(response.getBudgetId())) {
+                return candidate;
+            }
+        }
+
+        for (ActionCandidate candidate : candidates) {
+            if (candidate.actionType.equals(response.getActionType())) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    private AiDashboardNextActionResponse mergeWithCandidate(
+        AiDashboardNextActionResponse response,
+        ActionCandidate candidate,
+        String source
+    ) {
+        AiDashboardNextActionResponse merged = new AiDashboardNextActionResponse();
+        merged.setTitle(valueOrDefault(response.getTitle(), candidate.title));
+        merged.setMessage(valueOrDefault(response.getMessage(), candidate.message));
+        merged.setCtaLabel(valueOrDefault(response.getCtaLabel(), candidate.ctaLabel));
+        merged.setActionType(candidate.actionType);
+        merged.setPriority(isAllowedPriority(response.getPriority()) ? response.getPriority() : candidate.priority);
+        merged.setReason(valueOrDefault(response.getReason(), candidate.reason));
+        merged.setSource(source);
+        merged.setConfidence(normalizeConfidence(response.getConfidence(), source.equals("ai") ? 0.82 : 0.93));
+        merged.setBudgetId(candidate.budgetId);
+        merged.setBudgetName(candidate.budgetName);
+        merged.setEnvelopeId(candidate.envelopeId);
+        merged.setEnvelopeName(candidate.envelopeName);
+        merged.setAmountValue(candidate.amountValue);
+        merged.setNextAvailableAt(candidate.nextAvailableAt);
+        merged.setCountdownText(candidate.countdownText);
+        return merged;
+    }
+
+    private List<AiDashboardNextActionResponse.AlternativeAction> resolveAlternatives(
+        List<AiDashboardNextActionResponse.AlternativeAction> requested,
+        List<ActionCandidate> candidates,
+        ActionCandidate selectedCandidate
+    ) {
+        List<AiDashboardNextActionResponse.AlternativeAction> alternatives = new ArrayList<>();
+        Set<String> usedKeys = new LinkedHashSet<>();
+        usedKeys.add(selectedCandidate.uniqueKey());
+
+        if (requested != null) {
+            for (AiDashboardNextActionResponse.AlternativeAction item : requested) {
+                ActionCandidate matched = findMatchingCandidate(item, candidates);
+                if (matched == null || usedKeys.contains(matched.uniqueKey())) {
+                    continue;
+                }
+                alternatives.add(toAlternative(matched, valueOrDefault(item.getReason(), matched.reason)));
+                usedKeys.add(matched.uniqueKey());
+                if (alternatives.size() >= 2) {
+                    return alternatives;
+                }
+            }
+        }
+
+        for (ActionCandidate candidate : candidates) {
+            if (usedKeys.contains(candidate.uniqueKey())) {
+                continue;
+            }
+            alternatives.add(toAlternative(candidate, candidate.reason));
+            usedKeys.add(candidate.uniqueKey());
+            if (alternatives.size() >= 2) {
+                break;
+            }
+        }
+
+        return alternatives;
+    }
+
+    private ActionCandidate findMatchingCandidate(
+        AiDashboardNextActionResponse.AlternativeAction response,
+        List<ActionCandidate> candidates
+    ) {
+        if (response == null || response.getActionType() == null) {
+            return null;
+        }
+
+        for (ActionCandidate candidate : candidates) {
+            if (!candidate.actionType.equals(response.getActionType())) {
+                continue;
+            }
+            if (candidate.envelopeId != null && response.getEnvelopeId() != null
+                && candidate.envelopeId.equals(response.getEnvelopeId())) {
+                return candidate;
+            }
+            if (candidate.budgetId != null && response.getBudgetId() != null
+                && candidate.budgetId.equals(response.getBudgetId())) {
+                return candidate;
+            }
+        }
+
+        for (ActionCandidate candidate : candidates) {
+            if (candidate.actionType.equals(response.getActionType())) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    private AiDashboardNextActionResponse.AlternativeAction toAlternative(ActionCandidate candidate, String reason) {
+        AiDashboardNextActionResponse.AlternativeAction alternative = new AiDashboardNextActionResponse.AlternativeAction();
+        alternative.setTitle(candidate.title);
+        alternative.setActionType(candidate.actionType);
+        alternative.setCtaLabel(candidate.ctaLabel);
+        alternative.setReason(reason);
+        alternative.setBudgetId(candidate.budgetId);
+        alternative.setBudgetName(candidate.budgetName);
+        alternative.setEnvelopeId(candidate.envelopeId);
+        alternative.setEnvelopeName(candidate.envelopeName);
+        return alternative;
+    }
+
+    private AiDashboardNextActionResponse buildDeterministicRecommendation(DashboardActionContext context) {
+        if (context.candidates.isEmpty()) {
+            return null;
+        }
+
+        ActionCandidate selected = context.candidates.get(0);
+        AiDashboardNextActionResponse response = mergeWithCandidate(new AiDashboardNextActionResponse(), selected, "server_ranked");
+
+        List<AiDashboardNextActionResponse.AlternativeAction> alternatives = new ArrayList<>();
+        for (int i = 1; i < context.candidates.size() && alternatives.size() < 2; i++) {
+            ActionCandidate candidate = context.candidates.get(i);
+            alternatives.add(toAlternative(candidate, candidate.reason));
+        }
+        response.setAlternatives(alternatives);
+        return response;
+    }
+
+    private AiDashboardNextActionResponse buildFallback(DashboardActionContext context) {
+        AiDashboardNextActionResponse response = new AiDashboardNextActionResponse();
+        response.setTitle("Create your next budget");
+        response.setMessage("Build a fresh budget and give every naira a clear job.");
+        response.setCtaLabel("Create budget");
+        response.setActionType("create_budget");
+        response.setPriority("high");
+        response.setReason("No stronger live dashboard action was available.");
+        response.setSource("fallback");
+        response.setConfidence(0.61);
+        return response;
+    }
+
+    private ActionCandidate baseCandidate(
+        String title,
+        String message,
+        String ctaLabel,
+        String actionType,
+        String priority,
+        String reason,
+        double score
+    ) {
+        ActionCandidate candidate = new ActionCandidate();
+        candidate.title = title;
+        candidate.message = message;
+        candidate.ctaLabel = ctaLabel;
+        candidate.actionType = actionType;
+        candidate.priority = priority;
+        candidate.reason = reason;
+        candidate.score = score;
+        return candidate;
+    }
+
+    private List<Map<String, Object>> buildCandidatePayloads(List<ActionCandidate> candidates) {
+        List<Map<String, Object>> payloads = new ArrayList<>();
+        for (ActionCandidate candidate : candidates) {
+            Map<String, Object> item = new HashMap<>();
+            item.put("title", candidate.title);
+            item.put("message", candidate.message);
+            item.put("ctaLabel", candidate.ctaLabel);
+            item.put("actionType", candidate.actionType);
+            item.put("priority", candidate.priority);
+            item.put("reason", candidate.reason);
+            item.put("score", candidate.score);
+            item.put("budgetId", candidate.budgetId);
+            item.put("budgetName", candidate.budgetName);
+            item.put("envelopeId", candidate.envelopeId);
+            item.put("envelopeName", candidate.envelopeName);
+            item.put("amountValue", candidate.amountValue);
+            item.put("nextAvailableAt", candidate.nextAvailableAt);
+            item.put("countdownText", candidate.countdownText);
+            payloads.add(item);
+        }
+        return payloads;
     }
 
     private boolean isEnvelopeSpendable(Envelope envelope) {
@@ -151,6 +489,18 @@ public class AiInsightService {
             && envelope.getRemainingAmount() != null
             && envelope.getRemainingAmount().compareTo(BigDecimal.ZERO) > 0
             && !Boolean.TRUE.equals(envelope.getHasMatured());
+    }
+
+    private boolean hasHealthyRemaining(Envelope envelope) {
+        BigDecimal available = resolveSpendableAmount(envelope);
+        BigDecimal reference = resolveReferenceAmount(envelope);
+        if (available == null || available.compareTo(BigDecimal.ZERO) <= 0) {
+            return false;
+        }
+        if (reference == null || reference.compareTo(BigDecimal.ZERO) <= 0) {
+            return true;
+        }
+        return available.divide(reference, 6, RoundingMode.HALF_UP).compareTo(new BigDecimal("0.01")) > 0;
     }
 
     private boolean hasFutureValue(Envelope envelope) {
@@ -167,108 +517,33 @@ public class AiInsightService {
             || (remaining != null && remaining.compareTo(BigDecimal.ZERO) > 0);
     }
 
-    private AiDashboardNextActionResponse sanitizeResponse(
-        AiDashboardNextActionResponse response,
-        DashboardActionContext context
-    ) {
-        if (response == null || !isAllowedActionType(response.getActionType())) {
-            return buildFallback(context);
+    private BigDecimal resolveSpendableAmount(Envelope envelope) {
+        if (envelope == null) {
+            return BigDecimal.ZERO;
         }
-
-        AiDashboardNextActionResponse deterministic = buildDeterministicRecommendation(context);
-        if (deterministic != null) {
-            return deterministic;
+        if (envelope.getRemainingAmount() != null && envelope.getRemainingAmount().compareTo(BigDecimal.ZERO) > 0) {
+            return envelope.getRemainingAmount();
         }
-
-        if (response.getTitle() == null || response.getTitle().isBlank()) {
-            response.setTitle(defaultTitleFor(response.getActionType(), context));
-        }
-
-        if (response.getMessage() == null || response.getMessage().isBlank()) {
-            response.setMessage(defaultMessageFor(response.getActionType(), context));
-        }
-
-        if (response.getCtaLabel() == null || response.getCtaLabel().isBlank()) {
-            response.setCtaLabel(defaultCtaFor(response.getActionType()));
-        }
-
-        if (!isAllowedPriority(response.getPriority())) {
-            response.setPriority(defaultPriorityFor(response.getActionType()));
-        }
-
-        if ("review_active_budget".equals(response.getActionType()) && context.activeBudget != null) {
-            response.setBudgetId(context.activeBudget.getId());
-            response.setBudgetName(context.activeBudget.getName());
-        } else {
-            response.setBudgetId(null);
-            response.setBudgetName(null);
-            response.setEnvelopeId(null);
-            response.setEnvelopeName(null);
-            response.setAmountValue(null);
-            response.setNextAvailableAt(null);
-            response.setCountdownText(null);
-        }
-
-        return response;
+        return BigDecimal.ZERO;
     }
 
-    private AiDashboardNextActionResponse buildDeterministicRecommendation(DashboardActionContext context) {
-        if (context.hasBudgetHistory && context.walletBalance.compareTo(BigDecimal.ZERO) <= 0) {
-            return baseAction(
-                "Fund your wallet first",
-                "Your wallet balance is zero right now. Add money so your active budget and upcoming spending plan can keep moving.",
-                "Fund wallet",
-                "fund_wallet",
-                "high"
-            );
+    private BigDecimal resolveReferenceAmount(Envelope envelope) {
+        if (envelope == null) {
+            return null;
         }
 
-        if (context.spendableEnvelope != null) {
-            EnvelopeSnapshot snapshot = context.spendableEnvelope;
-            BigDecimal availableAmount = snapshot.envelope().getRemainingAmount();
-            AiDashboardNextActionResponse response = baseAction(
-                "Spend from " + snapshot.envelope().getName(),
-                "Budget " + snapshot.budget().getName()
-                    + " currently has unlocked money in envelope "
-                    + snapshot.envelope().getName()
-                    + ".",
-                "Go to " + snapshot.envelope().getName(),
-                "review_active_budget",
-                "high"
-            );
-            response.setBudgetId(snapshot.budget().getId());
-            response.setBudgetName(snapshot.budget().getName());
-            response.setEnvelopeId(snapshot.envelope().getId());
-            response.setEnvelopeName(snapshot.envelope().getName());
-            response.setAmountValue(availableAmount != null ? availableAmount.doubleValue() : null);
-            return response;
+        if (envelope.getConditions() != null) {
+            Object limit = envelope.getConditions().get("limit");
+            BigDecimal parsedLimit = parseBigDecimal(limit);
+            if (parsedLimit != null && parsedLimit.compareTo(BigDecimal.ZERO) > 0) {
+                return parsedLimit;
+            }
         }
 
-        if (context.upcomingEnvelope != null) {
-            EnvelopeSnapshot snapshot = context.upcomingEnvelope;
-            LocalDateTime nextDisbursementAt = snapshot.envelope().getNextDisbursementAt();
-            String formattedTime = formatNextAvailableAt(nextDisbursementAt);
-            String countdownText = formatCountdown(nextDisbursementAt);
-            BigDecimal upcomingAmount = resolveUpcomingAmount(snapshot.envelope());
-
-            AiDashboardNextActionResponse response = baseAction(
-                "No spendable amount yet",
-                "Sorry, you don't have any spendable amount now.",
-                "Go to " + snapshot.envelope().getName(),
-                "review_active_budget",
-                "high"
-            );
-            response.setBudgetId(snapshot.budget().getId());
-            response.setBudgetName(snapshot.budget().getName());
-            response.setEnvelopeId(snapshot.envelope().getId());
-            response.setEnvelopeName(snapshot.envelope().getName());
-            response.setAmountValue(upcomingAmount != null ? upcomingAmount.doubleValue() : null);
-            response.setNextAvailableAt(formattedTime);
-            response.setCountdownText(countdownText);
-            return response;
+        if (envelope.getAmount() != null && envelope.getAmount().compareTo(BigDecimal.ZERO) > 0) {
+            return envelope.getAmount();
         }
-
-        return null;
+        return envelope.getTotalRemainingAmount();
     }
 
     private BigDecimal resolveUpcomingAmount(Envelope envelope) {
@@ -278,14 +553,9 @@ public class AiInsightService {
 
         if (envelope.getConditions() != null) {
             Object limit = envelope.getConditions().get("limit");
-            if (limit instanceof Number number) {
-                return BigDecimal.valueOf(number.doubleValue());
-            }
-            if (limit != null) {
-                try {
-                    return new BigDecimal(limit.toString());
-                } catch (NumberFormatException ignored) {
-                }
+            BigDecimal parsedLimit = parseBigDecimal(limit);
+            if (parsedLimit != null && parsedLimit.compareTo(BigDecimal.ZERO) > 0) {
+                return parsedLimit;
             }
         }
 
@@ -296,65 +566,67 @@ public class AiInsightService {
         return envelope.getAmount();
     }
 
-    private AiDashboardNextActionResponse buildFallback(DashboardActionContext context) {
-        AiDashboardNextActionResponse deterministic = buildDeterministicRecommendation(context);
-        if (deterministic != null) {
-            return deterministic;
+    private BigDecimal parseBigDecimal(Object value) {
+        if (value instanceof Number number) {
+            return BigDecimal.valueOf(number.doubleValue());
         }
-
-        AiDashboardNextActionResponse response = new AiDashboardNextActionResponse();
-
-        if (context.activeBudget == null && context.completedBudget == null) {
-            response.setTitle("Create your first budget");
-            response.setMessage("Turn your wallet balance into a clear spending plan with envelopes that match your goals.");
-            response.setCtaLabel("Start budget");
-            response.setActionType("create_budget");
-            response.setPriority("high");
-            return response;
+        if (value != null) {
+            try {
+                return new BigDecimal(value.toString());
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
         }
-
-        if (context.activeBudget != null) {
-            response.setTitle("Review " + context.activeBudget.getName());
-            response.setMessage("Check your most recent active budget and make sure each envelope still reflects today's priorities.");
-            response.setCtaLabel("Review budget");
-            response.setActionType("review_active_budget");
-            response.setPriority("high");
-            response.setBudgetId(context.activeBudget.getId());
-            response.setBudgetName(context.activeBudget.getName());
-            return response;
-        }
-
-        if (!context.hasLinkedSettlementAccount && context.walletBalance.compareTo(new BigDecimal("50000")) <= 0) {
-            response.setTitle("Link your payout account");
-            response.setMessage("Set your account details now so withdrawals stay fast and friction-free when you need them.");
-            response.setCtaLabel("Set account");
-            response.setActionType("set_account");
-            response.setPriority("normal");
-            return response;
-        }
-
-        response.setTitle("Plan the next budget cycle");
-        response.setMessage("You've completed a budget before. Start the next one while your recent spending pattern is still fresh.");
-        response.setCtaLabel("Create budget");
-        response.setActionType("create_budget");
-        response.setPriority("normal");
-        return response;
+        return null;
     }
 
-    private AiDashboardNextActionResponse baseAction(
-        String title,
-        String message,
-        String ctaLabel,
-        String actionType,
-        String priority
+    private double scoreSpendableEnvelope(
+        Budget budget,
+        Envelope envelope,
+        LocalDateTime now,
+        BigDecimal availableAmount
     ) {
-        AiDashboardNextActionResponse response = new AiDashboardNextActionResponse();
-        response.setTitle(title);
-        response.setMessage(message);
-        response.setCtaLabel(ctaLabel);
-        response.setActionType(actionType);
-        response.setPriority(priority);
-        return response;
+        double score = 0;
+        BigDecimal reference = resolveReferenceAmount(envelope);
+        if (reference != null && reference.compareTo(BigDecimal.ZERO) > 0) {
+            double ratio = availableAmount.divide(reference, 6, RoundingMode.HALF_UP).doubleValue();
+            score += Math.min(ratio, 1.0) * 40;
+        }
+        score += availableAmount.doubleValue() * 0.00002;
+
+        if (envelope.getLastDisbursedAt() != null) {
+            long hoursAgo = Math.max(0, Duration.between(envelope.getLastDisbursedAt(), now).toHours());
+            double recency = hoursAgo >= 168 ? 0 : 1 - (hoursAgo / 168.0);
+            score += recency * 16;
+        }
+
+        if (budget.getCreatedAt() != null && Duration.between(budget.getCreatedAt(), now).toDays() <= 30) {
+            score += 8;
+        }
+
+        return score;
+    }
+
+    private double scoreUpcomingEnvelope(
+        Budget budget,
+        Envelope envelope,
+        BigDecimal upcomingAmount,
+        LocalDateTime now
+    ) {
+        LocalDateTime next = envelope.getNextDisbursementAt();
+        if (next == null) {
+            return -999999;
+        }
+
+        long minutesAway = Math.max(0, Duration.between(now, next).toMinutes());
+        double score = 500 - (minutesAway / 10.0);
+        if (upcomingAmount != null) {
+            score += upcomingAmount.doubleValue() * 0.00001;
+        }
+        if (budget.getCreatedAt() != null && Duration.between(budget.getCreatedAt(), now).toDays() <= 30) {
+            score += 6;
+        }
+        return score;
     }
 
     private String formatNextAvailableAt(LocalDateTime dateTime) {
@@ -393,6 +665,13 @@ public class AiInsightService {
         return builder.toString().trim();
     }
 
+    private String formatMoney(BigDecimal value) {
+        if (value == null) {
+            return "0";
+        }
+        return value.setScale(2, RoundingMode.HALF_UP).toPlainString();
+    }
+
     private String cleanJson(String rawText) {
         if (rawText == null) {
             return "{}";
@@ -428,44 +707,21 @@ public class AiInsightService {
         };
     }
 
-    private String defaultTitleFor(String actionType, DashboardActionContext context) {
-        return switch (actionType) {
-            case "fund_wallet" -> "Fund your wallet first";
-            case "set_account" -> "Link your payout account";
-            case "review_active_budget" -> context.activeBudget != null
-                ? "Review " + context.activeBudget.getName()
-                : "Review your active budget";
-            case "open_notifications" -> "Catch up on alerts";
-            default -> "Create your next budget";
-        };
+    private String valueOrDefault(String value, String fallback) {
+        return value == null || value.isBlank() ? fallback : value;
     }
 
-    private String defaultMessageFor(String actionType, DashboardActionContext context) {
-        return switch (actionType) {
-            case "fund_wallet" -> "Add money so your next budget or transfer can move forward without delay.";
-            case "set_account" -> "Add your payout details once so withdrawals are ready whenever you need them.";
-            case "review_active_budget" -> "Open your active budget and keep each envelope aligned with your current plan.";
-            case "open_notifications" -> "Check recent updates so you don't miss credits, disbursements, or important account events.";
-            default -> "Build a fresh budget and give every naira a clear job.";
-        };
-    }
-
-    private String defaultCtaFor(String actionType) {
-        return switch (actionType) {
-            case "fund_wallet" -> "Fund wallet";
-            case "set_account" -> "Set account";
-            case "review_active_budget" -> "Review budget";
-            case "open_notifications" -> "View alerts";
-            default -> "Create budget";
-        };
-    }
-
-    private String defaultPriorityFor(String actionType) {
-        return switch (actionType) {
-            case "fund_wallet", "create_budget", "review_active_budget" -> "high";
-            case "open_notifications" -> "urgent";
-            default -> "normal";
-        };
+    private Double normalizeConfidence(Double value, double fallback) {
+        if (value == null) {
+            return fallback;
+        }
+        if (value < 0) {
+            return 0.0;
+        }
+        if (value > 1) {
+            return 1.0;
+        }
+        return value;
     }
 
     private static class DashboardActionContext {
@@ -475,9 +731,35 @@ public class AiInsightService {
         private boolean hasBudgetHistory;
         private Budget activeBudget;
         private Budget completedBudget;
-        private EnvelopeSnapshot spendableEnvelope;
-        private EnvelopeSnapshot upcomingEnvelope;
+        private List<Budget> activeBudgets = List.of();
+        private List<ActionCandidate> candidates = List.of();
     }
 
-    private record EnvelopeSnapshot(Budget budget, Envelope envelope) {}
+    private static class ActionCandidate {
+        private String title;
+        private String message;
+        private String ctaLabel;
+        private String actionType;
+        private String priority;
+        private String reason;
+        private Long budgetId;
+        private String budgetName;
+        private Long envelopeId;
+        private String envelopeName;
+        private Double amountValue;
+        private String nextAvailableAt;
+        private String countdownText;
+        private double score;
+
+        private String uniqueKey() {
+            return actionType + "::" + (budgetId == null ? 0 : budgetId)
+                + "::" + (envelopeId == null ? 0 : envelopeId)
+                + "::" + (budgetName == null ? "" : budgetName)
+                + "::" + (envelopeName == null ? "" : envelopeName);
+        }
+
+        private double score() {
+            return score;
+        }
+    }
 }

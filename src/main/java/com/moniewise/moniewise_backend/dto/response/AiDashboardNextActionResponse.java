@@ -1,11 +1,17 @@
 package com.moniewise.moniewise_backend.dto.response;
 
+import java.util.ArrayList;
+import java.util.List;
+
 public class AiDashboardNextActionResponse {
     private String title;
     private String message;
     private String ctaLabel;
     private String actionType;
     private String priority;
+    private String reason;
+    private String source;
+    private Double confidence;
     private Long budgetId;
     private String budgetName;
     private Long envelopeId;
@@ -13,6 +19,7 @@ public class AiDashboardNextActionResponse {
     private Double amountValue;
     private String nextAvailableAt;
     private String countdownText;
+    private List<AlternativeAction> alternatives = new ArrayList<>();
 
     public String getTitle() {
         return title;
@@ -52,6 +59,30 @@ public class AiDashboardNextActionResponse {
 
     public void setPriority(String priority) {
         this.priority = priority;
+    }
+
+    public String getReason() {
+        return reason;
+    }
+
+    public void setReason(String reason) {
+        this.reason = reason;
+    }
+
+    public String getSource() {
+        return source;
+    }
+
+    public void setSource(String source) {
+        this.source = source;
+    }
+
+    public Double getConfidence() {
+        return confidence;
+    }
+
+    public void setConfidence(Double confidence) {
+        this.confidence = confidence;
     }
 
     public Long getBudgetId() {
@@ -108,5 +139,88 @@ public class AiDashboardNextActionResponse {
 
     public void setCountdownText(String countdownText) {
         this.countdownText = countdownText;
+    }
+
+    public List<AlternativeAction> getAlternatives() {
+        return alternatives;
+    }
+
+    public void setAlternatives(List<AlternativeAction> alternatives) {
+        this.alternatives = alternatives == null ? new ArrayList<>() : alternatives;
+    }
+
+    public static class AlternativeAction {
+        private String title;
+        private String actionType;
+        private String ctaLabel;
+        private String reason;
+        private Long budgetId;
+        private String budgetName;
+        private Long envelopeId;
+        private String envelopeName;
+
+        public String getTitle() {
+            return title;
+        }
+
+        public void setTitle(String title) {
+            this.title = title;
+        }
+
+        public String getActionType() {
+            return actionType;
+        }
+
+        public void setActionType(String actionType) {
+            this.actionType = actionType;
+        }
+
+        public String getCtaLabel() {
+            return ctaLabel;
+        }
+
+        public void setCtaLabel(String ctaLabel) {
+            this.ctaLabel = ctaLabel;
+        }
+
+        public String getReason() {
+            return reason;
+        }
+
+        public void setReason(String reason) {
+            this.reason = reason;
+        }
+
+        public Long getBudgetId() {
+            return budgetId;
+        }
+
+        public void setBudgetId(Long budgetId) {
+            this.budgetId = budgetId;
+        }
+
+        public String getBudgetName() {
+            return budgetName;
+        }
+
+        public void setBudgetName(String budgetName) {
+            this.budgetName = budgetName;
+        }
+
+        public Long getEnvelopeId() {
+            return envelopeId;
+        }
+
+        public void setEnvelopeId(Long envelopeId) {
+            this.envelopeId = envelopeId;
+        }
+
+        public String getEnvelopeName() {
+            return envelopeName;
+        }
+
+        public void setEnvelopeName(String envelopeName) {
+            this.envelopeName = envelopeName;
+        }
     }
 }
