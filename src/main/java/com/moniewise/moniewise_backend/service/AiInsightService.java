@@ -18,7 +18,6 @@ import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.Comparator;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 
 @Service
@@ -203,7 +202,9 @@ public class AiInsightService {
         } else {
             response.setBudgetId(null);
             response.setBudgetName(null);
+            response.setEnvelopeId(null);
             response.setEnvelopeName(null);
+            response.setAmountValue(null);
             response.setNextAvailableAt(null);
             response.setCountdownText(null);
         }
@@ -213,30 +214,33 @@ public class AiInsightService {
 
     private AiDashboardNextActionResponse buildDeterministicRecommendation(DashboardActionContext context) {
         if (context.hasBudgetHistory && context.walletBalance.compareTo(BigDecimal.ZERO) <= 0) {
-            AiDashboardNextActionResponse response = baseAction(
+            return baseAction(
                 "Fund your wallet first",
                 "Your wallet balance is zero right now. Add money so your active budget and upcoming spending plan can keep moving.",
                 "Fund wallet",
                 "fund_wallet",
                 "high"
             );
-            return response;
         }
 
         if (context.spendableEnvelope != null) {
             EnvelopeSnapshot snapshot = context.spendableEnvelope;
+            BigDecimal availableAmount = snapshot.envelope().getRemainingAmount();
             AiDashboardNextActionResponse response = baseAction(
                 "Spend from " + snapshot.envelope().getName(),
-                snapshot.budget().getName() + " currently has unlocked money in "
+                "Budget " + snapshot.budget().getName()
+                    + " currently has unlocked money in envelope "
                     + snapshot.envelope().getName()
-                    + ". Open it now to move or spend from the live allocation.",
-                "Open budget",
+                    + ".",
+                "Go to " + snapshot.envelope().getName(),
                 "review_active_budget",
                 "high"
             );
             response.setBudgetId(snapshot.budget().getId());
             response.setBudgetName(snapshot.budget().getName());
+            response.setEnvelopeId(snapshot.envelope().getId());
             response.setEnvelopeName(snapshot.envelope().getName());
+            response.setAmountValue(availableAmount != null ? availableAmount.doubleValue() : null);
             return response;
         }
 
@@ -245,31 +249,51 @@ public class AiInsightService {
             LocalDateTime nextDisbursementAt = snapshot.envelope().getNextDisbursementAt();
             String formattedTime = formatNextAvailableAt(nextDisbursementAt);
             String countdownText = formatCountdown(nextDisbursementAt);
+            BigDecimal upcomingAmount = resolveUpcomingAmount(snapshot.envelope());
 
             AiDashboardNextActionResponse response = baseAction(
                 "No spendable amount yet",
-                "Sorry, you don't have any spendable amount now. Your nearest disbursement is from Budget "
-                    + snapshot.budget().getName()
-                    + " in envelope "
-                    + snapshot.envelope().getName()
-                    + " at "
-                    + formattedTime
-                    + ", and it is coming up "
-                    + countdownText
-                    + ".",
-                "View budget",
+                "Sorry, you don't have any spendable amount now.",
+                "Go to " + snapshot.envelope().getName(),
                 "review_active_budget",
                 "high"
             );
             response.setBudgetId(snapshot.budget().getId());
             response.setBudgetName(snapshot.budget().getName());
+            response.setEnvelopeId(snapshot.envelope().getId());
             response.setEnvelopeName(snapshot.envelope().getName());
+            response.setAmountValue(upcomingAmount != null ? upcomingAmount.doubleValue() : null);
             response.setNextAvailableAt(formattedTime);
             response.setCountdownText(countdownText);
             return response;
         }
 
         return null;
+    }
+
+    private BigDecimal resolveUpcomingAmount(Envelope envelope) {
+        if (envelope == null) {
+            return null;
+        }
+
+        if (envelope.getConditions() != null) {
+            Object limit = envelope.getConditions().get("limit");
+            if (limit instanceof Number number) {
+                return BigDecimal.valueOf(number.doubleValue());
+            }
+            if (limit != null) {
+                try {
+                    return new BigDecimal(limit.toString());
+                } catch (NumberFormatException ignored) {
+                }
+            }
+        }
+
+        if (envelope.getRemainingAmount() != null && envelope.getRemainingAmount().compareTo(BigDecimal.ZERO) > 0) {
+            return envelope.getRemainingAmount();
+        }
+
+        return envelope.getAmount();
     }
 
     private AiDashboardNextActionResponse buildFallback(DashboardActionContext context) {
