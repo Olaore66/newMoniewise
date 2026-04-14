@@ -313,13 +313,14 @@ public class UserService implements UserDetailsService {
         // ============================================================
 
         // Only set the BVN if it's currently empty.
-        // If they already have one, don't let them overwrite it!
+        // For later profile edits, a blank BVN means "leave the existing BVN unchanged".
+        String incomingBvn = request.getBvn() != null ? request.getBvn().trim() : null;
         if (user.getBvn() == null || user.getBvn().trim().isEmpty()) {
-            if (request.getBvn() == null || request.getBvn().trim().isEmpty()) {
+            if (incomingBvn == null || incomingBvn.isEmpty()) {
                 throw new IllegalArgumentException("BVN is required to complete your profile.");
             }
-            user.setBvn(request.getBvn());
-        } else if (request.getBvn() != null && !user.getBvn().equals(request.getBvn())) {
+            user.setBvn(incomingBvn);
+        } else if (incomingBvn != null && !incomingBvn.isEmpty() && !user.getBvn().equals(incomingBvn)) {
             // If they try to send a different BVN later, reject it.
             throw new IllegalArgumentException("BVN cannot be modified after initial setup. Contact support.");
         }
@@ -661,3 +662,5 @@ public class UserService implements UserDetailsService {
 
 
 }
+
+
