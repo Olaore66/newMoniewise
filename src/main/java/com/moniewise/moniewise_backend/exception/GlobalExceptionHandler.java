@@ -64,7 +64,12 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(InsufficientFundsException.class)
     public ResponseEntity<Map<String, Object>> handleInsufficientFunds(InsufficientFundsException ex) {
-        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of("error", "Insufficient Funds", "message", ex.getMessage(), "timestamp", LocalDateTime.now()));
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of(
+                "error", "Insufficient Funds",
+                "code", "INSUFFICIENT_BUDGET_CREATION_FUNDS",
+                "message", ex.getMessage(),
+                "timestamp", LocalDateTime.now()
+        ));
     }
 
     @ExceptionHandler(Exception.class)

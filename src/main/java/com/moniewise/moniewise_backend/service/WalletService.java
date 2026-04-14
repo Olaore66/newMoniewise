@@ -10,6 +10,7 @@ import com.moniewise.moniewise_backend.entity.Wallet;
 import com.moniewise.moniewise_backend.entity.Withdrawal;
 import com.moniewise.moniewise_backend.enums.NotificationType;
 import com.moniewise.moniewise_backend.enums.TransactionStatus;
+import com.moniewise.moniewise_backend.exception.InsufficientFundsException;
 import com.moniewise.moniewise_backend.enums.TransactionType;
 import com.moniewise.moniewise_backend.enums.WalletStatus;
 import com.moniewise.moniewise_backend.enums.WithdrawalStatus;
@@ -179,7 +180,7 @@ public class WalletService {
                     wallet.getBalance()
             );
             notificationService.sendNotification(userId.toString(), message, NotificationType.INSUFFICIENT_BALANCE);
-            throw new IllegalArgumentException(message);
+            throw new InsufficientFundsException(message);
         }
 
         wallet.setBalance(wallet.getBalance().subtract(amount));
@@ -563,4 +564,7 @@ public class WalletService {
         return "WD-" + userId + "-" + System.currentTimeMillis();
     }
 }
+
+
+
 

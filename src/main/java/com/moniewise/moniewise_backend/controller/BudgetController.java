@@ -7,6 +7,7 @@ import com.moniewise.moniewise_backend.dto.response.EnvelopeResponse;
 import com.moniewise.moniewise_backend.entity.ScheduledTask;
 import com.moniewise.moniewise_backend.entity.User;
 import com.moniewise.moniewise_backend.exception.TncAcceptanceRequiredException;
+import com.moniewise.moniewise_backend.exception.InsufficientFundsException;
 import com.moniewise.moniewise_backend.repository.BudgetRepository;
 import com.moniewise.moniewise_backend.repository.ScheduledTaskRepository;
 import com.moniewise.moniewise_backend.service.BudgetService;
@@ -77,12 +78,23 @@ public class BudgetController {
         try {
             BudgetResponse response = budgetService.createBudget(request, email);
             return new ResponseEntity<>(response, HttpStatus.CREATED);
+        } catch (InsufficientFundsException e) {
+            logger.warn("Budget creation blocked for user {} due to insufficient funds: {}", email, e.getMessage());
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(Map.of(
+                            "error", "Insufficient Funds",
+                            "code", "INSUFFICIENT_BUDGET_CREATION_FUNDS",
+                            "message", e.getMessage()
+                    ));
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         } catch (Exception e) {
-            logger.error("Error creating budget for user {}: {}", email, e.getMessage());
+            logger.error("Error creating budget for user {}", email, e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(Map.of("error", "Failed to create budget"));
+                    .body(Map.of(
+                            "error", "Failed to create budget",
+                            "code", "BUDGET_CREATION_FAILED"
+                    ));
         }
     }
 
@@ -446,3 +458,6 @@ public class BudgetController {
     }
 
 }
+
+
+
