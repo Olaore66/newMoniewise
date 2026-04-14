@@ -6,7 +6,6 @@ import com.moniewise.moniewise_backend.dto.response.BudgetResponse;
 import com.moniewise.moniewise_backend.dto.response.EnvelopeResponse;
 import com.moniewise.moniewise_backend.entity.ScheduledTask;
 import com.moniewise.moniewise_backend.entity.User;
-import com.moniewise.moniewise_backend.exception.TncAcceptanceRequiredException;
 import com.moniewise.moniewise_backend.exception.InsufficientFundsException;
 import com.moniewise.moniewise_backend.repository.BudgetRepository;
 import com.moniewise.moniewise_backend.repository.ScheduledTaskRepository;
@@ -50,7 +49,7 @@ public class BudgetController {
     private BudgetRepository budgetRepository;
 
     @Autowired
-    private  EnvelopeService envelopeService;
+    private EnvelopeService envelopeService;
 
     @Autowired
     private ScheduledTaskRepository scheduledTaskRepository;
@@ -124,9 +123,7 @@ public class BudgetController {
     @GetMapping("/{budgetId}/envelopes")
     public ResponseEntity<?> getEnvelopesByBudget(@PathVariable Long budgetId, Authentication authentication) {
         try {
-            System.out.println("Received request for budgetId: " + budgetId + ", auth: " + authentication);
             String email = authentication.getName();
-            System.out.println("User email from token: " + email);
             List<EnvelopeResponse> envelopes = budgetService.getEnvelopesByBudget(budgetId, email);
             return ResponseEntity.ok(envelopes);
         } catch (IllegalArgumentException e) {
@@ -153,7 +150,6 @@ public class BudgetController {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("Error activating budget: " + e.getMessage());
         }
     }
-
 
     // New: DELETE /budgets/{budgetId}
     @DeleteMapping("/{budgetId}")
@@ -191,7 +187,6 @@ public class BudgetController {
     // 12/04/2025 --->// New: Top-up Budget
     @PostMapping("/{id}/topup")
     public ResponseEntity<?> topUpBudget(@PathVariable Long id, @RequestBody Map<String, Object> requestBody, Authentication authentication) {
-        System.out.println("POST /budgets/" + id + "/topup called");
         try {
             String email = authentication.getName();
             Double amount = Double.valueOf(requestBody.get("amount").toString());
@@ -209,7 +204,6 @@ public class BudgetController {
     // New: Extend Budget// 13/04/2025 --->
     @PostMapping("/{id}/extend")
     public ResponseEntity<?> extendBudget(@PathVariable Long id, @RequestBody Map<String, Object> requestBody, Authentication authentication) {
-        System.out.println("POST /budgets/" + id + "/extend called");
         try {
             String email = authentication.getName();
             String newName = (String) requestBody.get("new_name");
@@ -234,16 +228,6 @@ public class BudgetController {
         } catch (Exception e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }
-    }
-
-    // 14/04/2025
-    @ExceptionHandler(TncAcceptanceRequiredException.class)
-    public ResponseEntity<?> handleTncAcceptanceRequired(TncAcceptanceRequiredException ex) {
-        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of(
-                "error", ex.getMessage(),          // Use commas (,) instead of colons (:)
-                "tnc", ex.getTncContent(),
-                "version", ex.getTncVersion()
-        )); // Closing parenthesis and semicolon
     }
 
     @PostMapping("/envelopes/lock")
