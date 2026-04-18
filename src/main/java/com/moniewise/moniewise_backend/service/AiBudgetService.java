@@ -555,7 +555,11 @@ public class AiBudgetService {
             mergedItems = normalizeItems(mergedItems, 100.0);
         }
 
+        applyMoveAmountIntent(latestMessage, request, mergedItems);
+        applyReduceEnvelopeIntent(latestMessage, request, mergedItems);
         applyUnallocatedAmountIntent(latestMessage, request, mergedItems);
+        applySplitRemainingIntent(latestMessage, request, mergedItems);
+        pruneZeroPercentSuggestions(mergedItems);
         return mergedItems;
     }
 
@@ -599,27 +603,7 @@ public class AiBudgetService {
             return Collections.emptyList();
         }
 
-        List<EnvelopeKeyword> keywords = List.of(
-            new EnvelopeKeyword("emergency buffer", "Emergency Buffer", "security", "emergency"),
-            new EnvelopeKeyword("school runs", "School Runs", "education", chooseRecurringType(toStarterRequest(request), "education")),
-            new EnvelopeKeyword("work tools", "Work Tools", "tools", chooseRecurringType(toStarterRequest(request), "tools")),
-            new EnvelopeKeyword("client transport", "Client Transport", "car", chooseRecurringType(toStarterRequest(request), "car")),
-            new EnvelopeKeyword("rent", "Rent", "home", chooseRecurringType(toStarterRequest(request), "home")),
-            new EnvelopeKeyword("bills", "Bills", "home", chooseRecurringType(toStarterRequest(request), "home")),
-            new EnvelopeKeyword("groceries", "Groceries", "groceries", chooseRecurringType(toStarterRequest(request), "groceries")),
-            new EnvelopeKeyword("food", "Food", "food", chooseRecurringType(toStarterRequest(request), "food")),
-            new EnvelopeKeyword("transport", "Transport", "car", chooseRecurringType(toStarterRequest(request), "car")),
-            new EnvelopeKeyword("savings", "Savings", "savings", "dynamic"),
-            new EnvelopeKeyword("data", "Data", "internet", chooseRecurringType(toStarterRequest(request), "internet")),
-            new EnvelopeKeyword("internet", "Internet", "internet", chooseRecurringType(toStarterRequest(request), "internet")),
-            new EnvelopeKeyword("tithe", "Tithe", "faith", "weekly"),
-            new EnvelopeKeyword("offering", "Offering", "faith", "weekly"),
-            new EnvelopeKeyword("travel", "Travel", "flight", "dynamic"),
-            new EnvelopeKeyword("education", "Education", "education", chooseRecurringType(toStarterRequest(request), "education")),
-            new EnvelopeKeyword("lunch", "Lunch", "lunch", "daily"),
-            new EnvelopeKeyword("home", "Home", "home", chooseRecurringType(toStarterRequest(request), "home")),
-            new EnvelopeKeyword("misc", "Misc", "more", "daily")
-        );
+        List<EnvelopeKeyword> keywords = buildEnvelopeKeywords(request);
 
         String normalizedMessage = latestMessage.toLowerCase(Locale.ROOT);
         List<AiEnvelopeSuggestion> suggestions = new ArrayList<>();
@@ -682,6 +666,195 @@ public class AiBudgetService {
         }
 
         return null;
+    }
+
+    private List<EnvelopeKeyword> buildEnvelopeKeywords(AiBudgetAssistantTurnRequest request) {
+        return List.of(
+            new EnvelopeKeyword("emergency buffer", "Emergency Buffer", "security", "emergency"),
+            new EnvelopeKeyword("school runs", "School Runs", "education", chooseRecurringType(toStarterRequest(request), "education")),
+            new EnvelopeKeyword("work tools", "Work Tools", "tools", chooseRecurringType(toStarterRequest(request), "tools")),
+            new EnvelopeKeyword("client transport", "Client Transport", "car", chooseRecurringType(toStarterRequest(request), "car")),
+            new EnvelopeKeyword("rent", "Rent", "home", chooseRecurringType(toStarterRequest(request), "home")),
+            new EnvelopeKeyword("bills", "Bills", "home", chooseRecurringType(toStarterRequest(request), "home")),
+            new EnvelopeKeyword("groceries", "Groceries", "groceries", chooseRecurringType(toStarterRequest(request), "groceries")),
+            new EnvelopeKeyword("food", "Food", "food", chooseRecurringType(toStarterRequest(request), "food")),
+            new EnvelopeKeyword("transport", "Transport", "car", chooseRecurringType(toStarterRequest(request), "car")),
+            new EnvelopeKeyword("savings", "Savings", "savings", "dynamic"),
+            new EnvelopeKeyword("data", "Data", "internet", chooseRecurringType(toStarterRequest(request), "internet")),
+            new EnvelopeKeyword("internet", "Internet", "internet", chooseRecurringType(toStarterRequest(request), "internet")),
+            new EnvelopeKeyword("tithe", "Tithe", "faith", "weekly"),
+            new EnvelopeKeyword("offering", "Offering", "faith", "weekly"),
+            new EnvelopeKeyword("travel", "Travel", "flight", "dynamic"),
+            new EnvelopeKeyword("education", "Education", "education", chooseRecurringType(toStarterRequest(request), "education")),
+            new EnvelopeKeyword("lunch", "Lunch", "lunch", "daily"),
+            new EnvelopeKeyword("home", "Home", "home", chooseRecurringType(toStarterRequest(request), "home")),
+            new EnvelopeKeyword("misc", "Misc", "more", "daily")
+        );
+    }
+
+    private void applyMoveAmountIntent(
+        String latestMessage,
+        AiBudgetAssistantTurnRequest request,
+        List<AiEnvelopeSuggestion> mergedItems
+    ) {
+        if (latestMessage == null || latestMessage.isBlank() || mergedItems.isEmpty()) {
+            return;
+        }
+
+        String normalized = latestMessage.toLowerCase(Locale.ROOT);
+        if (!normalized.contains("move") || !normalized.contains(" from ") || !normalized.contains(" to ")) {
+            return;
+        }
+
+        Pattern pattern = Pattern.compile(
+            "move\\s+(?:about\\s+)?(?:ngn|naira|₦)?\\s*([\\d,]+(?:\\.\\d+)?)\\s*([kKmM]?)\\s+from\\s+(.+?)\\s+to\\s+(.+)"
+        );
+        Matcher matcher = pattern.matcher(normalized);
+        if (!matcher.find()) {
+            return;
+        }
+
+        Double amount = parseCurrencyAmount(matcher.group(1), matcher.group(2));
+        Double totalBudget = request.getTotalBudget();
+        if (amount == null || amount <= 0 || totalBudget == null || totalBudget <= 0) {
+            return;
+        }
+
+        List<EnvelopeKeyword> keywords = buildEnvelopeKeywords(request);
+        EnvelopeKeyword sourceKeyword = matchEnvelopeKeyword(matcher.group(3), keywords);
+        EnvelopeKeyword targetKeyword = matchEnvelopeKeyword(matcher.group(4), keywords);
+        if (sourceKeyword == null || targetKeyword == null) {
+            return;
+        }
+
+        AiEnvelopeSuggestion source = findSuggestionByLabel(mergedItems, sourceKeyword.label);
+        if (source == null || source.getPercentage() == null || source.getPercentage() <= 0) {
+            return;
+        }
+
+        AiEnvelopeSuggestion target = findSuggestionByLabel(mergedItems, targetKeyword.label);
+        if (target == null) {
+            target = buildItem(targetKeyword.label, 0.0, targetKeyword.conditionType, targetKeyword.category);
+            mergedItems.add(target);
+        }
+
+        double percentageToMove = Math.min(source.getPercentage(), (amount / totalBudget) * 100.0);
+        if (percentageToMove <= 0) {
+            return;
+        }
+
+        source.setPercentage(round1(Math.max(0.0, source.getPercentage() - percentageToMove)));
+        target.setPercentage(round1((target.getPercentage() == null ? 0.0 : target.getPercentage()) + percentageToMove));
+    }
+
+    private void applyReduceEnvelopeIntent(
+        String latestMessage,
+        AiBudgetAssistantTurnRequest request,
+        List<AiEnvelopeSuggestion> mergedItems
+    ) {
+        if (latestMessage == null || latestMessage.isBlank() || mergedItems.isEmpty()) {
+            return;
+        }
+
+        String normalized = latestMessage.toLowerCase(Locale.ROOT);
+        if (!containsAny(normalized, "reduce", "cut", "lower")) {
+            return;
+        }
+
+        List<EnvelopeKeyword> keywords = buildEnvelopeKeywords(request);
+        Pattern percentPattern = Pattern.compile("(?:reduce|cut|lower)\\s+(.+?)\\s+by\\s+(\\d{1,3}(?:\\.\\d+)?)\\s*%");
+        Matcher percentMatcher = percentPattern.matcher(normalized);
+        if (percentMatcher.find()) {
+            EnvelopeKeyword keyword = matchEnvelopeKeyword(percentMatcher.group(1), keywords);
+            Double reduction = parsePercentage(percentMatcher.group(2));
+            if (keyword == null || reduction == null || reduction <= 0) {
+                return;
+            }
+
+            AiEnvelopeSuggestion item = findSuggestionByLabel(mergedItems, keyword.label);
+            if (item == null || item.getPercentage() == null) {
+                return;
+            }
+
+            item.setPercentage(round1(Math.max(0.0, item.getPercentage() - reduction)));
+            return;
+        }
+
+        Pattern amountPattern = Pattern.compile(
+            "(?:reduce|cut|lower)\\s+(.+?)\\s+by\\s+(?:ngn|naira|₦)?\\s*([\\d,]+(?:\\.\\d+)?)\\s*([kKmM]?)"
+        );
+        Matcher amountMatcher = amountPattern.matcher(normalized);
+        if (!amountMatcher.find()) {
+            return;
+        }
+
+        EnvelopeKeyword keyword = matchEnvelopeKeyword(amountMatcher.group(1), keywords);
+        Double amount = parseCurrencyAmount(amountMatcher.group(2), amountMatcher.group(3));
+        Double totalBudget = request.getTotalBudget();
+        if (keyword == null || amount == null || totalBudget == null || totalBudget <= 0) {
+            return;
+        }
+
+        AiEnvelopeSuggestion item = findSuggestionByLabel(mergedItems, keyword.label);
+        if (item == null || item.getPercentage() == null) {
+            return;
+        }
+
+        double reduction = (amount / totalBudget) * 100.0;
+        item.setPercentage(round1(Math.max(0.0, item.getPercentage() - reduction)));
+    }
+
+    private void applySplitRemainingIntent(
+        String latestMessage,
+        AiBudgetAssistantTurnRequest request,
+        List<AiEnvelopeSuggestion> mergedItems
+    ) {
+        if (latestMessage == null || latestMessage.isBlank()) {
+            return;
+        }
+
+        String normalized = latestMessage.toLowerCase(Locale.ROOT);
+        if (!containsAny(normalized, "split the rest", "split the remaining", "share the rest", "share the remaining")) {
+            return;
+        }
+
+        double remainingPercentage = Math.max(0.0, 100.0 - sumPercentages(mergedItems));
+        if (remainingPercentage <= 0.05) {
+            return;
+        }
+
+        String targetSegment = normalized;
+        int betweenIndex = normalized.indexOf("between ");
+        if (betweenIndex >= 0) {
+            targetSegment = normalized.substring(betweenIndex + "between ".length());
+        } else {
+            int intoIndex = normalized.indexOf("into ");
+            if (intoIndex >= 0) {
+                targetSegment = normalized.substring(intoIndex + "into ".length());
+            }
+        }
+
+        List<EnvelopeKeyword> targets = findMentionedKeywords(targetSegment, buildEnvelopeKeywords(request));
+        if (targets.isEmpty()) {
+            return;
+        }
+
+        double shared = round1(remainingPercentage / targets.size());
+        double assigned = 0.0;
+        for (int i = 0; i < targets.size(); i++) {
+            EnvelopeKeyword keyword = targets.get(i);
+            AiEnvelopeSuggestion item = findSuggestionByLabel(mergedItems, keyword.label);
+            if (item == null) {
+                item = buildItem(keyword.label, 0.0, keyword.conditionType, keyword.category);
+                mergedItems.add(item);
+            }
+
+            double addition = i == targets.size() - 1
+                ? round1(Math.max(0.0, remainingPercentage - assigned))
+                : shared;
+            item.setPercentage(round1((item.getPercentage() == null ? 0.0 : item.getPercentage()) + addition));
+            assigned += addition;
+        }
     }
 
     private void applyUnallocatedAmountIntent(
@@ -775,6 +948,59 @@ public class AiBudgetService {
         } catch (Exception ignored) {
             return null;
         }
+    }
+
+    private EnvelopeKeyword matchEnvelopeKeyword(String text, List<EnvelopeKeyword> keywords) {
+        if (text == null || text.isBlank()) {
+            return null;
+        }
+
+        String normalized = text.toLowerCase(Locale.ROOT);
+        EnvelopeKeyword matched = null;
+        for (EnvelopeKeyword keyword : keywords) {
+            if (!normalized.contains(keyword.phrase)) {
+                continue;
+            }
+            if (matched == null || keyword.phrase.length() > matched.phrase.length()) {
+                matched = keyword;
+            }
+        }
+        return matched;
+    }
+
+    private List<EnvelopeKeyword> findMentionedKeywords(String text, List<EnvelopeKeyword> keywords) {
+        if (text == null || text.isBlank()) {
+            return Collections.emptyList();
+        }
+
+        String normalized = text.toLowerCase(Locale.ROOT);
+        List<EnvelopeKeyword> matches = new ArrayList<>();
+        for (EnvelopeKeyword keyword : keywords) {
+            if (!normalized.contains(keyword.phrase)) {
+                continue;
+            }
+
+            boolean exists = matches.stream()
+                .anyMatch(item -> item.label.equalsIgnoreCase(keyword.label));
+            if (!exists) {
+                matches.add(keyword);
+            }
+        }
+
+        return matches;
+    }
+
+    private AiEnvelopeSuggestion findSuggestionByLabel(List<AiEnvelopeSuggestion> items, String label) {
+        for (AiEnvelopeSuggestion item : items) {
+            if (item.getName() != null && item.getName().equalsIgnoreCase(label)) {
+                return item;
+            }
+        }
+        return null;
+    }
+
+    private void pruneZeroPercentSuggestions(List<AiEnvelopeSuggestion> items) {
+        items.removeIf(item -> item.getPercentage() == null || item.getPercentage() < 0.1);
     }
 
     private Double parsePercentage(String raw) {
@@ -938,6 +1164,43 @@ public class AiBudgetService {
             );
         }
 
+        if (containsAny(latestMessage, "move") && containsAny(latestMessage, " from ", " to ")) {
+            if (remainingAmount <= 0.01) {
+                return "I have moved that amount within the budget and kept the full plan allocated. If you want, we can still rebalance another envelope before you finalize.";
+            }
+            return String.format(
+                Locale.ROOT,
+                "I have moved that amount and you still have %s %.2f left unassigned. Tell me where you want the rest to go or say you are done if this balance should stay free for now.",
+                safeCurrency(request.getCurrency()),
+                round2(remainingAmount)
+            );
+        }
+
+        if (containsAny(latestMessage, "reduce", "cut", "lower")) {
+            return String.format(
+                Locale.ROOT,
+                "I have reduced that envelope and the plan now has %s %.2f left to work with. You can keep that balance free, move it into another envelope, or ask me to split the rest.",
+                safeCurrency(request.getCurrency()),
+                round2(remainingAmount)
+            );
+        }
+
+        if (containsAny(latestMessage, "split the rest", "split the remaining", "share the rest", "share the remaining")) {
+            if (remainingAmount <= 0.01) {
+                return "I have shared the remaining balance across those envelopes, so the plan is now fully allocated. If it looks right to you, say you are done and I will treat it as ready to finalize.";
+            }
+            return String.format(
+                Locale.ROOT,
+                "I have split part of the remaining balance across those envelopes, and you still have %s %.2f left to place.",
+                safeCurrency(request.getCurrency()),
+                round2(remainingAmount)
+            );
+        }
+
+        if (containsAny(latestMessage, "adjust", "change", "reduce", "increase", "move", "shift", "repurpose")) {
+            return "I can help rebalance this, but I need one clearer instruction. Tell me which envelope to reduce, increase, or move money into, and I will recalculate what remains right away.";
+        }
+
         if (remainingAmount <= 0.01) {
             if (containsAny(latestMessage, "why", "left", "remaining", "0.00", "zero")) {
                 return "The plan is fully allocated, so there is no money left to assign. The continue button is still waiting for your final confirmation before I mark this budget as ready.";
@@ -968,6 +1231,18 @@ public class AiBudgetService {
         Double amountToFree = extractRequestedUnallocatedAmount(request.getLatestUserMessage());
         if (amountToFree != null && amountToFree > 0 && remainingAmount > 0.01) {
             return "This update reduces the current envelopes proportionally so part of the budget can stay free for repurposing without discarding the rest of the plan.";
+        }
+        String latestMessage = request.getLatestUserMessage() == null
+            ? ""
+            : request.getLatestUserMessage().toLowerCase(Locale.ROOT);
+        if (containsAny(latestMessage, "move") && containsAny(latestMessage, " from ", " to ")) {
+            return "This update shifts money between existing envelopes while preserving the rest of the budget structure.";
+        }
+        if (containsAny(latestMessage, "reduce", "cut", "lower")) {
+            return "This update frees some budget from the selected envelope so the remaining balance can be reassigned more intentionally.";
+        }
+        if (containsAny(latestMessage, "split the rest", "split the remaining", "share the rest", "share the remaining")) {
+            return "This update spreads the remaining budget across the named envelopes instead of rebuilding the entire plan.";
         }
         if (remainingAmount > request.getTotalBudget() * 0.1) {
             return "This draft keeps the current envelope choices intact while showing what remains so the next decision can stay realistic.";

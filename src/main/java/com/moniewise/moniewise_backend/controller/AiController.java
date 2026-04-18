@@ -1,5 +1,6 @@
 package com.moniewise.moniewise_backend.controller;
 
+import java.util.Map;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
@@ -11,6 +12,7 @@ import com.moniewise.moniewise_backend.dto.response.AiBudgetAllocationResponse;
 import com.moniewise.moniewise_backend.dto.response.AiDashboardNextActionResponse;
 import com.moniewise.moniewise_backend.dto.response.AiStarterEnvelopeResponse;
 import com.moniewise.moniewise_backend.service.AiBudgetService;
+import com.moniewise.moniewise_backend.service.GeminiService;
 import com.moniewise.moniewise_backend.service.AiInsightService;
 
 @RestController
@@ -19,13 +21,16 @@ public class AiController {
 
     private final AiBudgetService aiBudgetService;
     private final AiInsightService aiInsightService;
+    private final GeminiService geminiService;
 
     public AiController(
         AiBudgetService aiBudgetService,
-        AiInsightService aiInsightService
+        AiInsightService aiInsightService,
+        GeminiService geminiService
     ) {
         this.aiBudgetService = aiBudgetService;
         this.aiInsightService = aiInsightService;
+        this.geminiService = geminiService;
     }
 
     @PostMapping("/starter-envelopes")
@@ -65,5 +70,10 @@ public class AiController {
         AiDashboardNextActionResponse response =
             aiInsightService.getDashboardNextAction(authentication.getName());
         return ResponseEntity.ok(response);
+    }
+
+    @GetMapping("/gemini-status")
+    public ResponseEntity<Map<String, Object>> getGeminiStatus() {
+        return ResponseEntity.ok(geminiService.getConfigurationStatus());
     }
 }
