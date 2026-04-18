@@ -4,7 +4,9 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
+import com.moniewise.moniewise_backend.dto.request.AiBudgetAssistantTurnRequest;
 import com.moniewise.moniewise_backend.dto.request.AiStarterEnvelopeRequest;
+import com.moniewise.moniewise_backend.dto.response.AiBudgetAssistantTurnResponse;
 import com.moniewise.moniewise_backend.dto.response.AiBudgetAllocationResponse;
 import com.moniewise.moniewise_backend.dto.response.AiDashboardNextActionResponse;
 import com.moniewise.moniewise_backend.dto.response.AiStarterEnvelopeResponse;
@@ -42,6 +44,16 @@ public class AiController {
     ) {
         AiBudgetAllocationResponse response =
             aiBudgetService.generateBudgetAllocation(request);
+
+        return ResponseEntity.ok(response);
+    }
+
+    @PostMapping("/budget-assistant/turn")
+    public ResponseEntity<AiBudgetAssistantTurnResponse> processBudgetAssistantTurn(
+        @RequestBody AiBudgetAssistantTurnRequest request
+    ) {
+        AiBudgetAssistantTurnResponse response =
+            aiBudgetService.processBudgetAssistantTurn(request);
 
         return ResponseEntity.ok(response);
     }

@@ -117,6 +117,93 @@ public class AiPromptService {
         );
     }
 
+    public String buildBudgetAssistantTurnPrompt(
+        String budgetName,
+        Double totalBudget,
+        Integer durationDays,
+        String goal,
+        String currency,
+        String latestUserMessage,
+        String currentEnvelopesJson,
+        String conversationJson,
+        double allocatedPercentage,
+        double remainingAmount
+    ) {
+        return """
+            You are Wisemonie's personal budget planning assistant.
+
+            Return valid JSON only.
+            Do not include markdown.
+            Do not include commentary outside JSON.
+
+            Your job:
+            - Talk like a smart budgeting assistant, not a template generator.
+            - Help the user name the envelopes they actually want.
+            - Respect user-specified envelope names when they are practical.
+            - Recalculate the plan after every turn based on what is already allocated and what remains.
+            - Be realistic and collaborative in a Nigerian budgeting context.
+            - If the user changes one envelope, preserve the others unless there is a good reason to rebalance them.
+
+            Hard rules:
+            - Return the FULL current envelope plan after this turn, not only the changed items.
+            - Keep envelope names short, natural, and specific.
+            - The final data must preserve only: name, percentage, conditionType, category.
+            - Only use condition types from: daily, weekly, dynamic, emergency
+            - Only use categories from: savings, security, food, car, home, education, flight, tools, gift, work, internet, faith, groceries, lunch, more
+            - Total percentage must not exceed 100
+            - If there is still meaningful money left to plan, do not mark readyToFinalize as true.
+            - If the user clearly agrees the plan is done and the allocation is effectively complete, set readyToFinalize to true.
+            - assistantMessage should feel conversational and mention what remains when useful.
+            - reasoning should briefly explain the planning logic in 1 or 2 short sentences.
+            - source must be "gemini"
+
+            Budget context:
+            - budgetName: %s
+            - totalBudget: %s
+            - durationDays: %s
+            - goal: %s
+            - currency: %s
+            - currentlyAllocatedPercentage: %.1f
+            - remainingAmount: %.2f
+
+            Latest user message:
+            %s
+
+            Current envelope plan JSON:
+            %s
+
+            Recent conversation JSON:
+            %s
+
+            Return this exact JSON shape:
+            {
+              "assistantMessage": "string",
+              "reasoning": "string",
+              "source": "gemini",
+              "readyToFinalize": false,
+              "envelopes": [
+                {
+                  "name": "string",
+                  "percentage": 0,
+                  "conditionType": "daily|weekly|dynamic|emergency",
+                  "category": "savings|security|food|car|home|education|flight|tools|gift|work|internet|faith|groceries|lunch|more"
+                }
+              ]
+            }
+            """.formatted(
+            budgetName,
+            totalBudget,
+            durationDays,
+            goal,
+            currency,
+            allocatedPercentage,
+            remainingAmount,
+            latestUserMessage,
+            currentEnvelopesJson,
+            conversationJson
+        );
+    }
+
     public String buildDashboardNextActionPrompt(
         String userName,
         double walletBalance,

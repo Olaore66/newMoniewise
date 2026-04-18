@@ -1,7 +1,10 @@
 package com.moniewise.moniewise_backend.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.moniewise.moniewise_backend.dto.request.AiBudgetAssistantMessage;
+import com.moniewise.moniewise_backend.dto.request.AiBudgetAssistantTurnRequest;
 import com.moniewise.moniewise_backend.dto.request.AiStarterEnvelopeRequest;
+import com.moniewise.moniewise_backend.dto.response.AiBudgetAssistantTurnResponse;
 import com.moniewise.moniewise_backend.dto.response.AiBudgetAllocationResponse;
 import com.moniewise.moniewise_backend.dto.response.AiEnvelopeSuggestion;
 import com.moniewise.moniewise_backend.dto.response.AiStarterEnvelopeResponse;
@@ -10,10 +13,13 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 @Service
 public class AiBudgetService {
@@ -74,6 +80,54 @@ public class AiBudgetService {
         }
     }
 
+    public AiBudgetAssistantTurnResponse processBudgetAssistantTurn(
+        AiBudgetAssistantTurnRequest request
+    ) {
+        validateAssistantTurnRequest(request);
+
+        try {
+            List<AiEnvelopeSuggestion> currentItems = request.getEnvelopes() == null
+                ? Collections.emptyList()
+                : request.getEnvelopes();
+            List<AiEnvelopeSuggestion> normalizedCurrent = normalizeItems(currentItems, 100.0);
+            double allocatedPercentage = sumPercentages(normalizedCurrent);
+            double remainingAmount = computeRemainingAmount(request.getTotalBudget(), allocatedPercentage);
+
+            String currentEnvelopesJson = objectMapper.writeValueAsString(normalizedCurrent);
+            String conversationJson = objectMapper.writeValueAsString(trimConversation(request.getMessages()));
+            String prompt = aiPromptService.buildBudgetAssistantTurnPrompt(
+                safeBudgetName(request.getBudgetName()),
+                request.getTotalBudget(),
+                request.getDurationDays(),
+                safeGoal(request.getGoal()),
+                safeCurrency(request.getCurrency()),
+                request.getLatestUserMessage().trim(),
+                currentEnvelopesJson,
+                conversationJson,
+                allocatedPercentage,
+                remainingAmount
+            );
+
+            String rawText = geminiService.generateText(prompt);
+            String cleanedText = cleanJson(rawText);
+
+            AiBudgetAssistantTurnResponse response =
+                objectMapper.readValue(cleanedText, AiBudgetAssistantTurnResponse.class);
+
+            normalizeAssistantResponse(response, request);
+            validateAssistantResponse(response);
+            response.setSource("gemini");
+            return response;
+        } catch (Exception e) {
+            logger.warn(
+                "Falling back to conversational assistant plan for latestUserMessage='{}': {}",
+                request.getLatestUserMessage(),
+                e.getMessage()
+            );
+            return buildFallbackAssistantResponse(request);
+        }
+    }
+
     private void validateRequest(AiStarterEnvelopeRequest request) {
         if (request.getTotalBudget() == null || request.getTotalBudget() <= 0) {
             throw new IllegalArgumentException("totalBudget must be greater than 0");
@@ -85,6 +139,24 @@ public class AiBudgetService {
 
         if (request.getCurrency() == null || request.getCurrency().isBlank()) {
             throw new IllegalArgumentException("currency is required");
+        }
+    }
+
+    private void validateAssistantTurnRequest(AiBudgetAssistantTurnRequest request) {
+        if (request.getTotalBudget() == null || request.getTotalBudget() <= 0) {
+            throw new IllegalArgumentException("totalBudget must be greater than 0");
+        }
+
+        if (request.getDurationDays() == null || request.getDurationDays() <= 0) {
+            throw new IllegalArgumentException("durationDays must be greater than 0");
+        }
+
+        if (request.getCurrency() == null || request.getCurrency().isBlank()) {
+            throw new IllegalArgumentException("currency is required");
+        }
+
+        if (request.getLatestUserMessage() == null || request.getLatestUserMessage().isBlank()) {
+            throw new IllegalArgumentException("latestUserMessage is required");
         }
     }
 
@@ -110,6 +182,17 @@ public class AiBudgetService {
         }
 
         response.setTotalAllocatedPercentage(total);
+    }
+
+    private void validateAssistantResponse(AiBudgetAssistantTurnResponse response) {
+        if (response == null || response.getEnvelopes() == null) {
+            throw new IllegalArgumentException("Invalid assistant response");
+        }
+
+        double total = validateSuggestionItems(response.getEnvelopes());
+        if (total > 100.0) {
+            throw new IllegalArgumentException("Total percentage exceeds 100");
+        }
     }
 
     private double validateSuggestionItems(List<AiEnvelopeSuggestion> items) {
@@ -164,6 +247,37 @@ public class AiBudgetService {
         List<AiEnvelopeSuggestion> normalized = normalizeItems(response.getEnvelopes(), 95.0);
         response.setEnvelopes(normalized);
         response.setTotalAllocatedPercentage(sumPercentages(normalized));
+    }
+
+    private void normalizeAssistantResponse(
+        AiBudgetAssistantTurnResponse response,
+        AiBudgetAssistantTurnRequest request
+    ) {
+        if (response == null) {
+            return;
+        }
+
+        List<AiEnvelopeSuggestion> normalized =
+            normalizeItems(response.getEnvelopes(), 100.0);
+        double total = sumPercentages(normalized);
+        double remainingAmount = computeRemainingAmount(request.getTotalBudget(), total);
+
+        response.setEnvelopes(normalized);
+        response.setTotalAllocatedPercentage(round1(total));
+        response.setRemainingAmount(round2(remainingAmount));
+
+        if (response.getAssistantMessage() == null || response.getAssistantMessage().isBlank()) {
+            response.setAssistantMessage(buildAssistantFollowUpMessage(request, normalized, remainingAmount));
+        }
+
+        if (response.getReasoning() == null || response.getReasoning().isBlank()) {
+            response.setReasoning(buildAssistantReasoning(request, normalized, remainingAmount));
+        }
+
+        boolean ready = Boolean.TRUE.equals(response.getReadyToFinalize())
+            && total >= 90.0
+            && remainingAmount <= request.getTotalBudget() * 0.1;
+        response.setReadyToFinalize(ready);
     }
 
     private List<AiEnvelopeSuggestion> normalizeItems(List<AiEnvelopeSuggestion> items, double targetCap) {
@@ -280,6 +394,35 @@ public class AiBudgetService {
         return "more";
     }
 
+    private AiBudgetAssistantTurnResponse buildFallbackAssistantResponse(
+        AiBudgetAssistantTurnRequest request
+    ) {
+        AiBudgetAssistantTurnResponse response = new AiBudgetAssistantTurnResponse();
+        List<AiEnvelopeSuggestion> currentItems = request.getEnvelopes() == null
+            ? Collections.emptyList()
+            : request.getEnvelopes();
+        List<AiEnvelopeSuggestion> normalizedCurrent = normalizeItems(currentItems, 100.0);
+
+        List<AiEnvelopeSuggestion> envelopes = buildAssistantFallbackSuggestions(
+            request,
+            normalizedCurrent
+        );
+        double total = sumPercentages(envelopes);
+        double remaining = computeRemainingAmount(request.getTotalBudget(), total);
+        boolean userConfirmed = isAffirmingCompletion(request.getLatestUserMessage());
+
+        response.setEnvelopes(envelopes);
+        response.setAssistantMessage(buildAssistantFollowUpMessage(request, envelopes, remaining));
+        response.setReasoning(buildAssistantReasoning(request, envelopes, remaining));
+        response.setReadyToFinalize(
+            userConfirmed && total >= 90.0 && remaining <= request.getTotalBudget() * 0.1
+        );
+        response.setTotalAllocatedPercentage(round1(total));
+        response.setRemainingAmount(round2(remaining));
+        response.setSource("fallback");
+        return response;
+    }
+
     private AiStarterEnvelopeResponse buildFallbackStarterPlan(AiStarterEnvelopeRequest request) {
         AiStarterEnvelopeResponse response = new AiStarterEnvelopeResponse();
         response.setTitle(buildHeuristicTitle(request, false));
@@ -362,6 +505,222 @@ public class AiBudgetService {
         return result;
     }
 
+    private List<AiEnvelopeSuggestion> buildAssistantFallbackSuggestions(
+        AiBudgetAssistantTurnRequest request,
+        List<AiEnvelopeSuggestion> normalizedCurrent
+    ) {
+        String latestMessage = request.getLatestUserMessage() == null
+            ? ""
+            : request.getLatestUserMessage().trim();
+        List<AiEnvelopeSuggestion> requestedFromMessage = parseRequestedEnvelopes(
+            latestMessage,
+            request
+        );
+
+        if (normalizedCurrent.isEmpty() && requestedFromMessage.isEmpty()) {
+            return buildHeuristicSuggestions(toStarterRequest(request), 100.0);
+        }
+
+        LinkedHashMap<String, AiEnvelopeSuggestion> merged = new LinkedHashMap<>();
+        for (AiEnvelopeSuggestion item : normalizedCurrent) {
+            merged.put(item.getName().trim().toLowerCase(Locale.ROOT), cloneSuggestion(item));
+        }
+
+        for (AiEnvelopeSuggestion requested : requestedFromMessage) {
+            String key = requested.getName().trim().toLowerCase(Locale.ROOT);
+            AiEnvelopeSuggestion existing = merged.get(key);
+            if (existing == null) {
+                merged.put(key, requested);
+                continue;
+            }
+
+            existing.setCategory(normalizeCategory(requested.getCategory()));
+            existing.setConditionType(normalizeConditionType(requested.getConditionType()));
+            if (requested.getPercentage() != null && requested.getPercentage() > 0) {
+                existing.setPercentage(requested.getPercentage());
+            }
+        }
+
+        List<AiEnvelopeSuggestion> mergedItems = new ArrayList<>(merged.values());
+        boolean hasExplicitPercentages = requestedFromMessage.stream()
+            .anyMatch(item -> item.getPercentage() != null && item.getPercentage() > 0);
+
+        if (!hasExplicitPercentages) {
+            rebalanceAssistantSuggestions(
+                mergedItems,
+                normalizedCurrent,
+                request.getTotalBudget() == null ? 100.0 : 100.0
+            );
+        } else {
+            mergedItems = normalizeItems(mergedItems, 100.0);
+        }
+
+        return mergedItems;
+    }
+
+    private void rebalanceAssistantSuggestions(
+        List<AiEnvelopeSuggestion> mergedItems,
+        List<AiEnvelopeSuggestion> normalizedCurrent,
+        double targetTotal
+    ) {
+        if (mergedItems.isEmpty()) {
+            return;
+        }
+
+        double currentTotal = sumPercentages(mergedItems);
+        if (currentTotal <= 0) {
+            double equalShare = round1(targetTotal / mergedItems.size());
+            double running = 0.0;
+            for (int i = 0; i < mergedItems.size(); i++) {
+                double pct = i == mergedItems.size() - 1
+                    ? round1(targetTotal - running)
+                    : equalShare;
+                mergedItems.get(i).setPercentage(Math.max(4.0, pct));
+                running += mergedItems.get(i).getPercentage();
+            }
+            return;
+        }
+
+        if (!normalizedCurrent.isEmpty() && currentTotal <= targetTotal) {
+            return;
+        }
+
+        List<AiEnvelopeSuggestion> normalized = normalizeItems(mergedItems, targetTotal);
+        mergedItems.clear();
+        mergedItems.addAll(normalized);
+    }
+
+    private List<AiEnvelopeSuggestion> parseRequestedEnvelopes(
+        String latestMessage,
+        AiBudgetAssistantTurnRequest request
+    ) {
+        if (latestMessage.isBlank()) {
+            return Collections.emptyList();
+        }
+
+        List<EnvelopeKeyword> keywords = List.of(
+            new EnvelopeKeyword("emergency buffer", "Emergency Buffer", "security", "emergency"),
+            new EnvelopeKeyword("school runs", "School Runs", "education", chooseRecurringType(toStarterRequest(request), "education")),
+            new EnvelopeKeyword("work tools", "Work Tools", "tools", chooseRecurringType(toStarterRequest(request), "tools")),
+            new EnvelopeKeyword("client transport", "Client Transport", "car", chooseRecurringType(toStarterRequest(request), "car")),
+            new EnvelopeKeyword("rent", "Rent", "home", chooseRecurringType(toStarterRequest(request), "home")),
+            new EnvelopeKeyword("bills", "Bills", "home", chooseRecurringType(toStarterRequest(request), "home")),
+            new EnvelopeKeyword("groceries", "Groceries", "groceries", chooseRecurringType(toStarterRequest(request), "groceries")),
+            new EnvelopeKeyword("food", "Food", "food", chooseRecurringType(toStarterRequest(request), "food")),
+            new EnvelopeKeyword("transport", "Transport", "car", chooseRecurringType(toStarterRequest(request), "car")),
+            new EnvelopeKeyword("savings", "Savings", "savings", "dynamic"),
+            new EnvelopeKeyword("data", "Data", "internet", chooseRecurringType(toStarterRequest(request), "internet")),
+            new EnvelopeKeyword("internet", "Internet", "internet", chooseRecurringType(toStarterRequest(request), "internet")),
+            new EnvelopeKeyword("tithe", "Tithe", "faith", "weekly"),
+            new EnvelopeKeyword("offering", "Offering", "faith", "weekly"),
+            new EnvelopeKeyword("travel", "Travel", "flight", "dynamic"),
+            new EnvelopeKeyword("education", "Education", "education", chooseRecurringType(toStarterRequest(request), "education")),
+            new EnvelopeKeyword("lunch", "Lunch", "lunch", "daily"),
+            new EnvelopeKeyword("home", "Home", "home", chooseRecurringType(toStarterRequest(request), "home")),
+            new EnvelopeKeyword("misc", "Misc", "more", "daily")
+        );
+
+        String normalizedMessage = latestMessage.toLowerCase(Locale.ROOT);
+        List<AiEnvelopeSuggestion> suggestions = new ArrayList<>();
+
+        for (EnvelopeKeyword keyword : keywords) {
+            if (!normalizedMessage.contains(keyword.phrase)) {
+                continue;
+            }
+            Double explicitPercentage = extractRequestedPercentage(normalizedMessage, keyword.phrase);
+            AiEnvelopeSuggestion item = new AiEnvelopeSuggestion();
+            item.setName(keyword.label);
+            item.setCategory(keyword.category);
+            item.setConditionType(keyword.conditionType);
+            item.setPercentage(explicitPercentage != null ? explicitPercentage : 0.0);
+            suggestions.add(item);
+        }
+
+        if (suggestions.isEmpty()) {
+            return Collections.emptyList();
+        }
+
+        long zeroCount = suggestions.stream()
+            .filter(item -> item.getPercentage() == null || item.getPercentage() <= 0)
+            .count();
+        double allocatedExplicit = suggestions.stream()
+            .mapToDouble(item -> item.getPercentage() == null ? 0.0 : item.getPercentage())
+            .sum();
+        double remaining = Math.max(0.0, 100.0 - allocatedExplicit);
+        double shared = zeroCount > 0 ? round1(remaining / zeroCount) : 0.0;
+
+        double running = allocatedExplicit;
+        for (int i = 0; i < suggestions.size(); i++) {
+            AiEnvelopeSuggestion item = suggestions.get(i);
+            if (item.getPercentage() != null && item.getPercentage() > 0) {
+                continue;
+            }
+            double pct = i == suggestions.size() - 1
+                ? round1(Math.max(0.0, 100.0 - running))
+                : shared;
+            item.setPercentage(Math.max(4.0, pct));
+            running += item.getPercentage();
+        }
+
+        return normalizeItems(suggestions, 100.0);
+    }
+
+    private Double extractRequestedPercentage(String message, String phrase) {
+        Pattern before = Pattern.compile("(\\d{1,3}(?:\\.\\d+)?)\\s*%\\s+(?:for\\s+)?"
+            + Pattern.quote(phrase));
+        Matcher beforeMatcher = before.matcher(message);
+        if (beforeMatcher.find()) {
+            return parsePercentage(beforeMatcher.group(1));
+        }
+
+        Pattern after = Pattern.compile(Pattern.quote(phrase)
+            + "(?:\\s+at|\\s+for|\\s*=|\\s*:)??\\s*(\\d{1,3}(?:\\.\\d+)?)\\s*%");
+        Matcher afterMatcher = after.matcher(message);
+        if (afterMatcher.find()) {
+            return parsePercentage(afterMatcher.group(1));
+        }
+
+        return null;
+    }
+
+    private Double parsePercentage(String raw) {
+        try {
+            double value = Double.parseDouble(raw);
+            if (value <= 0) {
+                return null;
+            }
+            return Math.min(100.0, round1(value));
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private AiEnvelopeSuggestion cloneSuggestion(AiEnvelopeSuggestion item) {
+        AiEnvelopeSuggestion clone = new AiEnvelopeSuggestion();
+        clone.setName(item.getName());
+        clone.setCategory(item.getCategory());
+        clone.setConditionType(item.getConditionType());
+        clone.setPercentage(item.getPercentage());
+        return clone;
+    }
+
+    private AiStarterEnvelopeRequest toStarterRequest(AiBudgetAssistantTurnRequest request) {
+        AiStarterEnvelopeRequest starterRequest = new AiStarterEnvelopeRequest();
+        starterRequest.setTotalBudget(request.getTotalBudget());
+        starterRequest.setDurationDays(request.getDurationDays());
+        starterRequest.setGoal(request.getGoal());
+        starterRequest.setCurrency(request.getCurrency());
+        return starterRequest;
+    }
+
+    private List<AiBudgetAssistantMessage> trimConversation(List<AiBudgetAssistantMessage> messages) {
+        if (messages == null || messages.isEmpty()) {
+            return Collections.emptyList();
+        }
+        int start = Math.max(0, messages.size() - 8);
+        return new ArrayList<>(messages.subList(start, messages.size()));
+    }
+
     private String buildHeuristicTitle(AiStarterEnvelopeRequest request, boolean allocation) {
         String goal = request.getGoal() == null ? "" : request.getGoal().toLowerCase(Locale.ROOT);
         if (containsAny(goal, "save", "savings", "buffer")) {
@@ -436,6 +795,90 @@ public class AiBudgetService {
         return Math.round(value * 10.0) / 10.0;
     }
 
+    private double round2(double value) {
+        return Math.round(value * 100.0) / 100.0;
+    }
+
+    private double computeRemainingAmount(Double totalBudget, double allocatedPercentage) {
+        if (totalBudget == null || totalBudget <= 0) {
+            return 0.0;
+        }
+        double remainingRatio = Math.max(0.0, 100.0 - allocatedPercentage) / 100.0;
+        return totalBudget * remainingRatio;
+    }
+
+    private String safeBudgetName(String budgetName) {
+        return budgetName == null || budgetName.isBlank() ? "This budget" : budgetName.trim();
+    }
+
+    private String safeGoal(String goal) {
+        return goal == null ? "" : goal.trim();
+    }
+
+    private String safeCurrency(String currency) {
+        return currency == null || currency.isBlank() ? "NGN" : currency.trim();
+    }
+
+    private String buildAssistantFollowUpMessage(
+        AiBudgetAssistantTurnRequest request,
+        List<AiEnvelopeSuggestion> envelopes,
+        double remainingAmount
+    ) {
+        if (envelopes.isEmpty()) {
+            return "Let's start by naming the first few envelopes you want this budget to cover, and I will help split the money realistically.";
+        }
+
+        if (remainingAmount > request.getTotalBudget() * 0.1) {
+            String nextName = pickNextPromptCategory(envelopes);
+            return String.format(
+                Locale.ROOT,
+                "I have mapped %.1f%% so far. You still have %s %.2f left to plan. We can add or rebalance %s next if that fits what you want.",
+                sumPercentages(envelopes),
+                safeCurrency(request.getCurrency()),
+                round2(remainingAmount),
+                nextName
+            );
+        }
+
+        return "This plan is now nearly fully allocated. If these envelopes feel right to you, say you are done and I will treat it as ready to finalize.";
+    }
+
+    private String buildAssistantReasoning(
+        AiBudgetAssistantTurnRequest request,
+        List<AiEnvelopeSuggestion> envelopes,
+        double remainingAmount
+    ) {
+        if (remainingAmount > request.getTotalBudget() * 0.1) {
+            return "This draft keeps the current envelope choices intact while showing what remains so the next decision can stay realistic.";
+        }
+        return "This allocation now covers the main envelopes with only a small balance left, so it is close to a finalized budget plan.";
+    }
+
+    private boolean isAffirmingCompletion(String message) {
+        String normalized = message == null ? "" : message.toLowerCase(Locale.ROOT);
+        return containsAny(
+            normalized,
+            "we're done",
+            "we are done",
+            "i am done",
+            "i'm done",
+            "looks good",
+            "this is fine",
+            "finalize",
+            "confirm",
+            "done"
+        );
+    }
+
+    private String pickNextPromptCategory(List<AiEnvelopeSuggestion> envelopes) {
+        for (AiEnvelopeSuggestion item : envelopes) {
+            if ("more".equals(item.getCategory())) {
+                return "your remaining flexible spend";
+            }
+        }
+        return "one more priority envelope";
+    }
+
     private String defaultNameForCategory(String category) {
         return switch (category) {
             case "savings" -> "Savings";
@@ -463,6 +906,20 @@ public class AiBudgetService {
         item.setConditionType(type);
         item.setCategory(category);
         return item;
+    }
+
+    private static class EnvelopeKeyword {
+        private final String phrase;
+        private final String label;
+        private final String category;
+        private final String conditionType;
+
+        private EnvelopeKeyword(String phrase, String label, String category, String conditionType) {
+            this.phrase = phrase;
+            this.label = label;
+            this.category = category;
+            this.conditionType = conditionType;
+        }
     }
 
     private static class SuggestionSeed {
