@@ -824,8 +824,19 @@ public class AiBudgetService {
         List<AiEnvelopeSuggestion> envelopes,
         double remainingAmount
     ) {
+        String latestMessage = request.getLatestUserMessage() == null
+            ? ""
+            : request.getLatestUserMessage().toLowerCase(Locale.ROOT);
+
         if (envelopes.isEmpty()) {
             return "Let's start by naming the first few envelopes you want this budget to cover, and I will help split the money realistically.";
+        }
+
+        if (remainingAmount <= 0.01) {
+            if (containsAny(latestMessage, "why", "left", "remaining", "0.00", "zero")) {
+                return "The plan is fully allocated, so there is no money left to assign. The continue button is still waiting for your final confirmation before I mark this budget as ready.";
+            }
+            return "This plan is fully allocated now, so there is no balance left to assign. If it looks right to you, say you are done and I will treat it as ready to finalize.";
         }
 
         if (remainingAmount > request.getTotalBudget() * 0.1) {
@@ -840,7 +851,7 @@ public class AiBudgetService {
             );
         }
 
-        return "This plan is now nearly fully allocated. If these envelopes feel right to you, say you are done and I will treat it as ready to finalize.";
+        return "This plan is almost complete, with only a small balance left. If these envelopes feel right to you, say you are done and I will treat it as ready to finalize.";
     }
 
     private String buildAssistantReasoning(
