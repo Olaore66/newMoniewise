@@ -555,6 +555,7 @@ public class AiBudgetService {
             mergedItems = normalizeItems(mergedItems, 100.0);
         }
 
+        applyUnallocatedAmountIntent(latestMessage, request, mergedItems);
         return mergedItems;
     }
 
@@ -681,6 +682,99 @@ public class AiBudgetService {
         }
 
         return null;
+    }
+
+    private void applyUnallocatedAmountIntent(
+        String latestMessage,
+        AiBudgetAssistantTurnRequest request,
+        List<AiEnvelopeSuggestion> mergedItems
+    ) {
+        if (mergedItems.isEmpty()) {
+            return;
+        }
+
+        Double amountToFree = extractRequestedUnallocatedAmount(latestMessage);
+        if (amountToFree == null || amountToFree <= 0) {
+            return;
+        }
+
+        Double totalBudget = request.getTotalBudget();
+        if (totalBudget == null || totalBudget <= 0) {
+            return;
+        }
+
+        double currentTotal = sumPercentages(mergedItems);
+        if (currentTotal <= 0) {
+            return;
+        }
+
+        double percentageToFree = Math.min(100.0, (amountToFree / totalBudget) * 100.0);
+        double targetAllocated = Math.max(0.0, currentTotal - percentageToFree);
+
+        if (targetAllocated >= currentTotal - 0.05) {
+            return;
+        }
+
+        List<AiEnvelopeSuggestion> reduced = normalizeItems(mergedItems, targetAllocated);
+        mergedItems.clear();
+        mergedItems.addAll(reduced);
+    }
+
+    private Double extractRequestedUnallocatedAmount(String message) {
+        if (message == null || message.isBlank()) {
+            return null;
+        }
+
+        String normalized = message.toLowerCase(Locale.ROOT);
+        if (!containsAny(normalized, "remove", "free up", "take out", "repurpose", "hold back", "leave")) {
+            return null;
+        }
+
+        Pattern amountPattern = Pattern.compile(
+            "(?:remove|free\\s+up|take\\s+out|repurpose|hold\\s+back|leave)\\s+"
+                + "(?:about\\s+)?(?:ngn|naira|₦)?\\s*([\\d,]+(?:\\.\\d+)?)\\s*([kKmM]?)\\b"
+        );
+        Matcher matcher = amountPattern.matcher(normalized);
+        if (matcher.find()) {
+            return parseCurrencyAmount(matcher.group(1), matcher.group(2));
+        }
+
+        Pattern trailingIntentPattern = Pattern.compile(
+            "(?:keep|leave)\\s+(?:about\\s+)?(?:ngn|naira|₦)?\\s*([\\d,]+(?:\\.\\d+)?)\\s*([kKmM]?)\\s+"
+                + "(?:left|remaining|unallocated|aside)"
+        );
+        Matcher trailingMatcher = trailingIntentPattern.matcher(normalized);
+        if (trailingMatcher.find()) {
+            return parseCurrencyAmount(trailingMatcher.group(1), trailingMatcher.group(2));
+        }
+
+        return null;
+    }
+
+    private Double parseCurrencyAmount(String rawNumber, String suffix) {
+        if (rawNumber == null || rawNumber.isBlank()) {
+            return null;
+        }
+
+        try {
+            double value = Double.parseDouble(rawNumber.replace(",", ""));
+            if (value <= 0) {
+                return null;
+            }
+
+            if (suffix != null && !suffix.isBlank()) {
+                String normalizedSuffix = suffix.toLowerCase(Locale.ROOT);
+                if ("k".equals(normalizedSuffix)) {
+                    value *= 1_000;
+                } else if ("m".equals(normalizedSuffix)) {
+                    value *= 1_000_000;
+                }
+            }
+
+            return round2(value);
+        } catch (Exception ignored) {
+            return null;
+        }
     }
 
     private Double parsePercentage(String raw) {
@@ -832,6 +926,18 @@ public class AiBudgetService {
             return "Let's start by naming the first few envelopes you want this budget to cover, and I will help split the money realistically.";
         }
 
+        Double amountToFree = extractRequestedUnallocatedAmount(latestMessage);
+        if (amountToFree != null && amountToFree > 0 && remainingAmount > 0.01) {
+            return String.format(
+                Locale.ROOT,
+                "I have freed up %s %.2f from the current plan, so you now have %s %.2f left to repurpose. Tell me whether you want to keep that balance unassigned or move it into a new envelope.",
+                safeCurrency(request.getCurrency()),
+                round2(Math.min(amountToFree, request.getTotalBudget() == null ? amountToFree : request.getTotalBudget())),
+                safeCurrency(request.getCurrency()),
+                round2(remainingAmount)
+            );
+        }
+
         if (remainingAmount <= 0.01) {
             if (containsAny(latestMessage, "why", "left", "remaining", "0.00", "zero")) {
                 return "The plan is fully allocated, so there is no money left to assign. The continue button is still waiting for your final confirmation before I mark this budget as ready.";
@@ -859,6 +965,10 @@ public class AiBudgetService {
         List<AiEnvelopeSuggestion> envelopes,
         double remainingAmount
     ) {
+        Double amountToFree = extractRequestedUnallocatedAmount(request.getLatestUserMessage());
+        if (amountToFree != null && amountToFree > 0 && remainingAmount > 0.01) {
+            return "This update reduces the current envelopes proportionally so part of the budget can stay free for repurposing without discarding the rest of the plan.";
+        }
         if (remainingAmount > request.getTotalBudget() * 0.1) {
             return "This draft keeps the current envelope choices intact while showing what remains so the next decision can stay realistic.";
         }
