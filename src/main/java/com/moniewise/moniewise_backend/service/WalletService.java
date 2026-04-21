@@ -14,7 +14,8 @@ import com.moniewise.moniewise_backend.exception.InsufficientFundsException;
 import com.moniewise.moniewise_backend.enums.TransactionType;
 import com.moniewise.moniewise_backend.enums.WalletStatus;
 import com.moniewise.moniewise_backend.enums.WithdrawalStatus;
-import com.moniewise.moniewise_backend.externalTransfers.PaymentProvider;
+import com.moniewise.moniewise_backend.psp.PaymentGateway;
+import com.moniewise.moniewise_backend.psp.PaymentGatewayResolver;
 import com.moniewise.moniewise_backend.repository.TransactionLogRepository;
 import com.moniewise.moniewise_backend.repository.UserRepository;
 import com.moniewise.moniewise_backend.repository.WalletRepository;
@@ -52,7 +53,7 @@ public class WalletService {
     private final TransactionLogRepository transactionLogRepository;
     private final NotificationService notificationService;
     private final UserRepository userRepository;
-    private final PaymentProvider paymentProvider;
+    private final PaymentGatewayResolver paymentGatewayResolver;
     private final WithdrawalRepository withdrawalRepository;
     private final UserService userService;
 
@@ -67,7 +68,7 @@ public class WalletService {
             TransactionLogRepository transactionLogRepository,
             NotificationService notificationService,
             UserRepository userRepository,
-            PaymentProvider paymentProvider,
+            PaymentGatewayResolver paymentGatewayResolver,
             WithdrawalRepository withdrawalRepository,
             @Lazy UserService userService
     ) {
@@ -75,7 +76,7 @@ public class WalletService {
         this.transactionLogRepository = transactionLogRepository;
         this.notificationService = notificationService;
         this.userRepository = userRepository;
-        this.paymentProvider = paymentProvider;
+        this.paymentGatewayResolver = paymentGatewayResolver;
         this.withdrawalRepository = withdrawalRepository;
         this.userService = userService;
     }
@@ -87,10 +88,11 @@ public class WalletService {
     public Map<String, Object> getLinkedBankInfo(Long userId, String email) {
         Wallet wallet = walletRepository.findByUserId(userId)
                 .orElseThrow(() -> new IllegalArgumentException("Wallet not found for user ID: " + userId));
+        PaymentGateway gateway = paymentGatewayResolver.resolveForWallet(wallet);
 
         Map<String, Object> providerInfo = null;
         try {
-            providerInfo = paymentProvider.getWithdrawalBankInfo(email);
+            providerInfo = gateway.getWithdrawalBankInfo(email);
         } catch (RuntimeException e) {
             logger.warn("Falling back to stored settlement account for {}: {}", email, e.getMessage());
         }
@@ -150,7 +152,7 @@ public class WalletService {
         revenueWallet.setBalance(BigDecimal.ZERO);
         revenueWallet.setCurrency("NGN");
         revenueWallet.setStatus(WalletStatus.ACTIVE);
-        revenueWallet.setIsRevenueWallet(true);
+        revenueWallet.setRevenueWallet(true);
         revenueWallet.setUpdatedAt(LocalDateTime.now());
 
         walletRepository.save(revenueWallet);
@@ -211,6 +213,30 @@ public class WalletService {
         logger.info("Deducted ₦{} from wallet for user {}", amount, userId);
     }
 
+//    @Transactional
+//    public Wallet createWalletForUser(User user) {
+//        if (user.getId() == null) {
+//            throw new IllegalStateException("User must be saved before creating wallet");
+//        }
+//
+//        if (walletRepository.existsByUser(user)) {
+//            throw new IllegalStateException("Wallet already exists");
+//        }
+//
+//        Wallet wallet = new Wallet();
+//        wallet.setUser(user);
+//        wallet.setBalance(BigDecimal.ZERO);
+//        wallet.setCurrency("NGN");
+//        wallet.setStatus(WalletStatus.ACTIVE);
+//        wallet.setUpdatedAt(LocalDateTime.now());
+//
+//        Map<String, String> virtualAccount = paymentProvider.createVirtualAccount(user);
+//        wallet.setAccountNumber(virtualAccount.get("accountNumber"));
+//        wallet.setBankName(virtualAccount.get("bank"));
+//
+//        return walletRepository.save(wallet);
+//    }
+
     @Transactional
     public Wallet createWalletForUser(User user) {
         if (user.getId() == null) {
@@ -227,10 +253,24 @@ public class WalletService {
         wallet.setCurrency("NGN");
         wallet.setStatus(WalletStatus.ACTIVE);
         wallet.setUpdatedAt(LocalDateTime.now());
+        wallet.setProviderStatus("PENDING");
 
-        Map<String, String> virtualAccount = paymentProvider.createVirtualAccount(user);
+        wallet = walletRepository.save(wallet);
+
+        PaymentGateway gateway = paymentGatewayResolver.resolveDefault();
+        Map<String, String> virtualAccount = gateway.createVirtualAccount(user);
+
         wallet.setAccountNumber(virtualAccount.get("accountNumber"));
         wallet.setBankName(virtualAccount.get("bank"));
+
+        // optional provider fields: set only if returned
+        wallet.setProviderName(virtualAccount.getOrDefault("providerName", gateway.getProviderName()));
+        wallet.setProviderCustomerRef(virtualAccount.get("providerCustomerRef"));
+        wallet.setProviderWalletRef(virtualAccount.get("providerWalletRef"));
+        wallet.setMasterWalletRef(virtualAccount.get("masterWalletRef"));
+        wallet.setSubWalletRef(virtualAccount.get("subWalletRef"));
+        wallet.setProviderStatus("ACTIVE");
+        wallet.setLastBalanceSyncAt(LocalDateTime.now());
 
         return walletRepository.save(wallet);
     }
@@ -266,32 +306,71 @@ public class WalletService {
     public void fundWalletFromWebhook(String payloadJson) {
         try {
             JsonNode root = objectMapper.readTree(payloadJson);
-            String eventType = root.path("eventType").asText();
+            String eventType = root.path("eventType").asText(null);
+            String notificationStatus = root.path("notification_status").asText(null);
 
-            if (!"SUCCESSFUL_TRANSACTION".equals(eventType)) {
+            if ("SUCCESSFUL_TRANSACTION".equalsIgnoreCase(eventType)) {
+                JsonNode data = root.path("eventData");
+                String email = data.path("customer").path("email").asText();
+                BigDecimal amountPaid = data.path("amountPaid").decimalValue();
+                String transactionReference = data.path("transactionReference").asText();
+                String paymentDescription = data.path("paymentDescription").asText();
+                LocalDateTime transactionTime = parseTransactionDate(data.path("paidOn").asText());
+
+                this.processSuccessfulFunding(
+                        email,
+                        amountPaid,
+                        amountPaid,
+                        BigDecimal.ZERO,
+                        transactionReference,
+                        paymentDescription,
+                        transactionTime
+                );
                 return;
             }
 
-            JsonNode data = root.path("eventData");
-            String email = data.path("customer").path("email").asText();
-            BigDecimal amountPaid = data.path("amountPaid").decimalValue();
-            String transactionReference = data.path("transactionReference").asText();
-            String paymentDescription = data.path("paymentDescription").asText();
-            LocalDateTime transactionTime = parseTransactionDate(data.path("paidOn").asText());
+            if ("payment_successful".equalsIgnoreCase(notificationStatus)) {
+                String email = root.path("customer").path("email").asText();
+                BigDecimal grossAmount = decimalFromNode(root.path("amount"));
+                BigDecimal fee = decimalFromNode(root.path("fees"));
+                BigDecimal netAmount = root.hasNonNull("settlement_amount")
+                        ? decimalFromNode(root.path("settlement_amount"))
+                        : grossAmount.subtract(fee);
+                String transactionReference = root.path("transaction_id").asText();
+                String paymentDescription = String.format("Deposit of NGN %s", grossAmount);
 
-            this.processSuccessfulFunding(
-                    email,
-                    amountPaid,
-                    amountPaid,
-                    BigDecimal.ZERO,
-                    transactionReference,
-                    paymentDescription,
-                    transactionTime
-            );
+                this.processSuccessfulFunding(
+                        email,
+                        netAmount,
+                        grossAmount,
+                        fee,
+                        transactionReference,
+                        paymentDescription,
+                        LocalDateTime.now()
+                );
+            }
         } catch (Exception e) {
             logger.error("Webhook crashed", e);
             throw new RuntimeException("Webhook failed", e);
         }
+    }
+
+    public List<Map<String, Object>> getSupportedBanks(Long userId) {
+        Wallet wallet = walletRepository.findByUserId(userId)
+                .orElse(null);
+        PaymentGateway gateway = wallet != null
+                ? paymentGatewayResolver.resolveForWallet(wallet)
+                : paymentGatewayResolver.resolveDefault();
+        return gateway.getSupportedBanks();
+    }
+
+    public String resolveBankAccount(Long userId, String bankCode, String accountNumber) {
+        Wallet wallet = walletRepository.findByUserId(userId)
+                .orElse(null);
+        PaymentGateway gateway = wallet != null
+                ? paymentGatewayResolver.resolveForWallet(wallet)
+                : paymentGatewayResolver.resolveDefault();
+        return gateway.resolveAccount(bankCode, accountNumber);
     }
 
     private LocalDateTime parseTransactionDate(String paidOn) {
@@ -335,6 +414,7 @@ public class WalletService {
 
         wallet.setBalance(wallet.getBalance().add(netAmount));
         wallet.setUpdatedAt(LocalDateTime.now());
+        wallet.setLastBalanceSyncAt(LocalDateTime.now());
         walletRepository.save(wallet);
 
         TransactionLog log = new TransactionLog();
@@ -385,10 +465,11 @@ public class WalletService {
 
         Wallet wallet = walletRepository.findByUserId(userId)
                 .orElseThrow(() -> new IllegalArgumentException("Wallet not found"));
+        PaymentGateway gateway = paymentGatewayResolver.resolveForWallet(wallet);
 
-        String resolvedAccountName = paymentProvider.resolveAccount(request.getBankCode(), request.getAccountNumber());
+        String resolvedAccountName = gateway.resolveAccount(request.getBankCode(), request.getAccountNumber());
 
-        boolean isUpdated = paymentProvider.updateWithdrawalBankInfo(
+        boolean isUpdated = gateway.updateWithdrawalBankInfo(
                 user.getEmail(),
                 request.getBankName(),
                 resolvedAccountName,
@@ -429,13 +510,14 @@ public class WalletService {
             throw new IllegalArgumentException("Insufficient wallet balance.");
         }
 
+        PaymentGateway gateway = paymentGatewayResolver.resolveForWallet(wallet);
         String narration = buildWithdrawalNarration(wallet, request);
         Withdrawal withdrawal = createWithdrawalRecord(user, wallet, request, narration);
         self.reserveWithdrawalForProvider(withdrawal.getId());
 
-        String secureWaveRef;
+        String providerReference;
         try {
-            secureWaveRef = paymentProvider.initiateWithdrawal(
+            providerReference = gateway.initiateWithdrawal(
                     user.getEmail(),
                     request.getAmount(),
                     narration
@@ -445,7 +527,7 @@ public class WalletService {
             throw e;
         }
 
-        return self.finalizeAcceptedWithdrawal(withdrawal.getId(), secureWaveRef);
+        return self.finalizeAcceptedWithdrawal(withdrawal.getId(), providerReference);
     }
 
     @Transactional
@@ -466,7 +548,7 @@ public class WalletService {
     }
 
     @Transactional
-    protected Withdrawal finalizeAcceptedWithdrawal(Long withdrawalId, String providerReference) {
+    public Withdrawal finalizeAcceptedWithdrawal(Long withdrawalId, String providerReference) {
         Withdrawal withdrawal = withdrawalRepository.findById(withdrawalId)
                 .orElseThrow(() -> new IllegalArgumentException("Withdrawal not found"));
 
@@ -478,7 +560,7 @@ public class WalletService {
     }
 
     @Transactional
-    protected void markWithdrawalFailed(Long withdrawalId, String reason) {
+    public void markWithdrawalFailed(Long withdrawalId, String reason) {
         withdrawalRepository.findById(withdrawalId).ifPresent(withdrawal -> {
             if (withdrawal.getStatus() == WithdrawalStatus.FAILED || withdrawal.getStatus() == WithdrawalStatus.REVERSED) {
                 return;
@@ -505,7 +587,7 @@ public class WalletService {
     }
 
     @Transactional
-    protected void reserveWithdrawalForProvider(Long withdrawalId) {
+    public void reserveWithdrawalForProvider(Long withdrawalId) {
         Withdrawal withdrawal = withdrawalRepository.findById(withdrawalId)
                 .orElseThrow(() -> new IllegalArgumentException("Withdrawal not found"));
 
@@ -518,6 +600,7 @@ public class WalletService {
 
         wallet.setBalance(wallet.getBalance().subtract(withdrawal.getAmount()));
         wallet.setUpdatedAt(LocalDateTime.now());
+        wallet.setLastBalanceSyncAt(LocalDateTime.now());
         walletRepository.save(wallet);
 
         if (transactionLogRepository.findByReference(withdrawal.getClientReference()).isEmpty()) {
@@ -563,8 +646,73 @@ public class WalletService {
     private String buildClientReference(Long userId) {
         return "WD-" + userId + "-" + System.currentTimeMillis();
     }
-}
 
+    @Transactional
+    public Wallet attachProviderMapping(
+            Long userId,
+            String providerName,
+            String providerCustomerRef,
+            String providerWalletRef,
+            String masterWalletRef,
+            String subWalletRef,
+            String providerStatus,
+            String providerMetadata
+    ) {
+        Wallet wallet = walletRepository.findByUserId(userId)
+                .orElseThrow(() -> new IllegalArgumentException("Wallet not found for user ID: " + userId));
+
+        wallet.setProviderName(providerName);
+        wallet.setProviderCustomerRef(providerCustomerRef);
+        wallet.setProviderWalletRef(providerWalletRef);
+        wallet.setMasterWalletRef(masterWalletRef);
+        wallet.setSubWalletRef(subWalletRef);
+        wallet.setProviderStatus(providerStatus);
+        wallet.setProviderMetadata(providerMetadata);
+        wallet.setLastBalanceSyncAt(LocalDateTime.now());
+
+        return walletRepository.save(wallet);
+    }
+
+    @Transactional
+    public Wallet updateProviderStatus(Long walletId, String providerStatus) {
+        Wallet wallet = walletRepository.findById(walletId)
+                .orElseThrow(() -> new IllegalArgumentException("Wallet not found"));
+
+        wallet.setProviderStatus(providerStatus);
+        wallet.setLastBalanceSyncAt(LocalDateTime.now());
+
+        return walletRepository.save(wallet);
+    }
+
+    @Transactional
+    public Wallet updateBalanceFromProvider(Long walletId, BigDecimal newBalance) {
+        Wallet wallet = walletRepository.findById(walletId)
+                .orElseThrow(() -> new IllegalArgumentException("Wallet not found"));
+
+        wallet.setBalance(newBalance);
+        wallet.setLastBalanceSyncAt(LocalDateTime.now());
+        wallet.setUpdatedAt(LocalDateTime.now());
+
+        return walletRepository.save(wallet);
+    }
+
+    public Wallet getWalletByProviderWalletRef(String providerWalletRef) {
+        return walletRepository.findByProviderWalletRef(providerWalletRef)
+                .orElseThrow(() -> new IllegalArgumentException("Wallet not found for provider wallet ref: " + providerWalletRef));
+    }
+
+    public Wallet getWalletBySubWalletRef(String subWalletRef) {
+        return walletRepository.findBySubWalletRef(subWalletRef)
+                .orElseThrow(() -> new IllegalArgumentException("Wallet not found for sub-wallet ref: " + subWalletRef));
+    }
+
+    private BigDecimal decimalFromNode(JsonNode node) {
+        if (node == null || node.isNull() || node.asText().isBlank()) {
+            return BigDecimal.ZERO;
+        }
+        return new BigDecimal(node.asText());
+    }
+}
 
 
 

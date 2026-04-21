@@ -6,7 +6,6 @@ import com.moniewise.moniewise_backend.dto.response.WalletResponse;
 import com.moniewise.moniewise_backend.entity.User;
 import com.moniewise.moniewise_backend.entity.Wallet;
 import com.moniewise.moniewise_backend.entity.Withdrawal;
-import com.moniewise.moniewise_backend.externalTransfers.PaymentProvider;
 import com.moniewise.moniewise_backend.service.UserService;
 import com.moniewise.moniewise_backend.service.WalletService;
 import lombok.extern.slf4j.Slf4j;
@@ -27,14 +26,11 @@ public class WalletController {
 
     private final WalletService walletService;
     private final UserService userService;
-    private final PaymentProvider paymentProvider;
 
 
-    // Constructor Injection (Spring Boot will automatically inject SecureWave because we added @Primary to it!)
-    public WalletController(WalletService walletService, UserService userService, PaymentProvider paymentProvider) {
+    public WalletController(WalletService walletService, UserService userService) {
         this.walletService = walletService;
         this.userService = userService;
-        this.paymentProvider = paymentProvider;
     }
 
     @GetMapping
@@ -94,9 +90,10 @@ public class WalletController {
      * GET: Fetch all supported banks for withdrawals
      */
     @GetMapping("/banks")
-    public ResponseEntity<?> getSupportedBanks() {
+    public ResponseEntity<?> getSupportedBanks(Authentication authentication) {
         try {
-            List<Map<String, Object>> banks = paymentProvider.getSupportedBanks();
+            Long userId = userService.findByEmail(authentication.getName()).getId();
+            List<Map<String, Object>> banks = walletService.getSupportedBanks(userId);
 
             if (banks.isEmpty()) {
                 return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body("Bank list is currently unavailable");
@@ -112,7 +109,7 @@ public class WalletController {
      * GET: Resolve Account Name (KYC Check)
      */
     @PostMapping("/resolve-account")
-    public ResponseEntity<?> resolveBankAccount(@RequestBody Map<String, String> payload) {
+    public ResponseEntity<?> resolveBankAccount(Authentication authentication, @RequestBody Map<String, String> payload) {
 
         // Extract the values from the JSON body
         String bankCode = payload.get("bankCode");
@@ -127,7 +124,8 @@ public class WalletController {
         }
 
         try {
-            String accountName = paymentProvider.resolveAccount(bankCode, accountNumber);
+            Long userId = userService.findByEmail(authentication.getName()).getId();
+            String accountName = walletService.resolveBankAccount(userId, bankCode, accountNumber);
             return ResponseEntity.ok(Map.of("accountName", accountName));
         } catch (RuntimeException e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));

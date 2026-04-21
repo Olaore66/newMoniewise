@@ -1,265 +1,24 @@
-//package com.moniewise.moniewise_backend.service;
-//
-//import com.moniewise.moniewise_backend.dto.response.TransactionDetailResponse;
-//import com.moniewise.moniewise_backend.dto.response.TransactionListResponse;
-//import com.moniewise.moniewise_backend.dto.response.TransactionMeta;
-//import com.moniewise.moniewise_backend.entity.*;
-//import com.moniewise.moniewise_backend.enums.TransactionCategory;
-//import com.moniewise.moniewise_backend.enums.TransactionType;
-//import com.moniewise.moniewise_backend.repository.*;
-//import org.springframework.beans.factory.annotation.Autowired;
-//import org.springframework.data.domain.Page;
-//import org.springframework.data.domain.PageRequest;
-//import org.springframework.data.domain.Pageable;
-//import org.springframework.security.core.annotation.AuthenticationPrincipal;
-//import org.springframework.stereotype.Service;
-//import org.springframework.transaction.annotation.Transactional;
-//
-//import java.math.BigDecimal;
-//import java.util.Comparator;
-//import java.util.List;
-//import java.util.Set;
-//import java.util.stream.Collectors;
-//
-//import static com.moniewise.moniewise_backend.enums.TransactionType.*;
-////import static com.moniewise.moniewise_backend.security.JwtAuthenticationFilter.log;
-//
-//
-//@Service
-//@Transactional(readOnly = true)
-//public class TransactionService {
-//
-//    @Autowired
-//    private TransactionLogRepository transactionLogRepo;
-//
-//    @Autowired
-//    private EnvelopeRepository envelopeRepo;
-//
-//    @Autowired
-//    private BudgetRepository budgetRepo;
-//
-//
-//    // CHANGE THIS METHOD:
-//    public Page<TransactionListResponse> getTransactionsForUser(Long userId, int page, int size) {
-//
-//        size = Math.min(size, 100);
-//        Pageable pageable = PageRequest.of(page, size);
-//
-//        return transactionLogRepo.findUserVisibleTransactions(userId, USER_VISIBLE_TYPES, pageable)
-//                .map(this::mapToListResponse);
-//    }
-//
-//    // GET: Single transaction detail
-//    public TransactionDetailResponse getTransactionDetail(Long transactionId, Long userId) {
-//        TransactionLog log = transactionLogRepo.findById(transactionId)
-//                .orElseThrow(() -> new RuntimeException("Transaction not found"));
-//
-//        if (!log.getUserId().equals(userId)) {
-//            throw new SecurityException("Access denied");
-//        }
-//
-//        return mapToDetailResponse(log);
-//    }
-//
-//    private TransactionListResponse mapToListResponse(TransactionLog t) {
-//        String sourceName = getEnvelopeName(t.getSourceEnvelopeId());
-//        String targetName = getEnvelopeName(t.getTargetEnvelopeId());
-//        String budgetName = getBudgetName(t.getBudgetId());
-//
-//        // 1. Clean, user-friendly title
-//        String title = switch (t.getTransactionType()) {
-//            case WALLET_DEPOSIT -> "Wallet funded";
-//            case ENVELOPE_TO_ENVELOPE -> "From %s to %s".formatted(sourceName, targetName);
-//            case ENVELOPE_TO_EXTERNAL -> "Sent to bank";
-//            case ENVELOPE_TO_USER -> "Sent to user";
-//            case USER_TO_ENVELOPE -> "Received from user";
-//            case BUDGET_CREATION_FEE -> "Budget creation fee";
-//            case BUDGET_ALLOCATION -> "Allocated to budget";
-//            case BUDGET_UNALLOCATED_REFUNDED -> "Refunded to wallet";
-//            default -> t.getTransactionType().name().replace("_", " ");
-//        };
-//
-//
-//        // 2. Correct amount sign
-//       boolean isOutgoing = switch (t.getTransactionType()) {
-//            case WALLET_DEPOSIT,
-//                    USER_TO_ENVELOPE,
-//                    BUDGET_UNALLOCATED_REFUNDED -> false;
-//
-//            case ENVELOPE_TO_ENVELOPE,
-//                    ENVELOPE_TO_EXTERNAL,
-//                    ENVELOPE_TO_USER,
-//                    BUDGET_CREATION_FEE,
-//                    BUDGET_ALLOCATION,
-//                    WALLET_TO_BUDGET -> true;
-//
-//            default -> throw new IllegalStateException("Unhandled transaction type: " + t.getTransactionType());
-//        };
-//
-//
-//
-//
-//        BigDecimal displayAmount = isOutgoing
-//                ? t.getAmount().negate()
-//                : t.getAmount();
-//
-//        // 3. Description
-//        String description = t.getDescription() != null
-//                ? t.getDescription()
-//                : switch (t.getTransactionType()) {
-//            case ENVELOPE_TO_ENVELOPE -> "%s • ₦%,.2f moved".formatted(budgetName, t.getAmount());
-//            case WALLET_DEPOSIT -> "Added to wallet";
-//            default -> budgetName != null ? budgetName : "Transaction";
-//        };
-//
-//        TransactionCategory category = TransactionClassifier.categoryOf(t.getTransactionType());
-//
-//        TransactionType transactionType = transactionLog.getTransactionType();
-//        BigDecimal amount = transactionLog.getAmount();
-//
-////        TransactionMeta meta = new TransactionMeta(
-////                sourceName,
-////                targetName,
-////                budgetName,
-////                isOutgoing(transactionType, amount),
-////                determineCategory(transactionType)
-////        );
-//
-//        TransactionMeta meta = new TransactionMeta(
-//                sourceName,
-//                targetName,
-//                budgetName,
-//                isOutgoing(transactionType, amount),
-//                determineCategory(transactionType)
-//        );
-//
-//        return new TransactionListResponse(
-//                t.getId(),
-//                title,
-//                description,
-//                displayAmount,
-//                t.getFee() != null ? t.getFee() : BigDecimal.ZERO,
-//                t.getTransactionType(), // now enum, not String!
-//                t.getCreatedAt(),
-//                meta
-////                new TransactionMeta(sourceName, targetName, budgetName, isOutgoing,  category)
-//        );
-//    }
-//    private TransactionDetailResponse mapToDetailResponse(TransactionLog t) {
-//        String sourceName = getEnvelopeName(t.getSourceEnvelopeId());
-//        String targetName = getEnvelopeName(t.getTargetEnvelopeId());
-//        String budgetName = getBudgetName(t.getBudgetId());
-//
-//        String title = switch (t.getTransactionType()) {
-//            case WALLET_DEPOSIT -> "Wallet funded";
-//            case ENVELOPE_TO_ENVELOPE -> "From %s to %s".formatted(sourceName, targetName);
-//            case ENVELOPE_TO_EXTERNAL -> "Sent to bank";
-//            case ENVELOPE_TO_USER -> "Sent to user";
-//            case USER_TO_ENVELOPE -> "Received from user";
-//            case BUDGET_CREATION_FEE -> "Budget creation fee";
-//            case BUDGET_ALLOCATION -> "Allocated to budget";
-//            case BUDGET_UNALLOCATED_REFUNDED -> "Refunded to wallet";
-//            default -> t.getTransactionType().name().replace("_", " ");
-//        };
-//
-//
-//        return new TransactionDetailResponse(
-//                t.getId(),
-//                title,
-//                t.getDescription(),
-//                t.getAmount(),
-//                t.getFee() != null ? t.getFee() : BigDecimal.ZERO,
-//                t.getAmount().subtract(t.getFee() != null ? t.getFee() : BigDecimal.ZERO),
-//                t.getTransactionType(),
-//                t.getCreatedAt(),
-//                t.getBudgetId(),
-//                budgetName,
-//                sourceName,
-//                t.getSourceEnvelopeId(),
-//                targetName,
-//                t.getTargetEnvelopeId(),
-//                t.getExternalAccountId()
-//        );
-//    }
-//
-//    private String getEnvelopeName(Long envelopeId) {
-//        if (envelopeId == null) return "System";  //"External"
-//
-//        return envelopeRepo.findById(envelopeId)
-//                .map(Envelope::getName)
-//                .orElse("Unknown Envelope");
-//    }
-//
-//    private String getBudgetName(Long budgetId) {
-//        if (budgetId == null) return "No Budget";
-//        return budgetRepo.findById(budgetId)
-//                .map(Budget::getName)
-//                .orElse("Unknown Budget");
-//    }
-//
-//    private static final Set<TransactionType> USER_VISIBLE_TYPES = Set.of(
-//            WALLET_DEPOSIT,
-//            WALLET_TO_BUDGET,
-//            BUDGET_ALLOCATION,
-//            ENVELOPE_TO_ENVELOPE,
-//            ENVELOPE_TO_EXTERNAL,
-//            ENVELOPE_TO_USER,
-//            USER_TO_ENVELOPE,
-//            BUDGET_CREATION_FEE,
-//            BUDGET_UNALLOCATED_REFUNDED
-//    );
-//
-//    private TransactionCategory determineCategory(TransactionType type) {
-//        return switch (type) {
-//            case WALLET_DEPOSIT,
-//                    WALLET_DEDUCTION,
-//                    BUDGET_ALLOCATION,
-//                    BUDGET_UNALLOCATED_REFUNDED,
-//                    BUDGET_COMPLETION_REFUND,
-//                    ENVELOPE_TO_ENVELOPE,
-//                    STRICT_LOCK_ROLLBACK,
-//                    DISBURSEMENT_REFUNDED,
-//                    BUDGET_CREATION_FEE -> TransactionCategory.INTERNAL;
-//
-//            case ENVELOPE_TO_EXTERNAL,
-//                    WALLET_TO_EXTERNAL -> TransactionCategory.TO_EXTERNAL_BANK;
-//
-//            case USER_TO_USER,
-//                    ENVELOPE_TO_USER,
-//                    WALLET_TO_USER,
-//                    USER_TO_ENVELOPE -> TransactionCategory.TO_MONIEWISE_USER;
-//
-//            default -> TransactionCategory.INTERNAL;
-//        };
-//    }
-//
-//    private boolean isOutgoing(TransactionType type, BigDecimal amount) {
-//        // Most reliable: use amount sign, fallback to type
-//        if (amount != null && amount.compareTo(BigDecimal.ZERO) < 0) return true;
-//        return switch (type) {
-//            case ENVELOPE_DISBURSEMENT,
-//                    ENVELOPE_TO_EXTERNAL,
-//                    ENVELOPE_TO_ENVELOPE,  // outgoing from source
-//                    WALLET_DEDUCTION,
-//                    BUDGET_CREATION_FEE -> true;
-//            default -> false;
-//        };
-//    }
-//
-//}
 package com.moniewise.moniewise_backend.service;
 
+import com.moniewise.moniewise_backend.dto.TransactionDecisionResponseDto;
+import com.moniewise.moniewise_backend.dto.WithdrawalInitiationResponseDto;
+import com.moniewise.moniewise_backend.dto.request.WithdrawalRequest;
 import com.moniewise.moniewise_backend.dto.response.TransactionDetailResponse;
 import com.moniewise.moniewise_backend.dto.response.TransactionListResponse;
 import com.moniewise.moniewise_backend.entity.Budget;
 import com.moniewise.moniewise_backend.entity.Envelope;
+import com.moniewise.moniewise_backend.entity.TransactionDecision;
 import com.moniewise.moniewise_backend.entity.TransactionLog;
+import com.moniewise.moniewise_backend.entity.TransactionRequest;
+import com.moniewise.moniewise_backend.entity.User;
+import com.moniewise.moniewise_backend.entity.Withdrawal;
 import com.moniewise.moniewise_backend.enums.TransactionType;
 import com.moniewise.moniewise_backend.repository.BudgetRepository;
 import com.moniewise.moniewise_backend.repository.EnvelopeRepository;
+import com.moniewise.moniewise_backend.repository.TransactionDecisionRepository;
 import com.moniewise.moniewise_backend.repository.TransactionLogRepository;
+import com.moniewise.moniewise_backend.repository.TransactionRequestRepository;
 import com.moniewise.moniewise_backend.repository.UserRepository;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -271,59 +30,157 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 
-import static com.moniewise.moniewise_backend.enums.TransactionType.*;
+import static com.moniewise.moniewise_backend.enums.TransactionType.BUDGET_ALLOCATION;
+import static com.moniewise.moniewise_backend.enums.TransactionType.BUDGET_CREATION_FEE;
+import static com.moniewise.moniewise_backend.enums.TransactionType.BUDGET_UNALLOCATED_REFUNDED;
+import static com.moniewise.moniewise_backend.enums.TransactionType.DISBURSEMENT_REFUNDED;
+import static com.moniewise.moniewise_backend.enums.TransactionType.ENVELOPE_DISBURSEMENT;
+import static com.moniewise.moniewise_backend.enums.TransactionType.ENVELOPE_TO_ENVELOPE;
+import static com.moniewise.moniewise_backend.enums.TransactionType.ENVELOPE_TO_EXTERNAL;
+import static com.moniewise.moniewise_backend.enums.TransactionType.ENVELOPE_TO_USER;
+import static com.moniewise.moniewise_backend.enums.TransactionType.STRICT_LOCK_ROLLBACK;
+import static com.moniewise.moniewise_backend.enums.TransactionType.USER_TO_ENVELOPE;
+import static com.moniewise.moniewise_backend.enums.TransactionType.USER_TO_USER;
+import static com.moniewise.moniewise_backend.enums.TransactionType.WALLET_DEDUCTION;
+import static com.moniewise.moniewise_backend.enums.TransactionType.WALLET_DEPOSIT;
+import static com.moniewise.moniewise_backend.enums.TransactionType.WALLET_TO_BUDGET;
+import static com.moniewise.moniewise_backend.enums.TransactionType.WALLET_WITHDRAWAL;
 
 @Service
 @Transactional(readOnly = true)
 public class TransactionService {
 
-    @Autowired
-    private TransactionLogRepository transactionLogRepo;
-
-    @Autowired
-    private EnvelopeRepository envelopeRepo;
-
-    @Autowired
-    private BudgetRepository budgetRepo;
-
-    @Autowired
-    private UserRepository userRepo;
+    private final DecisionEngineService decisionEngineService;
+    private final WalletService walletService;
+    private final TransactionRequestRepository transactionRequestRepository;
+    private final TransactionDecisionRepository transactionDecisionRepository;
+    private final UserRepository userRepository;
+    private final TransactionLogRepository transactionLogRepo;
+    private final EnvelopeRepository envelopeRepo;
+    private final BudgetRepository budgetRepo;
 
     private static final Set<TransactionType> USER_VISIBLE_TYPES = Set.of(
-            WALLET_DEPOSIT, WALLET_TO_BUDGET, BUDGET_ALLOCATION, ENVELOPE_TO_ENVELOPE,
-            ENVELOPE_TO_EXTERNAL, ENVELOPE_TO_USER, USER_TO_ENVELOPE, BUDGET_CREATION_FEE,
-            BUDGET_UNALLOCATED_REFUNDED, STRICT_LOCK_ROLLBACK, DISBURSEMENT_REFUNDED, WALLET_WITHDRAWAL
+            WALLET_DEPOSIT,
+            WALLET_TO_BUDGET,
+            BUDGET_ALLOCATION,
+            ENVELOPE_TO_ENVELOPE,
+            ENVELOPE_TO_EXTERNAL,
+            ENVELOPE_TO_USER,
+            USER_TO_ENVELOPE,
+            BUDGET_CREATION_FEE,
+            BUDGET_UNALLOCATED_REFUNDED,
+            STRICT_LOCK_ROLLBACK,
+            DISBURSEMENT_REFUNDED,
+            WALLET_WITHDRAWAL
     );
 
-    // =========================================================================
-    // ✅ OPTIMIZED: Batch Fetching (Reduces DB calls from ~41 to 3)
-    // =========================================================================
-    public Page<TransactionListResponse> getTransactionsForUser(Long userId, int page, int size) {
-        size = Math.min(size, 100);
-        Pageable pageable = PageRequest.of(page, size);
+    public TransactionService(
+            DecisionEngineService decisionEngineService,
+            WalletService walletService,
+            TransactionRequestRepository transactionRequestRepository,
+            TransactionDecisionRepository transactionDecisionRepository,
+            UserRepository userRepository,
+            TransactionLogRepository transactionLogRepo,
+            EnvelopeRepository envelopeRepo,
+            BudgetRepository budgetRepo
+    ) {
+        this.decisionEngineService = decisionEngineService;
+        this.walletService = walletService;
+        this.transactionRequestRepository = transactionRequestRepository;
+        this.transactionDecisionRepository = transactionDecisionRepository;
+        this.userRepository = userRepository;
+        this.transactionLogRepo = transactionLogRepo;
+        this.envelopeRepo = envelopeRepo;
+        this.budgetRepo = budgetRepo;
+    }
 
-        // 1. Fetch the Page
-        Page<TransactionLog> transactionPage = transactionLogRepo.findUserVisibleTransactions(userId, USER_VISIBLE_TYPES, pageable);
+    @Transactional
+    public WithdrawalInitiationResponseDto initiateWithdrawal(Long userId, WithdrawalRequest request) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new IllegalArgumentException("User not found"));
 
-        // 2. Collect IDs to batch fetch (Prevent N+1 Problem)
-        Set<Long> envelopeIds = new HashSet<>();
-        transactionPage.getContent().forEach(t -> {
-            if (t.getSourceEnvelopeId() != null) envelopeIds.add(t.getSourceEnvelopeId());
-            if (t.getTargetEnvelopeId() != null) envelopeIds.add(t.getTargetEnvelopeId());
-        });
+        String clientReference = UUID.randomUUID().toString();
+        TransactionRequest txRequest = new TransactionRequest();
+        txRequest.setUser(user);
+        txRequest.setAmount(request.getAmount());
+        txRequest.setTransactionType(TransactionRequest.TransactionType.WITHDRAWAL);
+        txRequest.setClientReference(clientReference);
+        txRequest = transactionRequestRepository.save(txRequest);
 
-        // 3. Batch Fetch Names into a Map (ID -> Name)
-        // Note: You need a repository method findByIdIn(Set<Long> ids) or similar,
-        // or just use findAllById and map it manually.
-        Map<Long, String> envelopeNames = new HashMap<>();
-        if (!envelopeIds.isEmpty()) {
-            envelopeRepo.findAllById(envelopeIds).forEach(e ->
-                    envelopeNames.put(e.getId(), e.getName())
+        TransactionDecision.Decision decision = decisionEngineService.evaluateRequest(txRequest);
+
+        TransactionDecision txDecision = new TransactionDecision();
+        txDecision.setTransactionRequest(txRequest);
+        txDecision.setDecision(decision);
+        txDecision.setKycCheckPassed(true);
+        txDecision.setTierCheckPassed(true);
+        txDecision.setWalletCheckPassed(true);
+        txDecision.setBudgetCheckPassed(true);
+        txDecision.setRequiresConfirmation(false);
+        if (decision == TransactionDecision.Decision.BLOCK) {
+            txDecision.setReasonCode("BLOCKED");
+            txDecision.setReasonMessage("Transaction blocked by decision engine");
+        }
+        transactionDecisionRepository.save(txDecision);
+
+        if (decision == TransactionDecision.Decision.BLOCK) {
+            txRequest.setStatus(TransactionRequest.Status.BLOCKED);
+            transactionRequestRepository.save(txRequest);
+            return new WithdrawalInitiationResponseDto(
+                    false,
+                    decision,
+                    "BLOCKED",
+                    "Transaction blocked",
+                    txRequest.getId(),
+                    null,
+                    request.getAmount()
             );
         }
 
-        // 4. Map to Response using the Memory Cache
+        Withdrawal withdrawal = walletService.processWithdrawal(userId, request);
+        txRequest.setStatus(TransactionRequest.Status.COMPLETED);
+        transactionRequestRepository.save(txRequest);
+
+        return new WithdrawalInitiationResponseDto(
+                true,
+                decision,
+                null,
+                null,
+                txRequest.getId(),
+                withdrawal.getClientReference(),
+                request.getAmount()
+        );
+    }
+
+    @Transactional
+    public void initiateTransfer(Long userId, BigDecimal amount, Long sourceEnvelopeId, String destinationReference) {
+        // Placeholder until transfer workflow is implemented.
+    }
+
+    public Page<TransactionListResponse> getTransactionsForUser(Long userId, int page, int size) {
+        int boundedSize = Math.min(size, 100);
+        Pageable pageable = PageRequest.of(page, boundedSize);
+        Page<TransactionLog> transactionPage =
+                transactionLogRepo.findUserVisibleTransactions(userId, USER_VISIBLE_TYPES, pageable);
+
+        Set<Long> envelopeIds = new HashSet<>();
+        transactionPage.getContent().forEach(t -> {
+            if (t.getSourceEnvelopeId() != null) {
+                envelopeIds.add(t.getSourceEnvelopeId());
+            }
+            if (t.getTargetEnvelopeId() != null) {
+                envelopeIds.add(t.getTargetEnvelopeId());
+            }
+        });
+
+        Map<Long, String> envelopeNames = new HashMap<>();
+        if (!envelopeIds.isEmpty()) {
+            envelopeRepo.findAllById(envelopeIds)
+                    .forEach(envelope -> envelopeNames.put(envelope.getId(), envelope.getName()));
+        }
+
         return transactionPage.map(t -> mapToListResponse(t, envelopeNames));
     }
 
@@ -338,45 +195,57 @@ public class TransactionService {
         return mapToDetailResponse(log);
     }
 
-    // Updated Signature to accept the Cache Map
-    private TransactionListResponse mapToListResponse(TransactionLog t, Map<Long, String> envelopeNameCache) {
-        // Use Cache or Default
-        String sourceName = t.getSourceEnvelopeId() != null
-                ? envelopeNameCache.getOrDefault(t.getSourceEnvelopeId(), "Unknown Envelope")
+    public TransactionDecisionResponseDto getDecision(Long transactionRequestId) {
+        TransactionDecision decision = transactionDecisionRepository
+                .findByTransactionRequestId(transactionRequestId)
+                .orElseThrow(() -> new IllegalArgumentException("Decision not found"));
+
+        return new TransactionDecisionResponseDto(
+                decision.getTransactionRequest().getId(),
+                decision.getDecision(),
+                decision.getReasonCode(),
+                decision.getReasonMessage(),
+                decision.isRequiresConfirmation()
+        );
+    }
+
+    private TransactionListResponse mapToListResponse(TransactionLog transaction, Map<Long, String> envelopeNameCache) {
+        String sourceName = transaction.getSourceEnvelopeId() != null
+                ? envelopeNameCache.getOrDefault(transaction.getSourceEnvelopeId(), "Unknown Envelope")
                 : "System";
 
-        String targetName = t.getTargetEnvelopeId() != null
-                ? envelopeNameCache.getOrDefault(t.getTargetEnvelopeId(), "Unknown Envelope")
+        String targetName = transaction.getTargetEnvelopeId() != null
+                ? envelopeNameCache.getOrDefault(transaction.getTargetEnvelopeId(), "Unknown Envelope")
                 : "System";
 
-        // 1. CALCULATE DIRECTION & AMOUNT
-        boolean isOutgoing = isOutgoing(t.getTransactionType(), t.getAmount());
-        BigDecimal displayAmount = isOutgoing ? t.getAmount().negate() : t.getAmount();
-        String direction = isOutgoing ? "OUT" : "IN";
+        boolean outgoing = isOutgoing(transaction.getTransactionType(), transaction.getAmount());
+        BigDecimal displayAmount = outgoing ? transaction.getAmount().negate() : transaction.getAmount();
+        String direction = outgoing ? "OUT" : "IN";
 
-        // 2. DETERMINE TITLE, SUBTITLE & ICON
         String title;
-        String subtitle = t.getDescription(); // Default
+        String subtitle = transaction.getDescription();
         String iconType;
 
-        switch (t.getTransactionType()) {
-            case ENVELOPE_TO_USER: // P2P Sent
-                title = "Transfer to " + getCounterpartyName(t);
+        switch (transaction.getTransactionType()) {
+            case ENVELOPE_TO_USER:
+                title = "Transfer to " + getCounterpartyName(transaction);
                 subtitle = "P2P Transfer";
                 iconType = "USER";
                 break;
-            case USER_TO_ENVELOPE: // P2P Received
+            case USER_TO_ENVELOPE:
             case USER_TO_USER:
-                title = "Received from " + getCounterpartyName(t);
+                title = "Received from " + getCounterpartyName(transaction);
                 subtitle = "P2P Received";
                 iconType = "USER";
                 break;
-            case ENVELOPE_TO_EXTERNAL: // Bank Transfer
-                title = (t.getDescription() != null) ? t.getDescription().replace("Transfer to ", "") : "Bank Transfer";
+            case ENVELOPE_TO_EXTERNAL:
+                title = transaction.getDescription() != null
+                        ? transaction.getDescription().replace("Transfer to ", "")
+                        : "Bank Transfer";
                 subtitle = "Bank Transfer";
                 iconType = "BANK";
                 break;
-            case ENVELOPE_TO_ENVELOPE: // Internal
+            case ENVELOPE_TO_ENVELOPE:
                 title = "Moved to " + targetName;
                 subtitle = "From " + sourceName;
                 iconType = "SWAP";
@@ -392,16 +261,16 @@ public class TransactionService {
                 iconType = "CASH";
                 break;
             default:
-                title = formatEnumName(t.getTransactionType());
+                title = formatEnumName(transaction.getTransactionType());
                 subtitle = "Transaction";
                 iconType = "DEFAULT";
+                break;
         }
 
-        // 3. GENERATE PATH (Deep Link)
-        String path = "/transactions/" + t.getId();
+        String path = "/transactions/" + transaction.getId();
 
         return new TransactionListResponse(
-                t.getId(),
+                transaction.getId(),
                 title,
                 subtitle,
                 displayAmount,
@@ -409,72 +278,61 @@ public class TransactionService {
                 iconType,
                 direction,
                 path,
-                t.getCreatedAt(),
-                t.getTransactionType()
+                transaction.getCreatedAt(),
+                transaction.getTransactionType()
         );
     }
 
-    // Helper to format "ENVELOPE_TO_ENVELOPE" -> "Envelope To Envelope"
     private String formatEnumName(TransactionType type) {
-        if (type == null) return "Transaction";
+        if (type == null) {
+            return "Transaction";
+        }
         return type.name().charAt(0) + type.name().substring(1).toLowerCase().replace('_', ' ');
     }
 
-    private String getCounterpartyName(TransactionLog t) {
-        // 1. BEST WAY: Look up by ID
-        if (t.getCounterpartyUserId() != null) {
-            return userRepo.findById(t.getCounterpartyUserId())
-                    .map(u -> {
-                        // Extract from the profile_data JSON map
-                        if (u.getProfileData() != null && u.getProfileData().containsKey("name")) {
-                            return (String) u.getProfileData().get("name");
+    private String getCounterpartyName(TransactionLog transaction) {
+        if (transaction.getCounterpartyUserId() != null) {
+            return userRepository.findById(transaction.getCounterpartyUserId())
+                    .map(user -> {
+                        if (user.getProfileData() != null && user.getProfileData().containsKey("name")) {
+                            return (String) user.getProfileData().get("name");
                         }
-
-                        // If no name is in the profile, use their email prefix as a fallback
-                        if (u.getEmail() != null) {
-                            return u.getEmail().split("@")[0];
+                        if (user.getEmail() != null) {
+                            return user.getEmail().split("@")[0];
                         }
-
                         return "Wisemonie User";
                     })
                     .orElse("Wisemonie User");
         }
 
-        // 2. FALLBACK: String parsing (for old transactions)
-        if (t.getDescription() != null) {
-            if (t.getDescription().contains("Transfer to ")) {
-                return t.getDescription().replace("Transfer to ", "").trim();
+        if (transaction.getDescription() != null) {
+            if (transaction.getDescription().contains("Transfer to ")) {
+                return transaction.getDescription().replace("Transfer to ", "").trim();
             }
-            if (t.getDescription().contains("Received from ")) {
-                return t.getDescription().replace("Received from ", "").trim();
+            if (transaction.getDescription().contains("Received from ")) {
+                return transaction.getDescription().replace("Received from ", "").trim();
             }
         }
 
-        // 3. FINAL FALLBACK
         return "Wisemonie User";
     }
 
-    private TransactionDetailResponse mapToDetailResponse(TransactionLog t) {
-        String sourceName = getEnvelopeName(t.getSourceEnvelopeId());
-        String targetName = getEnvelopeName(t.getTargetEnvelopeId());
-        String budgetName = getBudgetName(t.getBudgetId());
+    private TransactionDetailResponse mapToDetailResponse(TransactionLog transaction) {
+        String sourceName = getEnvelopeName(transaction.getSourceEnvelopeId());
+        String targetName = getEnvelopeName(transaction.getTargetEnvelopeId());
+        String budgetName = getBudgetName(transaction.getBudgetId());
 
-        // 1. Amount & Direction Math (Fixes the Double Negative issue)
-        boolean isDebit = isOutgoing(t.getTransactionType(), t.getAmount());
-        String direction = isDebit ? "DEBIT" : "CREDIT";
+        boolean debit = isOutgoing(transaction.getTransactionType(), transaction.getAmount());
+        String direction = debit ? "DEBIT" : "CREDIT";
 
-        // Force amount to be positive for display
-        BigDecimal absoluteAmount = t.getAmount().abs();
-        BigDecimal fee = t.getFee() != null ? t.getFee() : BigDecimal.ZERO;
+        BigDecimal absoluteAmount = transaction.getAmount().abs();
+        BigDecimal fee = transaction.getFee() != null ? transaction.getFee() : BigDecimal.ZERO;
+        BigDecimal netAmount = debit ? absoluteAmount.add(fee) : absoluteAmount.subtract(fee);
 
-        // Net Amount: If Debit, they paid Amount + Fee. If Credit, they got Amount - Fee.
-        BigDecimal netAmount = isDebit ? absoluteAmount.add(fee) : absoluteAmount.subtract(fee);
+        String sender;
+        String recipient;
 
-        // 2. Resolve Sender and Recipient (Fixes the "System to System" issue)
-        String sender = "System";
-        String recipient = "System";
-
-        switch (t.getTransactionType()) {
+        switch (transaction.getTransactionType()) {
             case BUDGET_ALLOCATION:
                 sender = "Main Wallet";
                 recipient = budgetName != null ? "Budget: " + budgetName : "Budget Envelopes";
@@ -493,8 +351,10 @@ public class TransactionService {
                 break;
             case WALLET_WITHDRAWAL:
             case ENVELOPE_TO_EXTERNAL:
-                sender = t.getTransactionType() == WALLET_WITHDRAWAL ? "Main Wallet" : sourceName;
-                recipient = t.getExternalAccountId() != null ? "Bank: " + t.getExternalAccountId() : "External Bank";
+                sender = transaction.getTransactionType() == WALLET_WITHDRAWAL ? "Main Wallet" : sourceName;
+                recipient = transaction.getExternalAccountId() != null
+                        ? "Bank: " + transaction.getExternalAccountId()
+                        : "External Bank";
                 break;
             case ENVELOPE_TO_ENVELOPE:
                 sender = sourceName;
@@ -502,10 +362,10 @@ public class TransactionService {
                 break;
             case ENVELOPE_TO_USER:
                 sender = sourceName;
-                recipient = getCounterpartyName(t);
+                recipient = getCounterpartyName(transaction);
                 break;
             case USER_TO_ENVELOPE:
-                sender = getCounterpartyName(t);
+                sender = getCounterpartyName(transaction);
                 recipient = targetName;
                 break;
             default:
@@ -514,55 +374,58 @@ public class TransactionService {
                 break;
         }
 
-        // 3. User-Friendly Title
-        String title = switch (t.getTransactionType()) {
+        String title = switch (transaction.getTransactionType()) {
             case WALLET_DEPOSIT -> "Wallet funded";
             case ENVELOPE_TO_ENVELOPE -> "From %s to %s".formatted(sourceName, targetName);
             case ENVELOPE_TO_EXTERNAL -> "Sent to bank";
-            case ENVELOPE_TO_USER -> "Sent to " + getCounterpartyName(t);
-            case USER_TO_ENVELOPE -> "Received from " + getCounterpartyName(t);
+            case ENVELOPE_TO_USER -> "Sent to " + getCounterpartyName(transaction);
+            case USER_TO_ENVELOPE -> "Received from " + getCounterpartyName(transaction);
             case BUDGET_CREATION_FEE -> "Budget creation fee";
             case BUDGET_ALLOCATION -> "Allocated to budget";
             case BUDGET_UNALLOCATED_REFUNDED -> "Refunded to wallet";
-            default -> formatEnumName(t.getTransactionType());
+            default -> formatEnumName(transaction.getTransactionType());
         };
 
-        // Fallbacks for missing data
-        String reference = t.getReference() != null ? t.getReference() : "N/A";
-        String status = t.getStatus() != null ? t.getStatus().name() : "COMPLETED";
+        String reference = transaction.getReference() != null ? transaction.getReference() : "N/A";
+        String status = transaction.getStatus() != null ? transaction.getStatus().name() : "COMPLETED";
 
         return new TransactionDetailResponse(
-                t.getId(),
+                transaction.getId(),
                 reference,
                 status,
                 direction,
                 title,
-                t.getDescription(),
+                transaction.getDescription(),
                 absoluteAmount,
                 fee,
                 netAmount,
                 sender,
                 recipient,
-                t.getTransactionType(),
-                t.getCreatedAt(),
-                t.getBudgetId(),
+                transaction.getTransactionType(),
+                transaction.getCreatedAt(),
+                transaction.getBudgetId(),
                 budgetName,
                 sourceName,
-                t.getSourceEnvelopeId(),
+                transaction.getSourceEnvelopeId(),
                 targetName,
-                t.getTargetEnvelopeId(),
-                t.getExternalAccountId()
+                transaction.getTargetEnvelopeId(),
+                transaction.getExternalAccountId()
         );
     }
+
     private String getEnvelopeName(Long envelopeId) {
-        if (envelopeId == null) return "System";
+        if (envelopeId == null) {
+            return "System";
+        }
         return envelopeRepo.findById(envelopeId)
                 .map(Envelope::getName)
                 .orElse("Unknown Envelope");
     }
 
     private String getBudgetName(Long budgetId) {
-        if (budgetId == null) return "No Budget";
+        if (budgetId == null) {
+            return "No Budget";
+        }
         return budgetRepo.findById(budgetId)
                 .map(Budget::getName)
                 .orElse("Unknown Budget");
@@ -579,7 +442,8 @@ public class TransactionService {
                     ENVELOPE_TO_USER,
                     WALLET_DEDUCTION,
                     BUDGET_CREATION_FEE,
-                    BUDGET_ALLOCATION -> true;
+                    BUDGET_ALLOCATION,
+                    WALLET_WITHDRAWAL -> true;
             default -> false;
         };
     }

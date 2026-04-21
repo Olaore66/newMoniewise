@@ -1,12 +1,10 @@
 package com.moniewise.moniewise_backend.entity;
 
-
 import com.moniewise.moniewise_backend.enums.WalletStatus;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
-import org.springframework.data.jpa.convert.threeten.Jsr310JpaConverters;
 
 import javax.persistence.*;
 import java.math.BigDecimal;
@@ -19,18 +17,19 @@ import java.time.LocalDateTime;
 @NoArgsConstructor
 @AllArgsConstructor
 public class Wallet {
+
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
     @OneToOne
     @JoinColumn(name = "user_id", nullable = false)
-    private User user; // NOT Long userId
+    private User user;
 
-    @Column(nullable = false)
+    @Column(nullable = false, precision = 19, scale = 2)
     private BigDecimal balance = BigDecimal.ZERO;
 
-    @Column(nullable = false)
+    @Column(nullable = false, length = 10)
     private String currency = "NGN";
 
     @Column(nullable = false)
@@ -43,12 +42,14 @@ public class Wallet {
     @Column(name = "bank_name")
     private String bankName;
 
+    @Column(name = "wallet_type")
+    private String walletType;
+
     @Column(name = "updated_at")
-    @Convert(converter = Jsr310JpaConverters.LocalDateTimeConverter.class) // Add this
-    private LocalDateTime updatedAt = LocalDateTime.now();
+    private LocalDateTime updatedAt;
 
     @Column(name = "is_revenue_wallet", nullable = false)
-    private boolean isRevenueWallet = false;
+    private boolean revenueWallet = false;
 
     @Column(name = "settlement_account_number")
     private String settlementAccountNumber;
@@ -62,7 +63,43 @@ public class Wallet {
     @Column(name = "settlement_account_name")
     private String settlementAccountName;
 
-    // Lombok @Getter @Setter already works
-    public boolean isRevenueWallet() { return isRevenueWallet; }
-    public void setIsRevenueWallet(boolean isRevenueWallet) { this.isRevenueWallet = isRevenueWallet; }
+    // =========================
+    // Provider mapping fields
+    // =========================
+
+    @Column(name = "provider_name", length = 50)
+    private String providerName;
+
+    @Column(name = "provider_customer_ref")
+    private String providerCustomerRef;
+
+    @Column(name = "provider_wallet_ref")
+    private String providerWalletRef;
+
+    @Column(name = "master_wallet_ref")
+    private String masterWalletRef;
+
+    @Column(name = "sub_wallet_ref")
+    private String subWalletRef;
+
+    @Column(name = "provider_status", length = 50)
+    private String providerStatus;
+
+    @Column(name = "last_balance_sync_at")
+    private LocalDateTime lastBalanceSyncAt;
+
+    @Column(name = "provider_metadata", columnDefinition = "jsonb")
+    private String providerMetadata;
+
+    @PrePersist
+    public void prePersist() {
+        if (updatedAt == null) {
+            updatedAt = LocalDateTime.now();
+        }
+    }
+
+    @PreUpdate
+    public void preUpdate() {
+        updatedAt = LocalDateTime.now();
+    }
 }

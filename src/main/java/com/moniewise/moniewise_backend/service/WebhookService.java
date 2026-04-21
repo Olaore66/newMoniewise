@@ -1,65 +1,75 @@
 package com.moniewise.moniewise_backend.service;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.moniewise.moniewise_backend.entity.WebhookEvent;
+import com.moniewise.moniewise_backend.psp.PaymentGateway;
+import com.moniewise.moniewise_backend.psp.PaymentGatewayResolver;
+import com.moniewise.moniewise_backend.psp.SecureWaveGateway;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
-import javax.crypto.Mac;
-import javax.crypto.spec.SecretKeySpec;
-import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
-import java.time.LocalDateTime;
+import java.security.MessageDigest;
 
 @Service
 public class WebhookService {
 
     private static final Logger logger = LoggerFactory.getLogger(WebhookService.class);
-    private final ObjectMapper objectMapper = new ObjectMapper();
-    private final WalletService walletService;
-    private final WebhookReplayProtectionService replayProtectionService;
 
-    @Value("${securewave.secret-key}")
-    private String secureWaveSecretKey;
+    private final WebhookEventService webhookEventService;
+    private final WalletWebhookService walletWebhookService;
+    private final PaymentGatewayResolver paymentGatewayResolver;
 
-    public WebhookService(WalletService walletService, WebhookReplayProtectionService replayProtectionService) {
-        this.walletService = walletService;
-        this.replayProtectionService = replayProtectionService;
+    public WebhookService(
+            WebhookEventService webhookEventService,
+            WalletWebhookService walletWebhookService,
+            PaymentGatewayResolver paymentGatewayResolver
+    ) {
+        this.webhookEventService = webhookEventService;
+        this.walletWebhookService = walletWebhookService;
+        this.paymentGatewayResolver = paymentGatewayResolver;
     }
 
     public void processSecureWaveWebhook(String signatureHeader, String rawPayload) {
-        if (secureWaveSecretKey == null || secureWaveSecretKey.isBlank()) {
-            throw new IllegalStateException("SecureWave webhook secret is not configured");
-        }
+        PaymentGateway gateway = paymentGatewayResolver.resolveByProviderName(SecureWaveGateway.PROVIDER_NAME);
         String cleanPayload = normalizePayload(rawPayload);
-        String calculatedHash = calculateHmacSha256(cleanPayload, secureWaveSecretKey);
-        if (!calculatedHash.equalsIgnoreCase(signatureHeader)) {
+
+        if (!gateway.validateWebhookSignature(signatureHeader, cleanPayload)) {
             logger.warn("Rejected SecureWave webhook due to signature mismatch");
             throw new SecurityException("Invalid SecureWave webhook signature");
         }
-        if (!replayProtectionService.registerIfNew("securewave", cleanPayload)) {
-            throw new SecurityException("Duplicate SecureWave webhook event rejected");
+
+        String providerName = gateway.getProviderName();
+        String eventType = gateway.extractWebhookEventType(cleanPayload);
+        String externalReference = gateway.extractWebhookReference(cleanPayload);
+        String idempotencyKey = generateIdempotencyKey(providerName, externalReference, cleanPayload);
+
+        if (webhookEventService.alreadyProcessed(providerName, idempotencyKey)) {
+            logger.info("Duplicate SecureWave webhook detected, skipping processing");
+            return;
         }
+
+        WebhookEvent event = webhookEventService.saveIfNew(
+                providerName,
+                eventType,
+                externalReference,
+                idempotencyKey,
+                signatureHeader,
+                cleanPayload,
+                null
+        );
+
         try {
-            JsonNode root = objectMapper.readTree(cleanPayload);
-            String notificationStatus = root.path("notification_status").asText();
-            if ("payment_successful".equalsIgnoreCase(notificationStatus)) {
-                String email = root.path("customer").path("email").asText();
-                BigDecimal grossAmount = new BigDecimal(root.path("amount").asText());
-                BigDecimal fee = new BigDecimal(root.path("fees").asText());
-                BigDecimal netAmount = new BigDecimal(root.path("settlement_amount").asText());
-                String transactionId = root.path("transaction_id").asText();
-                String description = String.format("Deposit of ₦%s (minus ₦%s processing fee)", grossAmount, fee);
-                logger.info("Funding wallet for {} with net amount {}", email, netAmount);
-                walletService.processSuccessfulFunding(email, netAmount, grossAmount, fee, transactionId, description, LocalDateTime.now());
+            if (isFundingEvent(eventType)) {
+                walletWebhookService.processFundingWebhook(cleanPayload);
             } else {
-                logger.info("Ignoring SecureWave webhook with notification status {}", notificationStatus);
+                logger.info("Ignoring unsupported SecureWave webhook event type {}", eventType);
             }
+            webhookEventService.markProcessed(event.getId());
         } catch (Exception e) {
-            logger.error("SecureWave webhook processing failed", e);
-            throw new RuntimeException("Webhook processing failed", e);
+            logger.error("Webhook processing failed for event {}", event.getId(), e);
+            webhookEventService.markFailed(event.getId(), e.getMessage());
+            throw e;
         }
     }
 
@@ -71,12 +81,14 @@ public class WebhookService {
         return cleanPayload.replace("\\\"", "\"");
     }
 
-    private String calculateHmacSha256(String payload, String secret) {
+    private String generateIdempotencyKey(String providerName, String externalReference, String payload) {
+        if (externalReference != null && !externalReference.isBlank()) {
+            return externalReference;
+        }
         try {
-            Mac sha256Hmac = Mac.getInstance("HmacSHA256");
-            SecretKeySpec secretKey = new SecretKeySpec(secret.getBytes(StandardCharsets.UTF_8), "HmacSHA256");
-            sha256Hmac.init(secretKey);
-            byte[] hash = sha256Hmac.doFinal(payload.getBytes(StandardCharsets.UTF_8));
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            String combined = providerName + payload;
+            byte[] hash = digest.digest(combined.getBytes(StandardCharsets.UTF_8));
             StringBuilder hexString = new StringBuilder();
             for (byte b : hash) {
                 String hex = Integer.toHexString(0xff & b);
@@ -87,7 +99,12 @@ public class WebhookService {
             }
             return hexString.toString();
         } catch (Exception e) {
-            throw new RuntimeException("Error calculating HMAC for webhook", e);
+            throw new RuntimeException("Error generating idempotency key", e);
         }
+    }
+
+    private boolean isFundingEvent(String eventType) {
+        return "SUCCESSFUL_TRANSACTION".equalsIgnoreCase(eventType)
+                || "payment_successful".equalsIgnoreCase(eventType);
     }
 }

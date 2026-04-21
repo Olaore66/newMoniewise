@@ -584,4 +584,31 @@ public class NotificationService {
             logger.error("❌ Failed to send Reset OTP to {}: {}", to, e.getMessage());
         }
     }
+    @Async
+    public void sendTransactionPinResetOtp(String to, String userName, String otpCode) {
+        if ("stub".equals(activeProfile) || mailSender == null) {
+            logger.info("[STUB] Sending Transaction PIN Reset OTP {} to {}", otpCode, to);
+            return;
+        }
+        try {
+            Context context = new Context();
+            context.setVariable("userName", userName);
+            context.setVariable("otpCode", otpCode);
+
+            String htmlContent = templateEngine.process("otp-email", context);
+
+            MimeMessage mimeMessage = mailSender.createMimeMessage();
+            MimeMessageHelper helper = new MimeMessageHelper(mimeMessage, true);
+
+            helper.setFrom(fromEmail);
+            helper.setTo(to);
+            helper.setSubject("Transaction PIN Reset Code: " + otpCode);
+            helper.setText(htmlContent, true);
+
+            mailSender.send(mimeMessage);
+            logger.info("Sent Transaction PIN Reset OTP to {}", to);
+        } catch (Exception e) {
+            logger.error("Failed to send Transaction PIN Reset OTP to {}: {}", to, e.getMessage());
+        }
+    }
 }

@@ -5,6 +5,7 @@ import com.google.api.client.googleapis.auth.oauth2.GoogleIdTokenVerifier;
 import com.google.api.client.http.javanet.NetHttpTransport;
 import com.google.api.client.json.gson.GsonFactory;
 import com.moniewise.moniewise_backend.dto.request.AuthRequest;
+import com.moniewise.moniewise_backend.dto.request.ChangePasswordRequest;
 import com.moniewise.moniewise_backend.dto.response.AuthResponse;
 import com.moniewise.moniewise_backend.dto.response.LogoutResponse;
 import com.moniewise.moniewise_backend.dto.response.SignupResponse;
@@ -190,6 +191,24 @@ public class AuthController {
         resetService.updateUserPassword(email, token, newPassword);
         resetService.markTokenAsUsed(email, token);
         return ResponseEntity.ok(Map.of("message", "Password reset successful"));
+    }
+
+    @PostMapping("/change-password")
+    public ResponseEntity<?> changePassword(
+            @AuthenticationPrincipal UserDetails userDetails,
+            @RequestBody ChangePasswordRequest request
+    ) {
+        try {
+            userService.changePassword(
+                    userDetails.getUsername(),
+                    request.getCurrentPassword(),
+                    request.getNewPassword(),
+                    request.getConfirmNewPassword()
+            );
+            return ResponseEntity.ok(Map.of("message", "Password changed successfully"));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
     }
 
     @PostMapping("/google")

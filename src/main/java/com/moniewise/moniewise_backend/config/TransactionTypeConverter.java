@@ -2,8 +2,8 @@ package com.moniewise.moniewise_backend.config;
 
 import com.moniewise.moniewise_backend.enums.TransactionType;
 
-import javax.persistence.AttributeConverter;
 import javax.persistence.Converter;
+import javax.persistence.AttributeConverter;
 
 @Converter(autoApply = true)
 public class TransactionTypeConverter implements AttributeConverter<TransactionType, String> {

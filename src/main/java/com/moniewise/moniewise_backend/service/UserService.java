@@ -133,21 +133,8 @@ public class UserService implements UserDetailsService {
      */
     @Transactional
     public void createTransactionPin(User user, String pin, String confirmPin) {
-        // 1. Validations
-        if (!pin.equals(confirmPin)) {
-            throw new IllegalArgumentException("PINs do not match");
-        }
-        if (pin.length() != 4 || !pin.matches("\\d+")) {
-            throw new IllegalArgumentException("PIN must be exactly 4 digits");
-        }
-
-        // 2. Security: Hash the PIN
-        // We reuse the same BCrypt encoder used for passwords.
-        // Result looks like: $2a$10$EixZa...
-        String hashedPin = passwordEncoder.encode(pin);
-
-        // 3. Save
-        user.setTransactionPin(hashedPin);
+        validateNewPin(pin, confirmPin);
+        user.setTransactionPin(passwordEncoder.encode(pin));
         userRepository.save(user);
     }
 
@@ -159,6 +146,79 @@ public class UserService implements UserDetailsService {
             throw new IllegalStateException("User has not set a transaction PIN");
         }
         return passwordEncoder.matches(rawPin, user.getTransactionPin());
+    }
+
+    @Transactional
+    public void changeTransactionPin(User user, String currentPin, String newPin, String confirmNewPin) {
+        if (!hasPin(user)) {
+            throw new IllegalStateException("User has not set a transaction PIN");
+        }
+        if (currentPin == null || currentPin.isBlank()) {
+            throw new IllegalArgumentException("Current PIN is required");
+        }
+        if (!passwordEncoder.matches(currentPin, user.getTransactionPin())) {
+            throw new IllegalArgumentException("Current PIN is incorrect");
+        }
+        validateNewPin(newPin, confirmNewPin);
+        if (passwordEncoder.matches(newPin, user.getTransactionPin())) {
+            throw new IllegalArgumentException("New PIN must be different from current PIN");
+        }
+
+        user.setTransactionPin(passwordEncoder.encode(newPin));
+        userRepository.save(user);
+    }
+
+    @Transactional
+    public void resetTransactionPin(User user, String newPin, String confirmNewPin) {
+        validateNewPin(newPin, confirmNewPin);
+        if (hasPin(user) && passwordEncoder.matches(newPin, user.getTransactionPin())) {
+            throw new IllegalArgumentException("New PIN must be different from current PIN");
+        }
+
+        user.setTransactionPin(passwordEncoder.encode(newPin));
+        userRepository.save(user);
+    }
+
+    @Transactional
+    public void changePassword(String email, String currentPassword, String newPassword, String confirmNewPassword) {
+        User user = findByEmail(email);
+
+        if (currentPassword == null || currentPassword.isBlank()) {
+            throw new IllegalArgumentException("Current password is required");
+        }
+        if (newPassword == null || newPassword.isBlank()) {
+            throw new IllegalArgumentException("New password is required");
+        }
+        if (!newPassword.equals(confirmNewPassword)) {
+            throw new IllegalArgumentException("New passwords do not match");
+        }
+        if (!passwordEncoder.matches(currentPassword, user.getPassword())) {
+            throw new IllegalArgumentException("Current password is incorrect");
+        }
+        if (passwordEncoder.matches(newPassword, user.getPassword())) {
+            throw new IllegalArgumentException("New password must be different from current password");
+        }
+        if (newPassword.length() < 8) {
+            throw new IllegalArgumentException("New password must be at least 8 characters");
+        }
+
+        user.setPassword(passwordEncoder.encode(newPassword));
+        userRepository.save(user);
+    }
+
+    private void validateNewPin(String pin, String confirmPin) {
+        if (pin == null || pin.isBlank()) {
+            throw new IllegalArgumentException("PIN is required");
+        }
+        if (confirmPin == null || confirmPin.isBlank()) {
+            throw new IllegalArgumentException("PIN confirmation is required");
+        }
+        if (!pin.equals(confirmPin)) {
+            throw new IllegalArgumentException("PINs do not match");
+        }
+        if (pin.length() != 4 || !pin.matches("\\d+")) {
+            throw new IllegalArgumentException("PIN must be exactly 4 digits");
+        }
     }
 
     //=======================FIREBASE RECIEVE TOKEN=================
@@ -438,6 +498,10 @@ public class UserService implements UserDetailsService {
         }
 
         return user;
+    }
+
+    public Long getRequiredUserIdByEmail(String email) {
+        return findByEmail(email).getId();
     }
 
     @Override

@@ -1,20 +1,22 @@
 // src/main/java/com/moniewise/moniewise_backend/controller/TransactionController.java
 package com.moniewise.moniewise_backend.controller;
 
+import com.moniewise.moniewise_backend.dto.TransactionDecisionResponseDto;
+import com.moniewise.moniewise_backend.dto.WithdrawalInitiationResponseDto;
+import com.moniewise.moniewise_backend.dto.request.WithdrawalRequest;
 import com.moniewise.moniewise_backend.dto.response.TransactionDetailResponse;
 import com.moniewise.moniewise_backend.dto.response.TransactionListResponse;
-import com.moniewise.moniewise_backend.repository.UserRepository;
 import com.moniewise.moniewise_backend.service.TransactionService;
+import com.moniewise.moniewise_backend.service.UserService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.core.userdetails.UserDetails;
-import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.*;
 
 
-import java.util.List;
+import java.math.BigDecimal;
 
 @RestController
 
@@ -22,7 +24,7 @@ import java.util.List;
 public class TransactionController {
 
     @Autowired private TransactionService transactionService;
-    @Autowired private UserRepository userRepository;
+    @Autowired private UserService userService;
 
     @GetMapping
     public ResponseEntity<Page<TransactionListResponse>> getUserTransactions(
@@ -53,10 +55,7 @@ public class TransactionController {
     }
 
     private Long getUserIdFromUserDetails(UserDetails userDetails) {
-        String username = userDetails.getUsername();
-        return userRepository.findByEmail(username)
-                .map(user -> user.getId())
-                .orElseThrow(() -> new IllegalArgumentException("User not found for email: " + username));
+        return userService.getRequiredUserIdByEmail(userDetails.getUsername());
     }
 
     // Optional: by budget (uncomment when ready)
@@ -68,4 +67,27 @@ public class TransactionController {
     //         @AuthenticationPrincipal Long userId) {
     //     return ResponseEntity.ok(transactionService.getTransactionsForBudget(budgetId, page, size));
     // }
+
+    @PostMapping("/withdraw")
+    public ResponseEntity<WithdrawalInitiationResponseDto> initiateWithdrawal(@AuthenticationPrincipal UserDetails userDetails,
+                                                                               @RequestBody WithdrawalRequest request) {
+        Long userId = getUserIdFromUserDetails(userDetails);
+        WithdrawalInitiationResponseDto response = transactionService.initiateWithdrawal(userId, request);
+        return ResponseEntity.ok(response);
+    }
+
+    @PostMapping("/transfer")
+    public ResponseEntity<Void> initiateTransfer(@AuthenticationPrincipal UserDetails userDetails,
+                                                 @RequestParam BigDecimal amount,
+                                                 @RequestParam Long sourceEnvelopeId,
+                                                 @RequestParam String destinationReference) {
+        Long userId = getUserIdFromUserDetails(userDetails);
+        transactionService.initiateTransfer(userId, amount, sourceEnvelopeId, destinationReference);
+        return ResponseEntity.ok().build();
+    }
+
+    @GetMapping("/decision/{transactionRequestId}")
+    public ResponseEntity<TransactionDecisionResponseDto> getDecision(@PathVariable Long transactionRequestId) {
+        return ResponseEntity.ok(transactionService.getDecision(transactionRequestId));
+    }
 }
