@@ -22,7 +22,7 @@ public interface WalletRepository extends JpaRepository<Wallet, Long> {
 
     boolean existsByUser(User user); // Add this method
 
-    Optional<Wallet> findByIsRevenueWalletTrue();
+    Optional<Wallet> findByRevenueWalletTrue();
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT w FROM Wallet w WHERE w.user.id = :userId")

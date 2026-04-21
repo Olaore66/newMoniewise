@@ -637,7 +637,7 @@ public class BudgetService {
         walletService.deductBalance(user.getId(), allocationSum);
 
         // === CREDIT REVENUE WALLET (moved here for clarity) ===
-        Wallet revenueWallet = walletRepository.findByIsRevenueWalletTrue()
+        Wallet revenueWallet = walletRepository.findByRevenueWalletTrue()
                 .orElseThrow(() -> new RuntimeException("Revenue wallet not found"));
         revenueWallet.setBalance(revenueWallet.getBalance().add(fee));
         walletRepository.save(revenueWallet);

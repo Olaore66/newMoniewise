@@ -128,7 +128,7 @@ public class WalletService {
     @PostConstruct
     @Transactional
     public void ensureRevenueWalletExists() {
-        if (walletRepository.findByIsRevenueWalletTrue().isPresent()) {
+        if (walletRepository.findByRevenueWalletTrue().isPresent()) {
             return;
         }
 
