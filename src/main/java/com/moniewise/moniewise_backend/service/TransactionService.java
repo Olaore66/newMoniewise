@@ -26,6 +26,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
+import java.time.YearMonth;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
@@ -74,6 +77,18 @@ public class TransactionService {
             STRICT_LOCK_ROLLBACK,
             DISBURSEMENT_REFUNDED,
             WALLET_WITHDRAWAL
+    );
+
+    private static final Set<TransactionType> USER_VISIBLE_OUTGOING_TYPES = EnumSet.of(
+            ENVELOPE_DISBURSEMENT,
+            ENVELOPE_TO_EXTERNAL,
+            ENVELOPE_TO_ENVELOPE,
+            ENVELOPE_TO_USER,
+            WALLET_DEDUCTION,
+            BUDGET_CREATION_FEE,
+            BUDGET_ALLOCATION,
+            WALLET_WITHDRAWAL,
+            WALLET_TO_BUDGET
     );
 
     public TransactionService(
@@ -193,6 +208,39 @@ public class TransactionService {
         }
 
         return mapToDetailResponse(log);
+    }
+
+    public Map<String, BigDecimal> getMonthTotalsForUser(Long userId, YearMonth month) {
+        LocalDateTime start = month.atDay(1).atStartOfDay();
+        LocalDateTime end = month.plusMonths(1).atDay(1).atStartOfDay();
+
+        Set<TransactionType> incomingTypes = EnumSet.copyOf(USER_VISIBLE_TYPES);
+        incomingTypes.removeAll(USER_VISIBLE_OUTGOING_TYPES);
+
+        BigDecimal incoming = transactionLogRepo.sumAbsoluteAmountByUserAndDateRangeAndTypes(
+                userId,
+                start,
+                end,
+                incomingTypes
+        );
+        BigDecimal outgoingAbs = transactionLogRepo.sumAbsoluteAmountByUserAndDateRangeAndTypes(
+                userId,
+                start,
+                end,
+                USER_VISIBLE_OUTGOING_TYPES
+        );
+        BigDecimal fees = transactionLogRepo.sumFeesByUserAndDateRangeAndTypes(
+                userId,
+                start,
+                end,
+                USER_VISIBLE_TYPES
+        );
+
+        Map<String, BigDecimal> totals = new HashMap<>();
+        totals.put("incoming", incoming);
+        totals.put("outgoingAbs", outgoingAbs);
+        totals.put("fees", fees);
+        return totals;
     }
 
     public TransactionDecisionResponseDto getDecision(Long transactionRequestId) {

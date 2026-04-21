@@ -17,6 +17,8 @@ import org.springframework.web.bind.annotation.*;
 
 
 import java.math.BigDecimal;
+import java.time.YearMonth;
+import java.util.Map;
 
 @RestController
 
@@ -41,6 +43,20 @@ public class TransactionController {
                 transactionService.getTransactionsForUser(userId, page, size);
 
         return ResponseEntity.ok(result);
+    }
+
+    @GetMapping("/month-totals")
+    public ResponseEntity<Map<String, BigDecimal>> getMonthTotals(
+            @RequestParam(required = false) Integer year,
+            @RequestParam(required = false) Integer month,
+            @AuthenticationPrincipal UserDetails userDetails
+    ) {
+        Long userId = getUserIdFromUserDetails(userDetails);
+        YearMonth targetMonth = (year != null && month != null)
+                ? YearMonth.of(year, month)
+                : YearMonth.now();
+
+        return ResponseEntity.ok(transactionService.getMonthTotalsForUser(userId, targetMonth));
     }
 
     // GET /transactions/{id}

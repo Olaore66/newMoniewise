@@ -80,4 +80,32 @@ public interface TransactionLogRepository extends JpaRepository<TransactionLog, 
             @Param("startDate") LocalDateTime startDate,
             @Param("types") List<TransactionType> types
     );
+
+    @Query("""
+        SELECT COALESCE(SUM(ABS(t.amount)), 0) FROM TransactionLog t
+        WHERE t.userId = :userId
+          AND t.createdAt >= :start
+          AND t.createdAt < :end
+          AND t.transactionType IN :types
+    """)
+    BigDecimal sumAbsoluteAmountByUserAndDateRangeAndTypes(
+            @Param("userId") Long userId,
+            @Param("start") LocalDateTime start,
+            @Param("end") LocalDateTime end,
+            @Param("types") Set<TransactionType> types
+    );
+
+    @Query("""
+        SELECT COALESCE(SUM(COALESCE(t.fee, 0)), 0) FROM TransactionLog t
+        WHERE t.userId = :userId
+          AND t.createdAt >= :start
+          AND t.createdAt < :end
+          AND t.transactionType IN :types
+    """)
+    BigDecimal sumFeesByUserAndDateRangeAndTypes(
+            @Param("userId") Long userId,
+            @Param("start") LocalDateTime start,
+            @Param("end") LocalDateTime end,
+            @Param("types") Set<TransactionType> types
+    );
 }
