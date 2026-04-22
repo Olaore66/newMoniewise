@@ -7,6 +7,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.security.SecureRandom;
 import java.time.LocalDateTime;
@@ -27,6 +28,7 @@ public class PasswordResetService {
         this.mailSender = mailSender;
     }
 
+    @Transactional
     public PasswordResetToken createResetToken(String email) {
         // ✅ REFACTOR: Generate 6-Digit OTP
         SecureRandom secureRandom = new SecureRandom();

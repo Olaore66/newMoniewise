@@ -90,7 +90,7 @@ public class NotificationService {
     // =========================================================================
 
     /**
-     * 🟢 FINTECH BEST PRACTICE:
+     * ðŸŸ¢ FINTECH BEST PRACTICE:
      * Only handle the notification AFTER the transaction commits successfully.
      * Prevents "Ghost Notifications" where a user gets an alert but no money moved.
      */
@@ -102,7 +102,7 @@ public class NotificationService {
 //            String message = generateMessage(event.getType(), event.getParams());
 //            NotificationPriority priority = getPriority(event.getType());
 //
-//            // 🛑 NEW: Determine if this notification should live in the DB forever
+//            // ðŸ›‘ NEW: Determine if this notification should live in the DB forever
 //            boolean shouldSaveToDatabase = shouldPersistToDatabase(event.getType());
 //
 //            // 2. Persist to DB (ONLY if it's an important event)
@@ -129,7 +129,7 @@ public class NotificationService {
 //                    String dynamicTitle = getNotificationTitle(event.getType());
 //                    sendFCMMessage(fcmToken, dynamicTitle, message, null, event.getActionUrl(), event.getType(), userId);
 //                } else {
-//                    logger.warn("⚠️ Skipping FCM: Firebase is not initialized.");
+//                    logger.warn("âš ï¸ Skipping FCM: Firebase is not initialized.");
 //                }
 //            }
 //
@@ -138,7 +138,7 @@ public class NotificationService {
 //        }
 //    }
 
-    // 👇 ADD THIS HELPER METHOD 👇
+    // ðŸ‘‡ ADD THIS HELPER METHOD ðŸ‘‡
     @Async
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void handleNotificationEvent(GenericNotificationEvent event) {
@@ -167,7 +167,7 @@ public class NotificationService {
                 List<String> fcmTokens = authSessionService.getActiveFcmTokens(userId);
 
                 if ("stub".equals(activeProfile)) {
-                    logger.info("🛑 [STUB MODE] Simulated Push Notification to User {}: {}", userId, message);
+                    logger.info("ðŸ›‘ [STUB MODE] Simulated Push Notification to User {}: {}", userId, message);
                 } else if (!fcmTokens.isEmpty()) {
                     if (firebaseMessaging != null) {
                         String dynamicTitle = getNotificationTitle(event.getType());
@@ -175,7 +175,7 @@ public class NotificationService {
                             sendFCMMessage(fcmToken, dynamicTitle, message, null, event.getActionUrl(), event.getType(), userId);
                         }
                     } else {
-                        logger.warn("⚠️ FCM is not initialized. Cannot send push.");
+                        logger.warn("âš ï¸ FCM is not initialized. Cannot send push.");
                     }
                 }
             }
@@ -192,11 +192,11 @@ public class NotificationService {
         if (type == null) return false;
 
         return switch (type) {
-            // ❌ DO NOT SAVE TO INBOX (Transient, Nudges, or Bundled Noise)
+            // âŒ DO NOT SAVE TO INBOX (Transient, Nudges, or Bundled Noise)
             case PRE_DISBURSEMENT, DISBURSEMENT_REMINDER, POSITIVE_NUDGE, WELCOME,
                     BUDGET_CREATION_FEE, ENVELOPE_CREATED -> false; // <--- Added here!
 
-            // ✅ SAVE TO INBOX (Financial / Important)
+            // âœ… SAVE TO INBOX (Financial / Important)
             case WALLET_FUNDED, WALLET_DEPOSIT, REFUND_ISSUED,
                     WITHDRAWAL, EXTERNAL_TRANSFER, ENVELOPE_TRANSFER,
                     DISBURSEMENT_SUCCESS, EXPIRED_DISBURSEMENT, DISBURSEMENT_FAILED,
@@ -211,101 +211,96 @@ public class NotificationService {
     }
 
    /**
-     * 🟢 CENTRALIZED COPY: Premium Fintech Notification Phrasing
+     * ðŸŸ¢ CENTRALIZED COPY: Premium Fintech Notification Phrasing
      */
-    private String generateMessage(NotificationType type, Map<String, Object> params) {
-        if (params == null || params.isEmpty()) return "You have a new update from Wisemonie.";
+        private String generateMessage(NotificationType type, Map<String, Object> params) {
+        try {
+            if (type == null) {
+                return "Notification";
+            }
 
-        return switch (type) {
-            // ── Credit / Money In ────────────────────────────────────────────────
-            case WALLET_FUNDED, WALLET_DEPOSIT -> {
-                String amount = formatAmount(params.getOrDefault("amount", "0"));
-                String sender = (String) params.get("senderName"); // Ensure this matches what you pass in the event
+            if (params == null || params.isEmpty()) {
+                return "You have a new update from Wisemonie.";
+            }
 
-                if (sender != null && !sender.isEmpty()) {
-                    yield String.format("₦%s has been credited to your wallet from %s.", amount, sender);
-                } else {
-                    yield String.format("Your wallet has been funded with ₦%s.", amount);
+            return switch (type) {
+                case WALLET_FUNDED, WALLET_DEPOSIT -> {
+                    String amount = formatAmount(params.getOrDefault("amount", "0"));
+                    String sender = safeText(params.get("senderName"), null);
+
+                    if (sender != null) {
+                        yield "\u20A6" + amount + " has been credited to your wallet from " + sender + ".";
+                    }
+                    yield "Your wallet has been funded with \u20A6" + amount + ".";
                 }
-            }
+                case ENVELOPE_TRANSFER -> {
+                    String amount = formatAmount(params.getOrDefault("amount", "0"));
+                    String remaining = formatAmount(params.getOrDefault("remaining", "0"));
+                    String recipient = safeText(params.get("recipient"), null);
 
-            // ── Transfers (Envelope to Envelope) ─────────────────────────────────
-            case ENVELOPE_TRANSFER -> {
-                String amount = formatAmount(params.getOrDefault("amount", "0"));
-                String remaining = formatAmount(params.getOrDefault("remaining", "0"));
-                String recipient = (String) params.get("recipient");
-
-                if (recipient != null) {
-                    yield String.format("You successfully sent ₦%s to %s.", amount, recipient);
-                } else {
-                    // Internal transfer
-                    yield String.format("You moved ₦%s. You have ₦%s left to spend.", amount, remaining);
+                    if (recipient != null) {
+                        yield "You successfully sent \u20A6" + amount + " to " + recipient + ".";
+                    }
+                    yield "You moved \u20A6" + amount + ". You have \u20A6" + remaining + " left to spend.";
                 }
-            }
-
-            // ── External Transfers ───────────────────────────────────────────────
-            case EXTERNAL_TRANSFER -> {
-                String amount = formatAmount(params.getOrDefault("amount", "0"));
-                String recipient = (String) params.get("recipient");
-                yield String.format("Your transfer of ₦%s to %s was successful.", amount, recipient);
-            }
-
-            // ── Budgets ──────────────────────────────────────────────────────────
-            case BUDGET_CREATION -> {
-                String amount = formatAmount(params.getOrDefault("allocated", "0"));
-                String name = (String) params.get("budgetName");
-                String fee = formatAmount(params.getOrDefault("fee", "0"));
-                String envCount = String.valueOf(params.getOrDefault("envelopeCount", "your"));
-
-                yield String.format("And we're live! 🎯 Your '%s' budget is set up with ₦%s across %s envelopes. (Includes ₦%s setup fee).",
-                        name, amount, envCount, fee);
-            }
-
-            case BUDGET_CREATION_FEE -> {
-                String amount = formatAmount(params.getOrDefault("amount", "0"));
-                yield String.format("A budget creation fee of ₦%s was deducted from your wallet.", amount);
-            }
-
-            case BUDGET_COMPLETED -> {
-                String amount = formatAmount(params.getOrDefault("refunded", "0"));
-                String name = (String) params.get("budgetName");
-                yield String.format("Great job! Your budget '%s' has ended. ₦%s of unused funds has been returned to your wallet.", name, amount);
-            }
-
-            // ── Envelope/Disbursement Events ─────────────────────────────────────
-            case ENVELOPE_CREATED -> {
-                String name = (String) params.get("envelopeName");
-                String amount = formatAmount(params.getOrDefault("amount", "0"));
-                yield String.format("You've set aside ₦%s in your new '%s' envelope.", amount, name);
-            }
-
-            case DISBURSEMENT_SUCCESS -> {
-                String amount = formatAmount(params.getOrDefault("amount", "0"));
-                String name = (String) params.get("envelopeName");
-                yield String.format("₦%s has been unlocked in your '%s' envelope. It's ready to spend!", amount, name);
-            }
-
-            case PRE_DISBURSEMENT -> {
-//                String amount = formatAmount(params.getOrDefault("amount", "0"));
-                String name = (String) params.get("envelopeName");
-
-                // 🛑 THE FIX: Extract the time parameter and inject it into the string!
-                String time = (String) params.getOrDefault("time", "shortly");
-                yield String.format("Get ready! ₦%s will be unlocked in your '%s' envelope in %s. ⏳", name, time);
-            }
-
-            case EXPIRED_DISBURSEMENT -> {
-                String name = (String) params.get("envelopeName");
-                yield String.format("The spending window for your '%s' envelope has closed. The funds remain safely in your vault.", name);
-            }
-
-            default -> "You have a new update regarding your account.";
-        };
+                case EXTERNAL_TRANSFER -> {
+                    String amount = formatAmount(params.getOrDefault("amount", "0"));
+                    String recipient = safeText(params.get("recipient"), "the recipient");
+                    yield "Your transfer of \u20A6" + amount + " to " + recipient + " was successful.";
+                }
+                case BUDGET_CREATION -> {
+                    String amount = formatAmount(params.getOrDefault("allocated", "0"));
+                    String name = safeText(params.get("budgetName"), "your");
+                    String fee = formatAmount(params.getOrDefault("fee", "0"));
+                    String envCount = safeText(params.get("envelopeCount"), "your");
+                    yield "And we're live! Your '" + name + "' budget is set up with \u20A6" + amount
+                            + " across " + envCount + " envelopes. (Includes \u20A6" + fee + " setup fee).";
+                }
+                case BUDGET_CREATION_FEE -> {
+                    String amount = formatAmount(params.getOrDefault("amount", "0"));
+                    yield "A budget creation fee of \u20A6" + amount + " was deducted from your wallet.";
+                }
+                case BUDGET_COMPLETED -> {
+                    String amount = formatAmount(params.getOrDefault("refunded", "0"));
+                    String name = safeText(params.get("budgetName"), "your");
+                    yield "Great job! Your budget '" + name + "' has ended. \u20A6" + amount
+                            + " of unused funds has been returned to your wallet.";
+                }
+                case ENVELOPE_CREATED -> {
+                    String name = safeText(params.get("envelopeName"), "new");
+                    String amount = formatAmount(params.getOrDefault("amount", "0"));
+                    yield "You've set aside \u20A6" + amount + " in your new '" + name + "' envelope.";
+                }
+                case DISBURSEMENT_SUCCESS -> {
+                    String amount = formatAmount(params.getOrDefault("amount", "0"));
+                    String name = safeText(params.get("envelopeName"), "selected");
+                    yield "\u20A6" + amount + " has been unlocked in your '" + name + "' envelope. It's ready to spend!";
+                }
+                case PRE_DISBURSEMENT -> {
+                    String amount = formatAmount(params.getOrDefault("amount", "0"));
+                    String name = safeText(params.get("envelopeName"), "selected");
+                    String time = safeText(params.get("time"), "shortly");
+                    yield "Get ready! \u20A6" + amount + " will be unlocked in your '" + name + "' envelope in " + time + ".";
+                }
+                case EXPIRED_DISBURSEMENT -> {
+                    String name = safeText(params.get("envelopeName"), "selected");
+                    yield "The spending window for your '" + name + "' envelope has closed. The funds remain safely in your vault.";
+                }
+                default -> "You have a new update regarding your account.";
+            };
+        } catch (Exception e) {
+            logger.error("Failed to generate notification message for type {}", type, e);
+            return "Notification";
+        }
     }
     /**
-     * Helper to format amount consistently (₦1,234.00)
+     * Helper to format amount consistently (â‚¦1,234.00)
      */
-    private String formatAmount(Object value) {
+        private String formatAmount(Object value) {
+        if (value == null) {
+            return "0.00";
+        }
+
         try {
             BigDecimal amount = new BigDecimal(value.toString());
             return String.format("%,.2f", amount);
@@ -314,13 +309,23 @@ public class NotificationService {
         }
     }
 
+    private String safeText(Object value, String fallback) {
+        if (value == null) {
+            return fallback;
+        }
+
+        String text = value.toString().trim();
+        return text.isEmpty() ? fallback : text;
+    }
     /**
      * Helper to add optional " • From: ..." part only if value exists
      */
-    private String optionalPart(String format, Object value) {
-        return value != null && !value.toString().trim().isEmpty()
-                ? String.format(" • " + format, value)
-                : "";
+        private String optionalPart(String label, Object value) {
+        String safeValue = safeText(value, null);
+        if (safeValue == null) {
+            return "";
+        }
+        return " • " + label + safeValue;
     }
 
     // =========================================================================
@@ -370,7 +375,7 @@ public class NotificationService {
                             sendFCMMessage(fcmToken, dynamicTitle, message, actionType, redirectUrl, type, uId);
                         }
                     } else {
-                        logger.warn("⚠️ Skipping FCM: Firebase is not initialized.");
+                        logger.warn("âš ï¸ Skipping FCM: Firebase is not initialized.");
                     }
                 }
             } else {
@@ -378,7 +383,7 @@ public class NotificationService {
             }
 
         } catch (Exception e) {
-            logger.error("Notification error for user {}: {}", userId, e.getMessage());
+            logger.error("Notification error for user {}", userId, e);
         }
     }
 
@@ -390,7 +395,7 @@ public class NotificationService {
             String collapseKey = getGroupKey(type);
 
             // 1. Define the Visible Notification (For System Tray)
-            // ✅ THIS IS THE MISSING PIECE
+            // âœ… THIS IS THE MISSING PIECE
             com.google.firebase.messaging.Notification notificationPayload =
                     com.google.firebase.messaging.Notification.builder()
                             .setTitle(title)
@@ -421,7 +426,7 @@ public class NotificationService {
                     .build();
 
             Message.Builder messageBuilder = Message.builder()
-                    .setToken(fcmToken) // 👈 Use the string directly
+                    .setToken(fcmToken) // ðŸ‘ˆ Use the string directly
                     .setNotification(notificationPayload)
                     .setAndroidConfig(androidConfig)
                     .setApnsConfig(apnsConfig);
@@ -441,14 +446,14 @@ public class NotificationService {
         } catch (FirebaseMessagingException e) {
             String errorCode = e.getMessagingErrorCode().toString();
             if (errorCode.equals("UNREGISTERED") || errorCode.equals("NOT_FOUND") || errorCode.equals("INVALID_ARGUMENT")) {
-                logger.warn("🚨 Token for user {} is dead. Removing it from active sessions.", userId);
+                logger.warn("ðŸš¨ Token for user {} is dead. Removing it from active sessions.", userId);
                 try {
                     authSessionService.clearDeadFcmToken(fcmToken);
                 } catch (Exception ex) {
                     logger.error("Failed to clear dead token for user {}", userId, ex);
                 }
             } else {
-                logger.error("Failed to send FCM message: {}", e.getMessage());
+                logger.error("Failed to send FCM message", e);
             }
         }
     }
@@ -461,27 +466,27 @@ public class NotificationService {
         if (type == null) return "Wisemonie";
 
         return switch (type) {
-            case WALLET_FUNDED, WALLET_DEPOSIT, REFUND_ISSUED, DISBURSEMENT_REFUNDED, BUDGET_UNALLOCATED_REFUNDED -> "Credit Alert 🚀";
-            case WITHDRAWAL, EXTERNAL_TRANSFER, ENVELOPE_TRANSFER, BUDGET_CREATION_FEE -> "Debit Alert 💸";
-            case DISBURSEMENT, DISBURSEMENT_SUCCESS, DISBURSEMENT_READY -> "Funds Released 🔓";
-            case PRE_DISBURSEMENT, DISBURSEMENT_REMINDER -> "Funds Unlocking Soon ⏳";
-            case EXPIRED_DISBURSEMENT, DISBURSEMENT_FAILED -> "Disbursement Expired ❌";
-            case INSUFFICIENT_BALANCE -> "Transaction Declined ⛔";
-            case LOW_BALANCE_WARNING, ENVELOPE_LOW_BALANCE -> "Low Balance Warning 📉";
-            case LIMIT_REACHED, BUDGET_LIMIT_WARNING -> "Spending Limit Hit ⚠️";
-            case EMERGENCY_USED -> "Emergency Fund Used 🚨";
-            case BUDGET_CREATION, BUDGET_CREATION_SUCCESS -> "Budget Active 🎯";
-            case BUDGET_COMPLETED, GOAL_ACHIEVED -> "Goal Smashed! 🏆";
-            case ENVELOPE_CREATED -> "New Envelope ✉️";
-            case ENVELOPE_UPDATED, BUDGET_UPDATED, ENVELOPE_UNLOCKED -> "Update Successful ✅";
-            case ENVELOPE_LOCKED -> "Envelope Locked 🔒";
-            case BUDGET_END, BUDGET_EXPIRED -> "Budget Ended 🏁";
-            case BUDGET_END_SOON, BUDGET_ENDING_SOON -> "Budget Ending Soon ⏳";
-            case MATURITY_ALERT -> "Maturity Alert 📅";
-            case WEEKLY_SUMMARY -> "Weekly Recap 📊";
-            case WELCOME -> "Welcome to Wisemonie app👋";
-            case SYSTEM -> "System Update 📢";
-            case POSITIVE_NUDGE -> "Keep it up! 💪";
+            case WALLET_FUNDED, WALLET_DEPOSIT, REFUND_ISSUED, DISBURSEMENT_REFUNDED, BUDGET_UNALLOCATED_REFUNDED -> "Credit Alert ðŸš€";
+            case WITHDRAWAL, EXTERNAL_TRANSFER, ENVELOPE_TRANSFER, BUDGET_CREATION_FEE -> "Debit Alert ðŸ’¸";
+            case DISBURSEMENT, DISBURSEMENT_SUCCESS, DISBURSEMENT_READY -> "Funds Released ðŸ”“";
+            case PRE_DISBURSEMENT, DISBURSEMENT_REMINDER -> "Funds Unlocking Soon â³";
+            case EXPIRED_DISBURSEMENT, DISBURSEMENT_FAILED -> "Disbursement Expired âŒ";
+            case INSUFFICIENT_BALANCE -> "Transaction Declined â›”";
+            case LOW_BALANCE_WARNING, ENVELOPE_LOW_BALANCE -> "Low Balance Warning ðŸ“‰";
+            case LIMIT_REACHED, BUDGET_LIMIT_WARNING -> "Spending Limit Hit âš ï¸";
+            case EMERGENCY_USED -> "Emergency Fund Used ðŸš¨";
+            case BUDGET_CREATION, BUDGET_CREATION_SUCCESS -> "Budget Active ðŸŽ¯";
+            case BUDGET_COMPLETED, GOAL_ACHIEVED -> "Goal Smashed! ðŸ†";
+            case ENVELOPE_CREATED -> "New Envelope âœ‰ï¸";
+            case ENVELOPE_UPDATED, BUDGET_UPDATED, ENVELOPE_UNLOCKED -> "Update Successful âœ…";
+            case ENVELOPE_LOCKED -> "Envelope Locked ðŸ”’";
+            case BUDGET_END, BUDGET_EXPIRED -> "Budget Ended ðŸ";
+            case BUDGET_END_SOON, BUDGET_ENDING_SOON -> "Budget Ending Soon â³";
+            case MATURITY_ALERT -> "Maturity Alert ðŸ“…";
+            case WEEKLY_SUMMARY -> "Weekly Recap ðŸ“Š";
+            case WELCOME -> "Welcome to Wisemonie appðŸ‘‹";
+            case SYSTEM -> "System Update ðŸ“¢";
+            case POSITIVE_NUDGE -> "Keep it up! ðŸ’ª";
             default -> "Wisemonie Notification";
         };
     }
@@ -525,13 +530,13 @@ public class NotificationService {
 
             helper.setFrom(fromEmail);
             helper.setTo(email);
-            helper.setSubject("🚀 Welcome to Wisemonie! Your Account is Ready");
+            helper.setSubject("ðŸš€ Welcome to Wisemonie! Your Account is Ready");
             helper.setText(htmlContent, true);
 
             mailSender.send(mimeMessage);
             logger.info("Sent HTML welcome email to {}", email);
         } catch (MessagingException e) {
-            logger.error("Failed to send welcome email to {}: {}", email, e.getMessage());
+            logger.error("Failed to send welcome email to {}", email, e);
         }
     }
     @Async
@@ -548,13 +553,13 @@ public class NotificationService {
 
             helper.setFrom(fromEmail);
             helper.setTo(email);
-            helper.setSubject("🔐 Wisemonie Verification Code: " + otpCode);
+            helper.setSubject("ðŸ” Wisemonie Verification Code: " + otpCode);
             helper.setText(htmlContent, true);
 
             mailSender.send(mimeMessage);
             logger.info("Sent OTP email to {}", email);
         } catch (Exception e) {
-            logger.error("Failed to send OTP email to {}: {}", email, e.getMessage());
+            logger.error("Failed to send OTP email to {}", email, e);
         }
     }
     @Async
@@ -575,13 +580,13 @@ public class NotificationService {
 
             helper.setFrom(fromEmail);
             helper.setTo(to);
-            helper.setSubject("🔑 Password Reset Code: " + otpCode);
+            helper.setSubject("ðŸ”‘ Password Reset Code: " + otpCode);
             helper.setText(htmlContent, true);
 
             mailSender.send(mimeMessage);
-            logger.info("✅ Sent Password Reset OTP to {}", to);
+            logger.info("âœ… Sent Password Reset OTP to {}", to);
         } catch (Exception e) {
-            logger.error("❌ Failed to send Reset OTP to {}: {}", to, e.getMessage());
+            logger.error("âŒ Failed to send Reset OTP to {}", to, e);
         }
     }
     @Async
@@ -608,7 +613,9 @@ public class NotificationService {
             mailSender.send(mimeMessage);
             logger.info("Sent Transaction PIN Reset OTP to {}", to);
         } catch (Exception e) {
-            logger.error("Failed to send Transaction PIN Reset OTP to {}: {}", to, e.getMessage());
+            logger.error("Failed to send Transaction PIN Reset OTP to {}", to, e);
         }
     }
 }
+
+
