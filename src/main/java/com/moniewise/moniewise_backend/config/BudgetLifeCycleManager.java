@@ -98,8 +98,8 @@ public class BudgetLifeCycleManager {
     public void scheduleDynamicTasks(Envelope envelope) {
         // 🛑 FIX 1: Clean slate for ALL task types so they don't stack up like pancakes
         scheduledTaskRepository.deleteByEnvelopeIdAndTaskType(envelope.getId(), "DISBURSEMENT");
-        scheduledTaskRepository.deleteByEnvelopeIdAndTaskType(envelope.getId(), "PRE_DISBURSEMENT_NOTIFICATION_15MIN");
-        scheduledTaskRepository.deleteByEnvelopeIdAndTaskType(envelope.getId(), "PRE_DISBURSEMENT_NOTIFICATION_5MIN");
+//        scheduledTaskRepository.deleteByEnvelopeIdAndTaskType(envelope.getId(), "PRE_DISBURSEMENT_NOTIFICATION_15MIN");
+//        scheduledTaskRepository.deleteByEnvelopeIdAndTaskType(envelope.getId(), "PRE_DISBURSEMENT_NOTIFICATION_5MIN");
 
         LocalDateTime now = fetchCurrentDateTimeFromDatabase();
         LocalDateTime nextTriggerTime = calculateNextDisbursementTime(envelope);
@@ -125,26 +125,26 @@ public class BudgetLifeCycleManager {
         mainTask.setCreatedAt(now);
         tasks.add(mainTask);
 
-        // 2. The Warnings (Only if time permits)
-        if (triggerTime.minusMinutes(15).isAfter(now)) {
-            ScheduledTask warn15 = new ScheduledTask();
-            warn15.setEnvelopeId(envelope.getId());
-            warn15.setTaskType("PRE_DISBURSEMENT_NOTIFICATION_15MIN");
-            warn15.setTriggerTime(triggerTime.minusMinutes(15));
-            warn15.setCreatedAt(now);
-            tasks.add(warn15);
-        }
+//        // 2. The Warnings (Only if time permits)
+//        if (triggerTime.minusMinutes(15).isAfter(now)) {
+//            ScheduledTask warn15 = new ScheduledTask();
+//            warn15.setEnvelopeId(envelope.getId());
+//            warn15.setTaskType("PRE_DISBURSEMENT_NOTIFICATION_15MIN");
+//            warn15.setTriggerTime(triggerTime.minusMinutes(15));
+//            warn15.setCreatedAt(now);
+//            tasks.add(warn15);
+//        }
+//
+//        if (triggerTime.minusMinutes(5).isAfter(now)) {
+//            ScheduledTask warn5 = new ScheduledTask();
+//            warn5.setEnvelopeId(envelope.getId());
+//            warn5.setTaskType("PRE_DISBURSEMENT_NOTIFICATION_5MIN");
+//            warn5.setTriggerTime(triggerTime.minusMinutes(5));
+//            warn5.setCreatedAt(now);
+//            tasks.add(warn5);
+//        }
 
-        if (triggerTime.minusMinutes(5).isAfter(now)) {
-            ScheduledTask warn5 = new ScheduledTask();
-            warn5.setEnvelopeId(envelope.getId());
-            warn5.setTaskType("PRE_DISBURSEMENT_NOTIFICATION_5MIN");
-            warn5.setTriggerTime(triggerTime.minusMinutes(5));
-            warn5.setCreatedAt(now);
-            tasks.add(warn5);
-        }
-
-        scheduledTaskRepository.saveAll(tasks);
+        scheduledTaskRepository.save(mainTask);
         logger.info("Scheduled next disbursement for envelope {} at {}", envelope.getId(), triggerTime);
     }
     @Transactional(timeout = 120)
@@ -329,21 +329,21 @@ public class BudgetLifeCycleManager {
                 // CRITICAL: Schedule the NEXT reset
                 scheduleNextTask(envelope, "LIMIT_RESET", now);
                 break;
-            case "PRE_DISBURSEMENT_NOTIFICATION_15MIN":
-            case "PRE_DISBURSEMENT_NOTIFICATION_5MIN":
-                // ✅ PUBLISH EVENT INSTEAD OF HARDCODED NOTIFICATION
-                String timeLimit = task.getTaskType().contains("15") ? "15 minutes" : "5 minutes";
-                Map<String, Object> preParams = new HashMap<>();
-                preParams.put("amount", formatAmount(envelope.getConditions().get("limit")));
-                preParams.put("envelopeName", envelope.getName() != null ? envelope.getName() : "Envelope");
-                preParams.put("time", timeLimit);
-
-                eventPublisher.publishEvent(new GenericNotificationEvent(
-                        this, userId, NotificationType.PRE_DISBURSEMENT, preParams,
-                        budget.getId(), envelope.getId(), "/envelopes/" + envelope.getId()
-                ));
-                taskIdsToDelete.add(task.getId());
-                break;
+    //            case "PRE_DISBURSEMENT_NOTIFICATION_15MIN":
+    //            case "PRE_DISBURSEMENT_NOTIFICATION_5MIN":
+    //                // ✅ PUBLISH EVENT INSTEAD OF HARDCODED NOTIFICATION
+    //                String timeLimit = task.getTaskType().contains("15") ? "15 minutes" : "5 minutes";
+    //                Map<String, Object> preParams = new HashMap<>();
+    //                preParams.put("amount", formatAmount(envelope.getConditions().get("limit")));
+    //                preParams.put("envelopeName", envelope.getName() != null ? envelope.getName() : "Envelope");
+    //                preParams.put("time", timeLimit);
+    //
+    //                eventPublisher.publishEvent(new GenericNotificationEvent(
+    //                        this, userId, NotificationType.PRE_DISBURSEMENT, preParams,
+    //                        budget.getId(), envelope.getId(), "/envelopes/" + envelope.getId()
+    //                ));
+    //                taskIdsToDelete.add(task.getId());
+    //                break;
             case "DISBURSEMENT":
                 processEnvelopeDisbursement(envelope, now.toLocalDate(), envelopesToUpdate, logsToSave);
                 // CRITICAL: Schedule the NEXT disbursement so it happens again tomorrow/next week

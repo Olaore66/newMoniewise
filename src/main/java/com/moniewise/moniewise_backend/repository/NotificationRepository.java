@@ -18,6 +18,7 @@ public interface NotificationRepository extends JpaRepository<Notification, Long
     List<Notification> findByUserIdOrderByCreatedAtDesc(Long userId);
     List<Notification> findByUserIdAndIsReadFalseOrderByCreatedAtDesc(Long userId);
     Page<Notification> findByUserIdAndIsReadFalse(Long userId, Pageable pageable);
+    long countByUserIdAndIsReadFalse(Long userId);
     List<Notification> findByUserIdAndTypeOrderByCreatedAtDesc(Long userId, String type);
     Optional<Notification> findByIdAndUserId(Long id, Long userId);
     void deleteByCreatedAtBefore(LocalDateTime threshold);
@@ -25,7 +26,7 @@ public interface NotificationRepository extends JpaRepository<Notification, Long
 
     @Modifying
     @Query("UPDATE Notification n SET n.isRead = true WHERE n.userId = :userId AND n.isRead = false")
-    void markAllAsReadForUser(@Param("userId") Long userId);
+    int markAllAsReadForUser(@Param("userId") Long userId);
 }
 
 

@@ -1,8 +1,10 @@
 package com.moniewise.moniewise_backend.controller;
 
+import com.moniewise.moniewise_backend.dto.response.NotificationBulkReadResponse;
 import com.moniewise.moniewise_backend.entity.Notification;
 import com.moniewise.moniewise_backend.repository.NotificationRepository;
 import com.moniewise.moniewise_backend.repository.UserRepository;
+import com.moniewise.moniewise_backend.service.NotificationService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -23,11 +25,17 @@ public class NotificationController {
 
     private final NotificationRepository notificationRepository;
     private final UserRepository userRepository;
+    private final NotificationService notificationService;
 
     @Autowired
-    public NotificationController(NotificationRepository notificationRepository, UserRepository userRepository) {
+    public NotificationController(
+            NotificationRepository notificationRepository,
+            UserRepository userRepository,
+            NotificationService notificationService
+    ) {
         this.notificationRepository = notificationRepository;
         this.userRepository = userRepository;
+        this.notificationService = notificationService;
     }
 
     @GetMapping
@@ -74,10 +82,11 @@ public class NotificationController {
     }
 
     @PutMapping("/read-all")
-    public ResponseEntity<Void> markAllNotificationsAsRead(@AuthenticationPrincipal UserDetails userDetails) {
+    public ResponseEntity<NotificationBulkReadResponse> markAllNotificationsAsRead(
+            @AuthenticationPrincipal UserDetails userDetails
+    ) {
         Long userId = getUserIdFromUserDetails(userDetails);
-        notificationRepository.markAllAsReadForUser(userId);
-        return ResponseEntity.ok().build();
+        return ResponseEntity.ok(notificationService.markAllNotificationsAsRead(userId));
     }
 
     private Long getUserIdFromUserDetails(UserDetails userDetails) {

@@ -2,6 +2,7 @@ package com.moniewise.moniewise_backend.service;
 
 import com.google.firebase.messaging.*;
 import com.moniewise.moniewise_backend.config.GenericNotificationEvent;
+import com.moniewise.moniewise_backend.dto.response.NotificationBulkReadResponse;
 import com.moniewise.moniewise_backend.entity.Notification;
 import com.moniewise.moniewise_backend.enums.NotificationPriority;
 import com.moniewise.moniewise_backend.enums.NotificationType;
@@ -16,6 +17,7 @@ import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.mail.javamail.MimeMessageHelper;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 import org.thymeleaf.TemplateEngine;
@@ -70,6 +72,13 @@ public class NotificationService {
         this.authSessionService = authSessionService;
         this.mailSender = mailSender;
         this.templateEngine = templateEngine;
+    }
+
+    @Transactional
+    public NotificationBulkReadResponse markAllNotificationsAsRead(Long userId) {
+        int updatedCount = notificationRepository.markAllAsReadForUser(userId);
+        long unreadCount = notificationRepository.countByUserIdAndIsReadFalse(userId);
+        return new NotificationBulkReadResponse(updatedCount, unreadCount);
     }
 
     @PostConstruct
@@ -276,12 +285,12 @@ public class NotificationService {
                     String name = safeText(params.get("envelopeName"), "selected");
                     yield "\u20A6" + amount + " has been unlocked in your '" + name + "' envelope. It's ready to spend!";
                 }
-                case PRE_DISBURSEMENT -> {
-                    String amount = formatAmount(params.getOrDefault("amount", "0"));
-                    String name = safeText(params.get("envelopeName"), "selected");
-                    String time = safeText(params.get("time"), "shortly");
-                    yield "Get ready! \u20A6" + amount + " will be unlocked in your '" + name + "' envelope in " + time + ".";
-                }
+//                case PRE_DISBURSEMENT -> {
+//                    String amount = formatAmount(params.getOrDefault("amount", "0"));
+//                    String name = safeText(params.get("envelopeName"), "selected");
+//                    String time = safeText(params.get("time"), "shortly");
+//                    yield "Get ready! \u20A6" + amount + " will be unlocked in your '" + name + "' envelope in " + time + ".";
+//                }
                 case EXPIRED_DISBURSEMENT -> {
                     String name = safeText(params.get("envelopeName"), "selected");
                     yield "The spending window for your '" + name + "' envelope has closed. The funds remain safely in your vault.";
@@ -466,31 +475,30 @@ public class NotificationService {
         if (type == null) return "Wisemonie";
 
         return switch (type) {
-            case WALLET_FUNDED, WALLET_DEPOSIT, REFUND_ISSUED, DISBURSEMENT_REFUNDED, BUDGET_UNALLOCATED_REFUNDED -> "Credit Alert ðŸš€";
-            case WITHDRAWAL, EXTERNAL_TRANSFER, ENVELOPE_TRANSFER, BUDGET_CREATION_FEE -> "Debit Alert ðŸ’¸";
-            case DISBURSEMENT, DISBURSEMENT_SUCCESS, DISBURSEMENT_READY -> "Funds Released ðŸ”“";
-            case PRE_DISBURSEMENT, DISBURSEMENT_REMINDER -> "Funds Unlocking Soon â³";
-            case EXPIRED_DISBURSEMENT, DISBURSEMENT_FAILED -> "Disbursement Expired âŒ";
-            case INSUFFICIENT_BALANCE -> "Transaction Declined â›”";
-            case LOW_BALANCE_WARNING, ENVELOPE_LOW_BALANCE -> "Low Balance Warning ðŸ“‰";
-            case LIMIT_REACHED, BUDGET_LIMIT_WARNING -> "Spending Limit Hit âš ï¸";
-            case EMERGENCY_USED -> "Emergency Fund Used ðŸš¨";
-            case BUDGET_CREATION, BUDGET_CREATION_SUCCESS -> "Budget Active ðŸŽ¯";
-            case BUDGET_COMPLETED, GOAL_ACHIEVED -> "Goal Smashed! ðŸ†";
-            case ENVELOPE_CREATED -> "New Envelope âœ‰ï¸";
-            case ENVELOPE_UPDATED, BUDGET_UPDATED, ENVELOPE_UNLOCKED -> "Update Successful âœ…";
-            case ENVELOPE_LOCKED -> "Envelope Locked ðŸ”’";
-            case BUDGET_END, BUDGET_EXPIRED -> "Budget Ended ðŸ";
-            case BUDGET_END_SOON, BUDGET_ENDING_SOON -> "Budget Ending Soon â³";
-            case MATURITY_ALERT -> "Maturity Alert ðŸ“…";
-            case WEEKLY_SUMMARY -> "Weekly Recap ðŸ“Š";
-            case WELCOME -> "Welcome to Wisemonie appðŸ‘‹";
-            case SYSTEM -> "System Update ðŸ“¢";
-            case POSITIVE_NUDGE -> "Keep it up! ðŸ’ª";
+            case WALLET_FUNDED, WALLET_DEPOSIT, REFUND_ISSUED, DISBURSEMENT_REFUNDED, BUDGET_UNALLOCATED_REFUNDED -> "Credit Alert 🚀";
+            case WITHDRAWAL, EXTERNAL_TRANSFER, ENVELOPE_TRANSFER, BUDGET_CREATION_FEE -> "Debit Alert 💸";
+            case DISBURSEMENT, DISBURSEMENT_SUCCESS, DISBURSEMENT_READY -> "Funds Released 🔓";
+            case PRE_DISBURSEMENT, DISBURSEMENT_REMINDER -> "Funds Unlocking Soon ⏳";
+            case EXPIRED_DISBURSEMENT, DISBURSEMENT_FAILED -> "Disbursement Expired ❌";
+            case INSUFFICIENT_BALANCE -> "Transaction Declined ⛔";
+            case LOW_BALANCE_WARNING, ENVELOPE_LOW_BALANCE -> "Low Balance Warning 📉";
+            case LIMIT_REACHED, BUDGET_LIMIT_WARNING -> "Spending Limit Hit ⚠️";
+            case EMERGENCY_USED -> "Emergency Fund Used 🚨";
+            case BUDGET_CREATION, BUDGET_CREATION_SUCCESS -> "Budget Active 🎯";
+            case BUDGET_COMPLETED, GOAL_ACHIEVED -> "Goal Smashed! 🏆";
+            case ENVELOPE_CREATED -> "New Envelope ✉️";
+            case ENVELOPE_UPDATED, BUDGET_UPDATED, ENVELOPE_UNLOCKED -> "Update Successful ✅";
+            case ENVELOPE_LOCKED -> "Envelope Locked 🔒";
+            case BUDGET_END, BUDGET_EXPIRED -> "Budget Ended 🏁";
+            case BUDGET_END_SOON, BUDGET_ENDING_SOON -> "Budget Ending Soon ⏳";
+            case MATURITY_ALERT -> "Maturity Alert 📅";
+            case WEEKLY_SUMMARY -> "Weekly Recap 📊";
+            case WELCOME -> "Welcome to Wisemonie 👋";
+            case SYSTEM -> "System Update 📢";
+            case POSITIVE_NUDGE -> "Keep it up! 💪";
             default -> "Wisemonie Notification";
         };
     }
-
     private String getGroupKey(NotificationType type) {
         if (type == null) return "GENERAL";
         return switch (type) {
@@ -504,7 +512,7 @@ public class NotificationService {
     private NotificationPriority getPriority(NotificationType type) {
         return switch (type) {
             case WALLET_DEPOSIT, WALLET_FUNDED, ENVELOPE_TRANSFER, EXTERNAL_TRANSFER,
-                    LOW_BALANCE_WARNING, INSUFFICIENT_BALANCE, DISBURSEMENT, DISBURSEMENT_SUCCESS, DISBURSEMENT_READY, PRE_DISBURSEMENT, BUDGET_COMPLETED -> NotificationPriority.HIGH;
+                    LOW_BALANCE_WARNING, INSUFFICIENT_BALANCE, DISBURSEMENT, DISBURSEMENT_SUCCESS, DISBURSEMENT_READY, BUDGET_COMPLETED -> NotificationPriority.HIGH;
 
             case BUDGET_LIMIT_WARNING, BUDGET_END_SOON, DISBURSEMENT_FAILED,
                     GOAL_ACHIEVED, WELCOME -> NotificationPriority.MEDIUM;
@@ -580,13 +588,13 @@ public class NotificationService {
 
             helper.setFrom(fromEmail);
             helper.setTo(to);
-            helper.setSubject("ðŸ”‘ Password Reset Code: " + otpCode);
+            helper.setSubject("🔓 Password Reset Code: " + otpCode);
             helper.setText(htmlContent, true);
 
             mailSender.send(mimeMessage);
-            logger.info("âœ… Sent Password Reset OTP to {}", to);
+            logger.info("🔓 Sent Password Reset OTP to {}", to);
         } catch (Exception e) {
-            logger.error("âŒ Failed to send Reset OTP to {}", to, e);
+            logger.error("⚠️ Failed to send Reset OTP to {}", to, e);
         }
     }
     @Async
