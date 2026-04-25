@@ -51,6 +51,8 @@ public class BudgetLifeCycleManager {
     private final PendingDisbursementRepository pendingDisbursementRepository;
     private final EnvelopeService envelopeService;
 
+    private final OutboxEventRepository outboxEventRepository;
+
     private final ApplicationEventPublisher eventPublisher;
     @PersistenceContext
     private EntityManager entityManager;
@@ -67,7 +69,7 @@ public class BudgetLifeCycleManager {
             NotificationRepository notificationRepository,
             PendingDisbursementRepository pendingDisbursementRepository,
             @Lazy EnvelopeService envelopeService,
-            ApplicationEventPublisher eventPublisher) {
+            OutboxEventRepository outboxEventRepository, ApplicationEventPublisher eventPublisher) {
         this.budgetRepository = budgetRepository;
         this.envelopeRepository = envelopeRepository;
         this.scheduledTaskRepository = scheduledTaskRepository;
@@ -78,6 +80,7 @@ public class BudgetLifeCycleManager {
         this.notificationRepository = notificationRepository;
         this.pendingDisbursementRepository = pendingDisbursementRepository;
         this.envelopeService = envelopeService;
+        this.outboxEventRepository = outboxEventRepository;
         this.eventPublisher = eventPublisher;
     }
 
@@ -97,7 +100,9 @@ public class BudgetLifeCycleManager {
 
     public void scheduleDynamicTasks(Envelope envelope) {
         // 🛑 FIX 1: Clean slate for ALL task types so they don't stack up like pancakes
-        scheduledTaskRepository.deleteByEnvelopeIdAndTaskType(envelope.getId(), "DISBURSEMENT");
+        scheduledTaskRepository.cancelPendingByEnvelopeIdAndTaskType(envelope.getId(), "DISBURSEMENT");
+
+//        scheduledTaskRepository.deleteByEnvelopeIdAndTaskType(envelope.getId(), "DISBURSEMENT");
 //        scheduledTaskRepository.deleteByEnvelopeIdAndTaskType(envelope.getId(), "PRE_DISBURSEMENT_NOTIFICATION_15MIN");
 //        scheduledTaskRepository.deleteByEnvelopeIdAndTaskType(envelope.getId(), "PRE_DISBURSEMENT_NOTIFICATION_5MIN");
 
@@ -123,6 +128,8 @@ public class BudgetLifeCycleManager {
         mainTask.setTaskType("DISBURSEMENT");
         mainTask.setTriggerTime(triggerTime);
         mainTask.setCreatedAt(now);
+        mainTask.setStatus("PENDING");
+        mainTask.setRetryCount(0);
         tasks.add(mainTask);
 
 //        // 2. The Warnings (Only if time permits)
@@ -227,13 +234,21 @@ public class BudgetLifeCycleManager {
             Map<String, Object> params = new HashMap<>();
             params.put("budgetName", budget.getName() != null ? budget.getName() : "Your Budget");
 
-            eventPublisher.publishEvent(new GenericNotificationEvent(
-                    this,
-                    budget.getUser().getId().toString(),
+            String payload = """
+            {
+              "budgetName": "%s"
+            }
+            """.formatted(budget.getName() != null ? budget.getName() : "Your Budget");
+
+            OutboxEvent event = buildOutboxEvent(
                     NotificationType.BUDGET_END_SOON,
-                    params,
-                    budget.getId(), null, "/budgets/" + budget.getId()
-            ));
+                    budget.getUser().getId(),
+                    budget.getId(),
+                    null,
+                    payload
+            );
+
+            outboxEventRepository.save(event);
         }
         logger.info("Sent 3-day warning notifications to {} budgets.", nearingEnd.size());
     }
@@ -256,68 +271,81 @@ public class BudgetLifeCycleManager {
         LocalDateTime now = fetchCurrentDateTimeFromDatabase();
         logger.debug("Starting BATCH task processing at {}", now);
 
-        int batchSize = 100; // Only load 100 at a time
+        int batchSize = 100;
         boolean hasNextBatch = true;
 
-        // 👇 YOU MUST ADD THESE TWO LINES 👇
         int maxLoops = 50;
         int currentLoop = 0;
 
         while (hasNextBatch && currentLoop < maxLoops) {
             currentLoop++;
+
             hasNextBatch = transactionTemplate.execute(status -> {
-                Pageable pageable = PageRequest.of(0, batchSize);
+                List<ScheduledTask> tasks = scheduledTaskRepository.claimDueTasks(now, batchSize);
 
-                // Uses the new Repository method we added
-                Page<ScheduledTask> page = scheduledTaskRepository.findTasksDueBy(now, pageable);
+                if (tasks.isEmpty()) return false;
 
-                if (page.isEmpty()) return false; // Stop loop
-
-                List<Long> tasksToDelete = new ArrayList<>();
+                List<Long> tasksToComplete = new ArrayList<>();
                 List<Envelope> envelopesToUpdate = new ArrayList<>();
                 List<TransactionLog> logsToSave = new ArrayList<>();
+                List<OutboxEvent> outboxEventsToSave = new ArrayList<>();
 
-                for (ScheduledTask task : page.getContent()) {
+                for (ScheduledTask task : tasks) {
                     try {
-                        processTask(task, now, envelopesToUpdate, logsToSave, tasksToDelete);
+                        processTask(
+                                task,
+                                now,
+                                envelopesToUpdate,
+                                logsToSave,
+                                tasksToComplete,
+                                outboxEventsToSave
+                        );
                     } catch (Exception e) {
-                        logger.error("Skipping failed task {}: {}", task.getId(), e.getMessage());
-                        tasksToDelete.add(task.getId()); // Delete bad tasks to prevent infinite loops
+                        logger.error("Skipping failed task {}: {}", task.getId(), e.getMessage(), e);
+                        scheduledTaskRepository.markTaskFailed(task.getId(), e.getMessage());
                     }
                 }
 
-                // Save Batch
-                if (!envelopesToUpdate.isEmpty()) envelopeRepository.saveAll(envelopesToUpdate);
-                if (!logsToSave.isEmpty()) transactionLogRepository.saveAll(logsToSave);
-                if (!tasksToDelete.isEmpty()) {
-                    scheduledTaskRepository.deleteTasksSafely(tasksToDelete);
+                if (!envelopesToUpdate.isEmpty()) {
+                    envelopeRepository.saveAll(envelopesToUpdate);
                 }
 
-                // 🧹 RAM CLEANUP (Prevents OOM)
+                if (!logsToSave.isEmpty()) {
+                    transactionLogRepository.saveAll(logsToSave);
+                }
+
+                if (!outboxEventsToSave.isEmpty()) {
+                    outboxEventRepository.saveAll(outboxEventsToSave);
+                }
+
+                if (!tasksToComplete.isEmpty()) {
+                    scheduledTaskRepository.markTasksCompleted(tasksToComplete, LocalDateTime.now());
+                }
+
                 entityManager.flush();
                 entityManager.clear();
 
-                return page.hasNext();
+                return tasks.size() == batchSize;
             });
         }
 
         long durationMs = (System.nanoTime() - startTime) / 1_000_000;
         logger.debug("Batch tasks completed in {}ms", durationMs);
     }
-
     // FIX: New method to process tasks, including LIMIT_RESET
     private void processTask(ScheduledTask task, LocalDateTime now, List<Envelope> envelopesToUpdate,
-                             List<TransactionLog> logsToSave, List<Long> taskIdsToDelete) {
+                             List<TransactionLog> logsToSave, List<Long> taskIdsToComplete,
+                             List<OutboxEvent> outboxEventsToSave) {
         Envelope envelope = envelopeRepository.findById(task.getEnvelopeId()).orElse(null);
         if (envelope == null) {
             logger.warn("Envelope {} not found for task {}", task.getEnvelopeId(), task.getId());
-            taskIdsToDelete.add(task.getId());
+            taskIdsToComplete.add(task.getId());
             return;
         }
         Budget budget = envelope.getBudget();
         if (budget == null || budget.getStatus() != BudgetStatus.ACTIVE) {
             logger.warn("Skipping task {} for envelope {}: budget is not active", task.getId(), task.getEnvelopeId());
-            taskIdsToDelete.add(task.getId());
+            taskIdsToComplete.add(task.getId());
             return;
         }
         String userId = budget.getUser().getId().toString();
@@ -325,7 +353,7 @@ public class BudgetLifeCycleManager {
             case "LIMIT_RESET":
                 envelopeService.resetEnvelopeLimits(envelope);
                 logger.info("Reset limit for envelope {} at {}", envelope.getId(), now);
-                taskIdsToDelete.add(task.getId());
+                taskIdsToComplete.add(task.getId());
                 // CRITICAL: Schedule the NEXT reset
                 scheduleNextTask(envelope, "LIMIT_RESET", now);
                 break;
@@ -345,18 +373,20 @@ public class BudgetLifeCycleManager {
     //                taskIdsToDelete.add(task.getId());
     //                break;
             case "DISBURSEMENT":
-                processEnvelopeDisbursement(envelope, now.toLocalDate(), envelopesToUpdate, logsToSave);
+                processEnvelopeDisbursement(envelope, now.toLocalDate(), envelopesToUpdate, logsToSave, outboxEventsToSave);
                 // CRITICAL: Schedule the NEXT disbursement so it happens again tomorrow/next week
 //                scheduleNextTask(envelope, "DISBURSEMENT", now);
+
+                taskIdsToComplete.add(task.getId());
                 scheduleDynamicTasks(envelope);
-//                taskIdsToDelete.add(task.getId());
+
                 // 🛑 THE FIX: Update the frontend UI date so it doesn't get stuck in the past!
                 envelope.setNextDisbursementAt(calculateNextDisbursementTime(envelope));
                 envelopesToUpdate.add(envelope);
                 break;
             default:
                 logger.warn("Unknown task type {} for envelope {}", task.getTaskType(), envelope.getId());
-                taskIdsToDelete.add(task.getId());
+                taskIdsToComplete.add(task.getId());
         }
     }
 
@@ -370,6 +400,8 @@ public class BudgetLifeCycleManager {
             newTask.setTaskType(taskType);
             newTask.setTriggerTime(nextTime);
             newTask.setCreatedAt(LocalDateTime.now());
+            newTask.setStatus("PENDING");
+            newTask.setRetryCount(0);
             scheduledTaskRepository.save(newTask);
             logger.info("Chained next {} task for envelope {} at {}", taskType, envelope.getId(), nextTime);
         }
@@ -521,7 +553,8 @@ public class BudgetLifeCycleManager {
     }
 
     private void processEnvelopeDisbursement(Envelope envelope, LocalDate today, List<Envelope> envelopesToUpdate,
-                                             List<TransactionLog> logsToSave) {
+                                             List<TransactionLog> logsToSave,
+                                             List<OutboxEvent> outboxEventsToSave) {
         Map<String, Object> conditions = envelope.getConditions();
         if (conditions == null || !conditions.containsKey("type")) {
             logger.warn("Invalid conditions for envelope {}", envelope.getId());
@@ -599,7 +632,7 @@ public class BudgetLifeCycleManager {
                 envelopesToUpdate.add(envelope);
 
                 // 3. PROCEED TO DISBURSE
-                disburseEnvelope(envelope, now, envelopesToUpdate, logsToSave);
+                disburseEnvelope(envelope, now, envelopesToUpdate, logsToSave, outboxEventsToSave);
                 break;
             case "emergency":
                 // No automatic disbursement; handled by user action
@@ -627,7 +660,7 @@ public class BudgetLifeCycleManager {
     }
 
     private void disburseEnvelope(Envelope envelope, LocalDateTime now, List<Envelope> envelopesToUpdate,
-                                  List<TransactionLog> logsToSave) {
+                                  List<TransactionLog> logsToSave, List<OutboxEvent> outboxEventsToSave) {
         Map<String, Object> conditions = envelope.getConditions();
 
         if (conditions == null || !conditions.containsKey("limit")) return;
@@ -668,12 +701,35 @@ public class BudgetLifeCycleManager {
             params.put("amount", String.format("%,.2f", amountToDisburse));
             params.put("envelopeName", envelope.getName() != null ? envelope.getName() : "Envelope");
 
-            eventPublisher.publishEvent(new GenericNotificationEvent(
-                    this, envelope.getBudget().getUser().getId().toString(),
-                    NotificationType.DISBURSEMENT_SUCCESS, params,
-                    envelope.getBudget().getId(), envelope.getId(), "/envelopes/" + envelope.getId()
-            ));
-            logger.info("Auto-disbursed ₦{} to envelope {}", amountToDisburse, envelope.getId());
+//            eventsToPublish.add(new GenericNotificationEvent(
+//                    this,
+//                    envelope.getBudget().getUser().getId().toString(),
+//                    NotificationType.DISBURSEMENT_SUCCESS,
+//                    params,
+//                    envelope.getBudget().getId(),
+//                    envelope.getId(),
+//                    "/envelopes/" + envelope.getId()
+//            ));
+
+            OutboxEvent event = new OutboxEvent();
+            event.setEventType(NotificationType.DISBURSEMENT_SUCCESS.name());
+            event.setUserId(envelope.getBudget().getUser().getId());
+            event.setBudgetId(envelope.getBudget().getId());
+            event.setEnvelopeId(envelope.getId());
+            event.setPayload("""
+                {
+                  "amount": "%s",
+                  "envelopeName": "%s"
+                }
+                """.formatted(
+                                String.format("%,.2f", amountToDisburse),
+                                envelope.getName() != null ? envelope.getName() : "Envelope"
+                        ));
+                        event.setStatus("PENDING");
+                        event.setCreatedAt(LocalDateTime.now());
+
+                        outboxEventsToSave.add(event);
+                        logger.info("Auto-disbursed ₦{} to envelope {}", amountToDisburse, envelope.getId());
 
 //        } else {
 //            // 🛑 NEW: EMPTY VAULT NOTIFICATION
@@ -694,14 +750,22 @@ public class BudgetLifeCycleManager {
             Map<String, Object> params = new HashMap<>();
             params.put("envelopeName", envelope.getName() != null ? envelope.getName() : "Envelope");
 
-            eventPublisher.publishEvent(new GenericNotificationEvent(
-                    this, envelope.getBudget().getUser().getId().toString(),
-                    NotificationType.ENVELOPE_LOW_BALANCE,
-                    params,
-                    envelope.getBudget().getId(), envelope.getId(), "/envelopes/" + envelope.getId()
-            ));
-            logger.warn("Disbursement skipped for envelope {}: Vault is empty.", envelope.getId());
-        }
+            OutboxEvent event = new OutboxEvent();
+            event.setEventType(NotificationType.ENVELOPE_LOW_BALANCE.name());
+            event.setUserId(envelope.getBudget().getUser().getId());
+            event.setBudgetId(envelope.getBudget().getId());
+            event.setEnvelopeId(envelope.getId());
+            event.setPayload("""
+            {
+              "envelopeName": "%s"
+            }
+            """.formatted(envelope.getName() != null ? envelope.getName() : "Envelope"));
+                    event.setStatus("PENDING");
+                    event.setCreatedAt(LocalDateTime.now());
+
+                    outboxEventsToSave.add(event);
+                    logger.warn("Disbursement skipped for envelope {}: Vault is empty.", envelope.getId());
+                }
     }
 
 //    private void disburseEnvelope(Envelope envelope, LocalDateTime now, List<Envelope> envelopesToUpdate,
@@ -848,10 +912,22 @@ public class BudgetLifeCycleManager {
         params.put("amount", String.format("%,.2f", amountToDisburse));
         params.put("envelopeName", envelope.getName() != null ? envelope.getName() : "Envelope");
 
-        eventPublisher.publishEvent(new GenericNotificationEvent(
-                this, envelope.getBudget().getUser().getId().toString(),
-                NotificationType.DISBURSEMENT_SUCCESS, params,
-                envelope.getBudget().getId(), envelope.getId(), "/envelopes/" + envelope.getId()
+        String payload = """
+        {
+          "amount": "%s",
+          "envelopeName": "%s"
+        }
+        """.formatted(
+                    String.format("%,.2f", amountToDisburse),
+                    envelope.getName() != null ? envelope.getName() : "Envelope"
+            );
+
+        outboxEventRepository.save(buildOutboxEvent(
+                NotificationType.DISBURSEMENT_SUCCESS,
+                envelope.getBudget().getUser().getId(),
+                envelope.getBudget().getId(),
+                envelope.getId(),
+                payload
         ));
     }
 
@@ -873,13 +949,22 @@ public class BudgetLifeCycleManager {
                 Envelope envelope = envelopeRepository.findById(pd.getEnvelopeId()).orElse(null);
                 Long budgetId = (envelope != null) ? envelope.getBudget().getId() : null;
 
-          // ✅ PUBLISH EVENT
+                // ✅ PUBLISH EVENT
                 Map<String, Object> params = new HashMap<>();
                 params.put("envelopeName", pd.getEnvelopeName() != null ? pd.getEnvelopeName() : "Envelope");
 
-                eventPublisher.publishEvent(new GenericNotificationEvent(
-                        this, pd.getUserId().toString(), NotificationType.EXPIRED_DISBURSEMENT,
-                        params, budgetId, pd.getEnvelopeId(), "/envelopes/" + pd.getEnvelopeId()
+                String payload = """
+                {
+                  "envelopeName": "%s"
+                }
+                """.formatted(pd.getEnvelopeName() != null ? pd.getEnvelopeName() : "Envelope");
+
+                outboxEventRepository.save(buildOutboxEvent(
+                        NotificationType.EXPIRED_DISBURSEMENT,
+                        pd.getUserId(),
+                        budgetId,
+                        pd.getEnvelopeId(),
+                        payload
                 ));
 
                 disbursementsToDelete.add(pd);
@@ -1104,6 +1189,25 @@ public class BudgetLifeCycleManager {
     private String formatAmount(Object obj) {
         if(obj == null) return "0";
         return obj.toString();
+    }
+
+    private OutboxEvent buildOutboxEvent(
+            NotificationType type,
+            Long userId,
+            Long budgetId,
+            Long envelopeId,
+            String payload
+    ) {
+        OutboxEvent event = new OutboxEvent();
+        event.setEventType(type.name());
+        event.setUserId(userId);
+        event.setBudgetId(budgetId);
+        event.setEnvelopeId(envelopeId);
+        event.setPayload(payload);
+        event.setStatus("PENDING");
+        event.setRetryCount(0);
+        event.setCreatedAt(LocalDateTime.now());
+        return event;
     }
 
 

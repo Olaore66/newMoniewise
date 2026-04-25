@@ -27,6 +27,24 @@ public class ScheduledTask {
     @Column(name = "created_at")
     private LocalDateTime createdAt = LocalDateTime.now();
 
+    @Column(nullable = false)
+    private String status = "PENDING";
+
+    @Column(name = "locked_by")
+    private String lockedBy;
+
+    @Column(name = "locked_at")
+    private LocalDateTime lockedAt;
+
+    @Column(name = "retry_count", nullable = false)
+    private int retryCount = 0;
+
+    @Column(name = "last_error", columnDefinition = "TEXT")
+    private String lastError;
+
+    @Column(name = "processed_at")
+    private LocalDateTime processedAt;
+
     // Constructors
     public ScheduledTask() {}
     public ScheduledTask(Long envelopeId, String taskType, LocalDateTime triggerTime) {

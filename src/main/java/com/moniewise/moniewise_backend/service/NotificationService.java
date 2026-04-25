@@ -624,6 +624,45 @@ public class NotificationService {
             logger.error("Failed to send Transaction PIN Reset OTP to {}", to, e);
         }
     }
+
+    @Transactional
+    public void processOutboxNotification(
+            Long userId,
+            NotificationType type,
+            Map<String, Object> params,
+            Long budgetId,
+            Long envelopeId,
+            String redirectUrl
+    ) {
+        String message = generateMessage(type, params);
+        NotificationPriority priority = getPriority(type);
+        boolean shouldSaveToDatabase = shouldPersistToDatabase(type);
+
+        if (shouldSaveToDatabase) {
+            Notification notification = new Notification();
+            notification.setUserId(userId);
+            notification.setMessage(message);
+            notification.setType(type);
+            notification.setCreatedAt(LocalDateTime.now());
+            notification.setBudgetId(budgetId);
+            notification.setEnvelopeId(envelopeId);
+            notification.setRedirectUrl(redirectUrl);
+            notification.setRead(false);
+            notificationRepository.save(notification);
+        }
+
+        if (priority == NotificationPriority.HIGH || priority == NotificationPriority.MEDIUM) {
+            List<String> fcmTokens = authSessionService.getActiveFcmTokens(userId);
+
+            if (!"stub".equals(activeProfile) && !fcmTokens.isEmpty() && firebaseMessaging != null) {
+                String title = getNotificationTitle(type);
+
+                for (String token : fcmTokens) {
+                    sendFCMMessage(token, title, message, null, redirectUrl, type, userId);
+                }
+            }
+        }
+    }
 }
 
 
