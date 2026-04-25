@@ -231,15 +231,8 @@ public class BudgetLifeCycleManager {
         List<Budget> nearingEnd = budgetRepository.findByStatusAndEndDate(BudgetStatus.ACTIVE, threeDaysFromNow);
 
         for (Budget budget : nearingEnd) {
-            Map<String, Object> params = new HashMap<>();
-            params.put("budgetName", budget.getName() != null ? budget.getName() : "Your Budget");
-
-            String payload = """
-            {
-              "budgetName": "%s"
-            }
-            """.formatted(budget.getName() != null ? budget.getName() : "Your Budget");
-
+            Map<String, Object> payload = new HashMap<>();
+            payload.put("budgetName", budget.getName() != null ? budget.getName() : "Your Budget");
             OutboxEvent event = buildOutboxEvent(
                     NotificationType.BUDGET_END_SOON,
                     budget.getUser().getId(),
@@ -697,10 +690,6 @@ public class BudgetLifeCycleManager {
             logsToSave.add(log);
 
             // 3. SUCCESS NOTIFICATION
-            Map<String, Object> params = new HashMap<>();
-            params.put("amount", String.format("%,.2f", amountToDisburse));
-            params.put("envelopeName", envelope.getName() != null ? envelope.getName() : "Envelope");
-
 //            eventsToPublish.add(new GenericNotificationEvent(
 //                    this,
 //                    envelope.getBudget().getUser().getId().toString(),
@@ -711,24 +700,18 @@ public class BudgetLifeCycleManager {
 //                    "/envelopes/" + envelope.getId()
 //            ));
 
-            OutboxEvent event = new OutboxEvent();
-            event.setEventType(NotificationType.DISBURSEMENT_SUCCESS.name());
-            event.setUserId(envelope.getBudget().getUser().getId());
-            event.setBudgetId(envelope.getBudget().getId());
-            event.setEnvelopeId(envelope.getId());
-            event.setPayload("""
-                {
-                  "amount": "%s",
-                  "envelopeName": "%s"
-                }
-                """.formatted(
-                                String.format("%,.2f", amountToDisburse),
-                                envelope.getName() != null ? envelope.getName() : "Envelope"
-                        ));
-                        event.setStatus("PENDING");
-                        event.setCreatedAt(LocalDateTime.now());
+            Map<String, Object> payload = new HashMap<>();
+            payload.put("amount", String.format("%,.2f", amountToDisburse));
+            payload.put("envelopeName", envelope.getName() != null ? envelope.getName() : "Envelope");
 
-                        outboxEventsToSave.add(event);
+            outboxEventsToSave.add(buildOutboxEvent(
+                    NotificationType.DISBURSEMENT_SUCCESS,
+                    envelope.getBudget().getUser().getId(),
+                    envelope.getBudget().getId(),
+                    envelope.getId(),
+                    payload
+            ));
+
                         logger.info("Auto-disbursed ₦{} to envelope {}", amountToDisburse, envelope.getId());
 
 //        } else {
@@ -747,23 +730,16 @@ public class BudgetLifeCycleManager {
 //        }
         } else {
             // 🛑 ADD THIS: Tell the user the vault is empty!
-            Map<String, Object> params = new HashMap<>();
-            params.put("envelopeName", envelope.getName() != null ? envelope.getName() : "Envelope");
+            Map<String, Object> payload = new HashMap<>();
+            payload.put("envelopeName", envelope.getName() != null ? envelope.getName() : "Envelope");
 
-            OutboxEvent event = new OutboxEvent();
-            event.setEventType(NotificationType.ENVELOPE_LOW_BALANCE.name());
-            event.setUserId(envelope.getBudget().getUser().getId());
-            event.setBudgetId(envelope.getBudget().getId());
-            event.setEnvelopeId(envelope.getId());
-            event.setPayload("""
-            {
-              "envelopeName": "%s"
-            }
-            """.formatted(envelope.getName() != null ? envelope.getName() : "Envelope"));
-                    event.setStatus("PENDING");
-                    event.setCreatedAt(LocalDateTime.now());
-
-                    outboxEventsToSave.add(event);
+            outboxEventsToSave.add(buildOutboxEvent(
+                    NotificationType.ENVELOPE_LOW_BALANCE,
+                    envelope.getBudget().getUser().getId(),
+                    envelope.getBudget().getId(),
+                    envelope.getId(),
+                    payload
+            ));
                     logger.warn("Disbursement skipped for envelope {}: Vault is empty.", envelope.getId());
                 }
     }
@@ -912,15 +888,9 @@ public class BudgetLifeCycleManager {
         params.put("amount", String.format("%,.2f", amountToDisburse));
         params.put("envelopeName", envelope.getName() != null ? envelope.getName() : "Envelope");
 
-        String payload = """
-        {
-          "amount": "%s",
-          "envelopeName": "%s"
-        }
-        """.formatted(
-                    String.format("%,.2f", amountToDisburse),
-                    envelope.getName() != null ? envelope.getName() : "Envelope"
-            );
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("amount", String.format("%,.2f", amountToDisburse));
+        payload.put("envelopeName", envelope.getName() != null ? envelope.getName() : "Envelope");
 
         outboxEventRepository.save(buildOutboxEvent(
                 NotificationType.DISBURSEMENT_SUCCESS,
@@ -953,11 +923,10 @@ public class BudgetLifeCycleManager {
                 Map<String, Object> params = new HashMap<>();
                 params.put("envelopeName", pd.getEnvelopeName() != null ? pd.getEnvelopeName() : "Envelope");
 
-                String payload = """
-                {
-                  "envelopeName": "%s"
-                }
-                """.formatted(pd.getEnvelopeName() != null ? pd.getEnvelopeName() : "Envelope");
+                Map<String, Object> payload = new HashMap<>();
+
+                payload.put("envelopeName", pd.getEnvelopeName() != null ? pd.getEnvelopeName() : "Envelope");
+
 
                 outboxEventRepository.save(buildOutboxEvent(
                         NotificationType.EXPIRED_DISBURSEMENT,
@@ -1196,7 +1165,7 @@ public class BudgetLifeCycleManager {
             Long userId,
             Long budgetId,
             Long envelopeId,
-            String payload
+            Map<String, Object> payload
     ) {
         OutboxEvent event = new OutboxEvent();
         event.setEventType(type.name());

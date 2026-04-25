@@ -1,6 +1,5 @@
 package com.moniewise.moniewise_backend.service;
 
-import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.moniewise.moniewise_backend.entity.OutboxEvent;
 import com.moniewise.moniewise_backend.enums.NotificationType;
@@ -43,9 +42,7 @@ public class NotificationOutboxWorker {
                 event.setStatus("PROCESSING");
                 event.setLockedAt(LocalDateTime.now());
 
-                Map<String, Object> payload =
-                        objectMapper.readValue(event.getPayload(), new TypeReference<>() {});
-
+                Map<String, Object> payload = event.getPayload();
                 String redirectUrl = event.getEnvelopeId() != null
                         ? "/envelopes/" + event.getEnvelopeId()
                         : event.getBudgetId() != null
