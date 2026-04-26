@@ -1,17 +1,23 @@
 package com.moniewise.moniewise_backend.entity;
 
 import com.moniewise.moniewise_backend.enums.WalletStatus;
+import com.vladmihalcea.hibernate.type.json.JsonBinaryType;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
+import org.hibernate.annotations.Type;
+import org.hibernate.annotations.TypeDef;
 
 import javax.persistence.*;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.HashMap;
+import java.util.Map;
 
 @Entity
 @Table(name = "wallets")
+@TypeDef(name = "jsonb", typeClass = JsonBinaryType.class)
 @Getter
 @Setter
 @NoArgsConstructor
@@ -88,8 +94,10 @@ public class Wallet {
     @Column(name = "last_balance_sync_at")
     private LocalDateTime lastBalanceSyncAt;
 
+    @Type(type = "jsonb")
+    @Convert(disableConversion = true)
     @Column(name = "provider_metadata", columnDefinition = "jsonb")
-    private String providerMetadata;
+    private Map<String, Object> providerMetadata = new HashMap<>();
 
     @PrePersist
     public void prePersist() {
