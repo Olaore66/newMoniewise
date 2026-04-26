@@ -656,7 +656,8 @@ public class WalletService {
             String masterWalletRef,
             String subWalletRef,
             String providerStatus,
-            String providerMetadata
+//            String providerMetadata
+            Map<String, Object> providerMetadata
     ) {
         Wallet wallet = walletRepository.findByUserId(userId)
                 .orElseThrow(() -> new IllegalArgumentException("Wallet not found for user ID: " + userId));
@@ -667,7 +668,7 @@ public class WalletService {
         wallet.setMasterWalletRef(masterWalletRef);
         wallet.setSubWalletRef(subWalletRef);
         wallet.setProviderStatus(providerStatus);
-        wallet.setProviderMetadata(providerMetadata);
+        wallet.setProviderMetadata(providerMetadata != null ? providerMetadata : new HashMap<>());
         wallet.setLastBalanceSyncAt(LocalDateTime.now());
 
         return walletRepository.save(wallet);
