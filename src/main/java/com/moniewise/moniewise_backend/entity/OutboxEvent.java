@@ -39,6 +39,7 @@ public class OutboxEvent {
 
     @Type(type = "jsonb")
     @Column(name = "payload", columnDefinition = "jsonb", nullable = false)
+    @Convert(disableConversion = true) // 🔥 THIS IS THE FIX
     private Map<String, Object> payload;
 
     @Column(nullable = false)
