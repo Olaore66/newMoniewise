@@ -561,7 +561,7 @@ public class NotificationService {
 
             helper.setFrom(fromEmail);
             helper.setTo(email);
-            helper.setSubject("ðŸ” Wisemonie Verification Code: " + otpCode);
+            helper.setSubject("📩 Wisemonie Verification Code: " + otpCode);
             helper.setText(htmlContent, true);
 
             mailSender.send(mimeMessage);
