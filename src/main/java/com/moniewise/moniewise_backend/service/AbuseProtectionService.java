@@ -12,6 +12,8 @@ import java.util.concurrent.ConcurrentHashMap;
 public class AbuseProtectionService {
 
     public static final String LOGIN = "auth.login";
+    public static final String SIGNUP = "auth.signup";
+    public static final String SIGNUP_VERIFY = "auth.signup_verify";
     public static final String OTP_GENERATE = "otp.generate";
     public static final String OTP_VERIFY = "otp.verify";
     public static final String FORGOT_PASSWORD = "auth.forgot_password";
@@ -66,6 +68,8 @@ public class AbuseProtectionService {
     private AttemptPolicy policyFor(String action) {
         return switch (action) {
             case LOGIN -> new AttemptPolicy(5, Duration.ofMinutes(15), Duration.ofMinutes(15));
+            case SIGNUP -> new AttemptPolicy(5, Duration.ofHours(1), Duration.ofHours(1));
+            case SIGNUP_VERIFY -> new AttemptPolicy(5, Duration.ofMinutes(15), Duration.ofMinutes(30));
             case OTP_GENERATE -> new AttemptPolicy(3, Duration.ofMinutes(10), Duration.ofMinutes(10));
             case OTP_VERIFY -> new AttemptPolicy(5, Duration.ofMinutes(15), Duration.ofMinutes(15));
             case FORGOT_PASSWORD -> new AttemptPolicy(3, Duration.ofMinutes(15), Duration.ofMinutes(15));

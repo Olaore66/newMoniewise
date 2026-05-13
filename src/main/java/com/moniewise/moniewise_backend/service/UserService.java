@@ -3,6 +3,7 @@ package com.moniewise.moniewise_backend.service;
 import com.google.cloud.storage.Blob;
 import com.google.cloud.storage.Bucket;
 import com.google.firebase.cloud.StorageClient;
+import com.moniewise.moniewise_backend.dto.PendingRegistrationData;
 import com.moniewise.moniewise_backend.dto.request.ProfileRequest;
 import com.moniewise.moniewise_backend.dto.response.SignupResponse;
 import com.moniewise.moniewise_backend.dto.response.UserSummaryResponse;
@@ -27,6 +28,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
 import java.net.URL;
+import java.security.SecureRandom;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.*;
@@ -53,7 +55,9 @@ public class UserService implements UserDetailsService {
 
     private final BudgetRepository budgetRepository;
 
-    public UserService(UserRepository userRepository, PasswordEncoder passwordEncoder, WalletService walletService, WalletRepository walletRepository, WalletService walletService1, OtpService otpService, PasswordResetTokenRepository passwordResetTokenRepository, NotificationService notificationService, BudgetRepository budgetRepository) {
+    private final RegistrationCacheService registrationCacheService;
+
+    public UserService(UserRepository userRepository, PasswordEncoder passwordEncoder, WalletService walletService, WalletRepository walletRepository, WalletService walletService1, OtpService otpService, PasswordResetTokenRepository passwordResetTokenRepository, NotificationService notificationService, BudgetRepository budgetRepository, RegistrationCacheService registrationCacheService) {
         this.userRepository = userRepository;
         this.passwordEncoder = passwordEncoder; // No link to SecurityConfig
         this.walletRepository = walletRepository;
@@ -62,58 +66,130 @@ public class UserService implements UserDetailsService {
         this.passwordResetTokenRepository = passwordResetTokenRepository;
         this.notificationService = notificationService;
         this.budgetRepository = budgetRepository;
+        this.registrationCacheService = registrationCacheService;
     }
 
-    @Transactional
-    public SignupResponse signup(String email, String phone, String password) {
+    /**
+     * Stage-1 of the new two-step signup flow.
+     *
+     * <p>The user's credentials are stored <b>only in Redis</b> (with a 10-minute TTL)
+     * and a 6-digit OTP is emailed.  Nothing is written to PostgreSQL at this stage,
+     * so no "ghost" unverified accounts accumulate in the database.
+     *
+     * <p>Stage-2 is {@link #createUserFromPendingRegistration(String, String)}, called
+     * when the client submits the correct OTP via {@code POST /auth/verify-signup-otp}.
+     *
+     * <p>If the same email is submitted again while its Redis key is still live
+     * (e.g. user did not receive the email), the OTP is refreshed and re-sent.
+     *
+     * @param email    the user's email address
+     * @param phone    the user's phone number
+     * @param password the plain-text password (will be BCrypt-encoded before storage)
+     */
+    public void signup(String email, String phone, String password) {
 
-        // 1. Check Global Email (Active + Deleted) to prevent DB constraint errors
+        // 1. Guard: reject if a fully-verified account already exists in the DB ──────
         Optional<User> existingUser = userRepository.findGlobalByEmail(email);
-
         if (existingUser.isPresent()) {
             User user = existingUser.get();
             if (user.isDeleted()) {
-                // Optional: You could choose to reactivate here too,
-                // but usually we ask them to contact support or use Google.
                 throw new IllegalArgumentException("This account was deleted. Please login with Google to reactivate it.");
             }
-            throw new IllegalArgumentException("Email already exists: " + email);
+            throw new IllegalArgumentException("Email already registered: " + email);
         }
 
-        if (userRepository.findByEmail(email).isPresent()) {
-            throw new IllegalArgumentException("Email already exists: " + email);
-        }
-
-        // Check for duplicate phone number
+        // Also check by phone (DB only — phones are not stored in the Redis key)
         if (userRepository.findByPhone(phone).isPresent()) {
             throw new IllegalArgumentException("An account with the phone number '" + phone + "' already exists.");
         }
 
+        // 2. Build the pending record ──────────────────────────────────────────────
+        String encodedPassword = passwordEncoder.encode(password);
+
+        // 6-digit OTP, expires in 5 minutes
+        SecureRandom random = new SecureRandom();
+        String otpCode = String.valueOf(random.nextInt(900000) + 100000);
+        long expiresAt = System.currentTimeMillis() + (5L * 60 * 1000);
+
+        PendingRegistrationData pending = new PendingRegistrationData(
+                email.toLowerCase(),
+                phone,
+                encodedPassword,
+                otpCode,
+                expiresAt
+        );
+
+        // 3. Store in Redis (overwrites any previous pending entry for this email) ──
+        registrationCacheService.save(pending);
+
+        // 4. Send OTP email asynchronously (mirrors existing OtpService behaviour) ──
+        CompletableFuture.runAsync(() -> {
+            try {
+                notificationService.sendOtpEmail(email, otpCode);
+            } catch (Exception ex) {
+                logger.error("Failed to send signup OTP email to {}: {}", email, ex.getMessage());
+            }
+        });
+
+        logger.info("Signup initiated for {} — OTP sent, pending Redis key created.", email);
+    }
+
+    /**
+     * Stage-2 of the two-step signup flow.
+     *
+     * <p>Validates the OTP submitted by the client, then atomically pulls the
+     * pending registration data from Redis and persists a new {@link User} to
+     * PostgreSQL.  The Redis key is deleted on success.
+     *
+     * @param email   the email address used during stage-1 signup
+     * @param otpCode the 6-digit OTP the user received by email
+     * @return the newly persisted {@link User}
+     * @throws IllegalArgumentException if no pending registration is found, the OTP
+     *                                  is wrong, or the OTP has expired
+     */
+    @Transactional
+    public User createUserFromPendingRegistration(String email, String otpCode) {
+
+        // 1. Fetch pending data from Redis ─────────────────────────────────────────
+        PendingRegistrationData pending = registrationCacheService
+                .findByEmail(email)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "No pending registration found for this email. " +
+                        "The OTP may have expired — please sign up again."));
+
+        // 2. Validate OTP ──────────────────────────────────────────────────────────
+        if (!pending.getOtpCode().equals(otpCode)) {
+            throw new IllegalArgumentException("Invalid OTP code.");
+        }
+        if (System.currentTimeMillis() > pending.getOtpExpiresAtEpochMillis()) {
+            registrationCacheService.delete(email); // clean up expired key
+            throw new IllegalArgumentException("OTP has expired. Please sign up again to request a new code.");
+        }
+
+        // 3. One final duplicate guard (handles race conditions) ──────────────────
+        if (userRepository.findByEmail(email).isPresent()) {
+            registrationCacheService.delete(email);
+            throw new IllegalArgumentException("Email already registered: " + email);
+        }
+
+        // 4. Persist user to PostgreSQL ───────────────────────────────────────────
         User user = new User();
-        user.setEmail(email);
-        user.setPhone(phone);
-        user.setPassword(passwordEncoder.encode(password));
+        user.setEmail(pending.getEmail());
+        user.setPhone(pending.getPhone());
+        user.setPassword(pending.getEncodedPassword()); // already BCrypt-encoded
         user.setRole(Role.USER);
         user.setProfileData(new HashMap<>());
-        user.setVerified(false); // Default to unverified
+        user.setVerified(true);  // OTP just verified — mark immediately as verified
         user.setCreatedAt(LocalDateTime.now());
-        user.setTncAccepted(false); // during creation
-
+        user.setTncAccepted(false);
 
         User savedUser = userRepository.save(user);
 
-        // Generate OTP for verification
-        otpService.generateOtp(user.getId());
+        // 5. Clean up Redis ────────────────────────────────────────────────────────
+        registrationCacheService.delete(email);
 
-
-
-        return new SignupResponse(
-                savedUser,
-                null, // Wallet is null
-                null, // Methods null
-                "PENDING_SETUP", // Account Number placeholder
-                "PENDING_SETUP"  // Bank Name placeholder
-        );
+        logger.info("User {} created from pending registration — OTP verified successfully.", email);
+        return savedUser;
     }
 
     public Optional<User> findByEmailOrPhone(String input) {

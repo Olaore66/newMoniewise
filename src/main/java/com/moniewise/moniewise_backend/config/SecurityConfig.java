@@ -63,7 +63,7 @@ public class SecurityConfig {
                 .exceptionHandling().authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED))
                 .and()
                 .authorizeRequests()
-                .antMatchers("/auth/signup", "/auth/login", "/auth/oauth2/**", "/tnc/**", "/users/otp/generate", "/users/otp/verify", "/auth/forgot-password", "/auth/verify-reset-otp", "/auth/reset-password", "/auth/google").permitAll()
+                .antMatchers("/auth/signup", "/auth/verify-signup-otp", "/auth/login", "/auth/oauth2/**", "/tnc/**", "/users/otp/generate", "/users/otp/verify", "/auth/forgot-password", "/auth/verify-reset-otp", "/auth/reset-password", "/auth/google").permitAll()
                 .antMatchers("/api/webhooks/monnify", "/api/webhooks/securewave").permitAll()
                 .antMatchers("/auth/logout", "/auth/refresh", "/auth/delete").authenticated()
                 .antMatchers("/users/**", "/notifications/**", "/disbursements/**", "/transactions/**", "/legal/**", "/ai/**", "/budgets/**", "/envelopes/**", "/wallets/**", "/transactions/pin/**", "/beneficiaries/**", "/savings/**").authenticated()

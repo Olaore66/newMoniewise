@@ -8,10 +8,8 @@ import com.moniewise.moniewise_backend.dto.request.AuthRequest;
 import com.moniewise.moniewise_backend.dto.request.ChangePasswordRequest;
 import com.moniewise.moniewise_backend.dto.response.AuthResponse;
 import com.moniewise.moniewise_backend.dto.response.LogoutResponse;
-import com.moniewise.moniewise_backend.dto.response.SignupResponse;
 import com.moniewise.moniewise_backend.entity.PasswordResetToken;
 import com.moniewise.moniewise_backend.entity.User;
-import com.moniewise.moniewise_backend.enums.Role;
 import com.moniewise.moniewise_backend.repository.UserRepository;
 import com.moniewise.moniewise_backend.security.JwtUtil;
 import com.moniewise.moniewise_backend.service.AbuseProtectionService;
@@ -63,21 +61,81 @@ public class AuthController {
     @Value("${SESSION_WARNING_LEAD_SECONDS:${session.warning-lead-seconds:60}}")
     private String warningLeadSecondsRaw;
 
+    /**
+     * Stage-1: initiate signup — stores credentials in Redis and sends an OTP email.
+     * No database write occurs here.
+     */
     @PostMapping("/signup")
-    public ResponseEntity<Map<String, Object>> signup(@RequestBody AuthRequest request) {
+    public ResponseEntity<Map<String, Object>> signup(@RequestBody AuthRequest request,
+                                                      HttpServletRequest httpRequest) {
+        String throttleKey = abuseProtectionService.buildKey(request.getEmail(), httpRequest.getRemoteAddr());
+        abuseProtectionService.checkAllowed(AbuseProtectionService.SIGNUP, throttleKey);
         try {
-            Role role = Role.USER;
-            SignupResponse signupResponse = userService.signup(request.getEmail(), request.getPhone(), request.getPassword());
+            userService.signup(request.getEmail(), request.getPhone(), request.getPassword());
+            abuseProtectionService.recordSuccess(AbuseProtectionService.SIGNUP, throttleKey);
             Map<String, Object> response = new HashMap<>();
             response.put("status", "success");
-            response.put("message", "User registered successfully. Please login.");
-            response.put("data", signupResponse);
+            response.put("message", "A verification code has been sent to " + request.getEmail() + ". Please check your inbox.");
+            response.put("email", request.getEmail());
             return ResponseEntity.status(201).body(response);
         } catch (Exception e) {
+            abuseProtectionService.recordFailure(AbuseProtectionService.SIGNUP, throttleKey);
             Map<String, Object> error = new HashMap<>();
             error.put("status", "error");
             error.put("message", e.getMessage());
             return ResponseEntity.badRequest().body(error);
+        }
+    }
+
+    /**
+     * Stage-2: verify the signup OTP.
+     *
+     * <p>On success the user record is created in PostgreSQL, the Redis key is deleted,
+     * and a JWT is returned so the client can proceed directly to the app.
+     *
+     * <p>Request body: {@code {"email": "...", "otp": "123456"}}
+     */
+    @PostMapping("/verify-signup-otp")
+    public ResponseEntity<?> verifySignupOtp(@RequestBody Map<String, String> body,
+                                             HttpServletRequest httpRequest) {
+        String email = body.get("email");
+        String otpCode = body.get("otp");
+
+        if (email == null || email.isBlank() || otpCode == null || otpCode.isBlank()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "email and otp are required"));
+        }
+
+        String throttleKey = abuseProtectionService.buildKey(email, httpRequest.getRemoteAddr());
+        abuseProtectionService.checkAllowed(AbuseProtectionService.SIGNUP_VERIFY, throttleKey);
+
+        try {
+            // Verify OTP + persist user to DB
+            User user = userService.createUserFromPendingRegistration(email, otpCode);
+
+            // Log the user in immediately — generate a JWT session
+            UserDetails userDetails = userService.loadUserByUsername(user.getEmail());
+            String sessionId = authSessionService.createSession(user);
+            String token = jwtUtil.generateToken(userDetails, sessionId);
+
+            abuseProtectionService.recordSuccess(AbuseProtectionService.SIGNUP_VERIFY, throttleKey);
+
+            Map<String, Object> response = new HashMap<>();
+            response.put("status", "success");
+            response.put("message", "Email verified. Welcome to Moniewise!");
+            response.put("token", token);
+            response.put("expiresAt", jwtUtil.extractExpiration(token).getTime());
+            response.put("idleTimeoutSeconds", getIdleTimeoutSeconds());
+            response.put("warningLeadSeconds", getWarningLeadSeconds());
+            response.put("needsProfileUpdate", true); // New users always need profile setup
+            return ResponseEntity.ok(response);
+
+        } catch (IllegalArgumentException e) {
+            abuseProtectionService.recordFailure(AbuseProtectionService.SIGNUP_VERIFY, throttleKey);
+            return ResponseEntity.badRequest().body(Map.of("status", "error", "message", e.getMessage()));
+        } catch (Exception e) {
+            logger.error("verify-signup-otp failed for {}", email, e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("status", "error", "message", "Verification failed. Please try again."));
         }
     }
 
