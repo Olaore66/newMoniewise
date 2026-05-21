@@ -26,12 +26,20 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<?> handleBadRequest(IllegalArgumentException ex) {
-        return ResponseEntity.badRequest().body(Map.of("error", ex.getMessage()));
+        return ResponseEntity.badRequest().body(Map.of(
+                "status", HttpStatus.BAD_REQUEST.value(),
+                "error", ex.getMessage(),
+                "message", ex.getMessage()
+        ));
     }
 
     @ExceptionHandler(OtpVerificationException.class)
-    public ResponseEntity<Map<String, String>> handleOtpVerificationException(OtpVerificationException ex) {
-        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of("error", ex.getMessage()));
+    public ResponseEntity<Map<String, Object>> handleOtpVerificationException(OtpVerificationException ex) {
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of(
+                "status", HttpStatus.BAD_REQUEST.value(),
+                "error", ex.getMessage(),
+                "message", ex.getMessage()
+        ));
     }
 
     @ExceptionHandler(TooManyRequestsException.class)

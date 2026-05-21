@@ -93,7 +93,11 @@ public class UserController {
         Optional<User> userOpt = userRepository.findByEmail(request.getEmailOrPhone()).or(() -> userRepository.findByPhone(request.getEmailOrPhone()));
         if (userOpt.isEmpty() || !otpService.verifyOtp(userOpt.get().getId(), request.getOtpCode())) {
             abuseProtectionService.recordFailure(AbuseProtectionService.OTP_VERIFY, throttleKey);
-            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of("error", "Invalid OTP"));
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of(
+                    "status", HttpStatus.BAD_REQUEST.value(),
+                    "error", "Invalid OTP",
+                    "message", "Invalid OTP"
+            ));
         }
         User user = userOpt.get();
         user.setVerified(true);
