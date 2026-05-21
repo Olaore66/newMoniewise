@@ -148,10 +148,10 @@ public class AuthController {
      * Stage-1.5: BVN pre-verification — called AFTER /auth/signup but BEFORE
      * /auth/verify-signup-otp, while the user is still unauthenticated.
      *
-     * <p>The caller submits their email (used to locate the in-progress pending
+     * <p>The caller submits their phone (used to locate the in-progress pending
      * registration in Redis) and their 11-digit BVN.  The backend:
      * <ol>
-     *   <li>Confirms a pending registration exists for the email.</li>
+     *   <li>Confirms a pending registration exists for the phone.</li>
      *   <li>Calls SecureWave's BVN verification API using the email + phone on record.</li>
      *   <li>Stores the verified BVN data inside the Redis pending record so it is
      *       automatically persisted to PostgreSQL when the OTP is verified.</li>
@@ -159,19 +159,20 @@ public class AuthController {
      *
      * <p>POST /auth/bvn/pre-verify
      *
-     * <p>Request body: {@code {"email": "user@example.com", "bvn": "22435553718"}}
+     * <p>Request body: {@code {"phone": "08012345678", "bvn": "22435553718"}}
      */
     @PostMapping("/bvn/pre-verify")
     public ResponseEntity<?> bvnPreVerify(
             @Valid @RequestBody BvnPreVerifyRequest request,
             HttpServletRequest httpRequest) {
 
-        String throttleKey = abuseProtectionService.buildKey(request.getEmail(), httpRequest.getRemoteAddr());
+        String phone = request.getPhone().trim();
+        String throttleKey = abuseProtectionService.buildKey(phone, httpRequest.getRemoteAddr());
         abuseProtectionService.checkAllowed(AbuseProtectionService.BVN_PRE_VERIFY, throttleKey);
 
         try {
             BvnVerificationResultDto result = kycService.preVerifyBvn(
-                    request.getEmail().toLowerCase().trim(), request.getBvn().trim());
+                    phone, request.getBvn().trim());
 
             abuseProtectionService.recordSuccess(AbuseProtectionService.BVN_PRE_VERIFY, throttleKey);
             return ResponseEntity.ok(result);
@@ -183,7 +184,7 @@ public class AuthController {
         } catch (Exception e) {
             // SecureWave rejected or returned an error
             abuseProtectionService.recordFailure(AbuseProtectionService.BVN_PRE_VERIFY, throttleKey);
-            logger.error("BVN pre-verify failed for {}: {}", request.getEmail(), e.getMessage());
+            logger.error("BVN pre-verify failed for phone {}: {}", phone, e.getMessage());
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(Map.of("status", "error", "message", e.getMessage()));
         }
@@ -425,4 +426,3 @@ public class AuthController {
         return ResponseEntity.ok(Collections.singletonMap("message", "Account deactivated successfully. You can reactivate it by logging in with Google."));
     }
 }
-

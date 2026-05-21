@@ -58,8 +58,8 @@ public class KycService {
      * during the signup flow.
      *
      * <ol>
-     *   <li>Looks up the in-progress pending registration in Redis by {@code email}
-     *       to obtain the phone number (which SecureWave requires).</li>
+     *   <li>Looks up the in-progress pending registration in Redis by {@code phone}
+     *       to obtain the email address (which SecureWave requires).</li>
      *   <li>Calls the SecureWave BVN verification API.</li>
      *   <li>Writes the result back into the same Redis pending-registration key
      *       so it is available when the OTP is later verified and the user is
@@ -67,23 +67,23 @@ public class KycService {
      *   <li>Returns the structured result DTO to the client.</li>
      * </ol>
      *
-     * @param email the email submitted during signup (step 1)
+     * @param phone the phone submitted during signup (step 1)
      * @param bvn   the 11-digit BVN to verify
      * @return the full {@link BvnVerificationResultDto} from SecureWave
      * @throws IllegalArgumentException if no pending registration exists for
-     *                                  this email (user must call /auth/signup first)
+     *                                  this phone (user must call /auth/signup first)
      * @throws RuntimeException         if SecureWave rejects the BVN
      */
-    public BvnVerificationResultDto preVerifyBvn(String email, String bvn) {
-        // 1. Guard: must have a pending registration — proves email was submitted
+    public BvnVerificationResultDto preVerifyBvn(String phone, String bvn) {
+        // 1. Guard: must have a pending registration — proves phone was submitted
         //    during /auth/signup and prevents anonymous BVN enumeration
         PendingRegistrationData pending = registrationCacheService
-                .findByEmail(email)
+                .findByPhone(phone)
                 .orElseThrow(() -> new IllegalArgumentException(
-                        "No pending registration found for this email. " +
+                        "No pending registration found for this phone. " +
                         "Please complete the signup step first."));
 
-        String phone = pending.getPhone();
+        String email = pending.getEmail();
 
         // 2. Call SecureWave
         BvnVerificationResultDto result = secureWavePaymentProvider.verifyBvn(email, phone, bvn);
