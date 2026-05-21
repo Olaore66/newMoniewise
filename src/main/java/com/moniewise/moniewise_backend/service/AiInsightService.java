@@ -14,9 +14,11 @@ import org.springframework.stereotype.Service;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Duration;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -73,6 +75,8 @@ public class AiInsightService {
                 context.activeBudget != null,
                 context.completedBudget != null,
                 context.hasLinkedSettlementAccount,
+                context.activeBudget != null ? context.activeBudget.getName() : "",
+                context.daysUntilActiveBudgetEnds,
                 candidatesJson
             );
 
@@ -115,6 +119,10 @@ public class AiInsightService {
         context.completedBudget = completedBudget;
         context.hasBudgetHistory = !activeBudgets.isEmpty() || completedBudget != null;
         context.activeBudgets = activeBudgets;
+        if (activeBudget != null && activeBudget.getEndDate() != null) {
+            long days = ChronoUnit.DAYS.between(LocalDate.now(LAGOS_ZONE), activeBudget.getEndDate());
+            context.daysUntilActiveBudgetEnds = (int) Math.max(0, days);
+        }
         context.candidates = rankCandidates(context);
         return context;
     }
@@ -136,6 +144,26 @@ public class AiInsightService {
 
         candidates.addAll(buildSpendableEnvelopeCandidates(context.activeBudgets));
         candidates.addAll(buildUpcomingEnvelopeCandidates(context.activeBudgets));
+
+        if (context.activeBudget != null
+            && context.daysUntilActiveBudgetEnds >= 0
+            && context.daysUntilActiveBudgetEnds <= 3) {
+            String daysText = context.daysUntilActiveBudgetEnds == 0
+                ? "today"
+                : "in " + context.daysUntilActiveBudgetEnds + " day(s)";
+            ActionCandidate endingSoon = baseCandidate(
+                context.activeBudget.getName() + " budget ends " + daysText,
+                "Your " + context.activeBudget.getName() + " budget closes " + daysText + ". Review your envelope spending before it wraps up.",
+                "Review budget",
+                "review_active_budget",
+                "urgent",
+                "Active budget ends within 3 days.",
+                900
+            );
+            endingSoon.budgetId = context.activeBudget.getId();
+            endingSoon.budgetName = context.activeBudget.getName();
+            candidates.add(endingSoon);
+        }
 
         if (context.activeBudget == null && context.completedBudget == null) {
             candidates.add(baseCandidate(
@@ -733,6 +761,8 @@ public class AiInsightService {
         private Budget completedBudget;
         private List<Budget> activeBudgets = List.of();
         private List<ActionCandidate> candidates = List.of();
+        /** -1 = no active budget; 0 = ends today; N = ends in N days */
+        private int daysUntilActiveBudgetEnds = -1;
     }
 
     private static class ActionCandidate {

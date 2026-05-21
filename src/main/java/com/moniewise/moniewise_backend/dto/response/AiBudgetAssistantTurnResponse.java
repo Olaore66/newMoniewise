@@ -6,6 +6,16 @@ public class AiBudgetAssistantTurnResponse {
     private String assistantMessage;
     private String reasoning;
     private String source;
+    /**
+     * What the assistant did this turn:
+     * ADD_ENVELOPE    – one or more new envelopes were added
+     * UPDATE_ENVELOPE – one or more existing envelopes were changed
+     * REMOVE_ENVELOPE – one or more envelopes were removed
+     * REBALANCE       – multiple envelopes redistributed without explicit add/remove
+     * QUERY           – user asked a question; envelope list is unchanged
+     * NONE            – off-topic or no actionable change
+     */
+    private String action;
     private Boolean readyToFinalize;
     private Double totalAllocatedPercentage;
     private Double remainingAmount;
@@ -33,6 +43,14 @@ public class AiBudgetAssistantTurnResponse {
 
     public void setSource(String source) {
         this.source = source;
+    }
+
+    public String getAction() {
+        return action;
+    }
+
+    public void setAction(String action) {
+        this.action = action;
     }
 
     public Boolean getReadyToFinalize() {

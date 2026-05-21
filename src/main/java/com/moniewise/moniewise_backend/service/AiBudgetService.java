@@ -420,7 +420,44 @@ public class AiBudgetService {
         response.setTotalAllocatedPercentage(round1(total));
         response.setRemainingAmount(round2(remaining));
         response.setSource("fallback");
+        response.setAction(inferFallbackAction(request.getLatestUserMessage(), currentItems, envelopes));
         return response;
+    }
+
+    private String inferFallbackAction(
+        String latestMessage,
+        List<AiEnvelopeSuggestion> before,
+        List<AiEnvelopeSuggestion> after
+    ) {
+        String normalized = latestMessage == null ? "" : latestMessage.toLowerCase(Locale.ROOT);
+        // Treat as a query if the message is a question or purely informational
+        boolean isQuestion = normalized.endsWith("?")
+            || containsAny(normalized, "how much", "what is", "how many", "can you", "tell me", "explain", "why", "show me");
+        if (isQuestion && before != null && !before.isEmpty()
+            && after != null && after.size() == before.size()) {
+            return "QUERY";
+        }
+        // No prior envelopes → we added them
+        if (before == null || before.isEmpty()) {
+            return after != null && !after.isEmpty() ? "ADD_ENVELOPE" : "NONE";
+        }
+        if (after == null || after.isEmpty()) {
+            return "REMOVE_ENVELOPE";
+        }
+        // Detect specific intents
+        if (containsAny(normalized, "move") && containsAny(normalized, " from ", " to ")) {
+            return "UPDATE_ENVELOPE";
+        }
+        if (containsAny(normalized, "reduce", "cut", "lower", "increase", "add ")) {
+            return after.size() > before.size() ? "ADD_ENVELOPE" : "UPDATE_ENVELOPE";
+        }
+        if (after.size() > before.size()) {
+            return "ADD_ENVELOPE";
+        }
+        if (after.size() < before.size()) {
+            return "REMOVE_ENVELOPE";
+        }
+        return "REBALANCE";
     }
 
     private AiStarterEnvelopeResponse buildFallbackStarterPlan(AiStarterEnvelopeRequest request) {
