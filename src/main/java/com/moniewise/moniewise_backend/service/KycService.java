@@ -113,6 +113,15 @@ public class KycService {
      * @return a {@link BvnVerificationResultDto} populated with identity data
      * @throws RuntimeException if SecureWave rejects the BVN or returns an error
      */
+    /**
+     * Verifies the BVN via SecureWave, persists all returned identity data,
+     * and marks the profile as VERIFIED.
+     *
+     * <p>The email and phone sent to SecureWave are taken directly from the
+     * authenticated user's record (stored at signup) — the client only needs
+     * to submit the BVN itself.  Users are instructed during signup to provide
+     * the phone number and email that match their BVN registration.
+     */
     @Transactional
     public BvnVerificationResultDto verifyBvnWithProvider(Long userId, String bvn) {
         User user = userRepository.findById(userId)
@@ -126,7 +135,7 @@ public class KycService {
             return buildDtoFromProfile(existing.get());
         }
 
-        // Delegate to SecureWave
+        // Delegate to SecureWave — email + phone come from the user's record
         BvnVerificationResultDto result = secureWavePaymentProvider.verifyBvn(
                 user.getEmail(), user.getPhone(), bvn);
 
