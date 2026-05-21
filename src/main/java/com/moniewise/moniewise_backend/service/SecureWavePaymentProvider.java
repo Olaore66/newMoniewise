@@ -1,6 +1,8 @@
 package com.moniewise.moniewise_backend.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.moniewise.moniewise_backend.dto.response.BvnVerificationResultDto;
+import com.moniewise.moniewise_backend.entity.KycProfile;
 import com.moniewise.moniewise_backend.entity.User;
 import com.moniewise.moniewise_backend.externalTransfers.PaymentProvider;
 import lombok.RequiredArgsConstructor;
@@ -10,6 +12,7 @@ import org.springframework.cache.annotation.Cacheable;
 import org.springframework.context.annotation.Primary;
 import org.springframework.http.*;
 import org.springframework.stereotype.Service;
+import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestTemplate;
 
 import java.math.BigDecimal;
@@ -43,6 +46,118 @@ public class SecureWavePaymentProvider implements PaymentProvider {
         headers.set("Authorization", "Bearer " + secretKey); // Ensure "Bearer " has a space!
         headers.set("x-api-key", publicKey);
         return headers;
+    }
+
+    // ==========================================================
+    // 0. BVN VERIFICATION (Identity / KYC Step)
+    // POST /api/verify-bvn
+    // ==========================================================
+
+    /**
+     * Calls the SecureWave BVN verification endpoint and returns a structured
+     * DTO built from the response.  The base64 image in personal_info is
+     * intentionally dropped — it is not stored or returned to clients.
+     *
+     * @param email the user's registered email address
+     * @param phone the user's registered phone number
+     * @param bvn   the 11-digit BVN to verify
+     * @return a populated {@link BvnVerificationResultDto}
+     * @throws RuntimeException if SecureWave rejects the request or returns
+     *                          a failure status
+     */
+    public BvnVerificationResultDto verifyBvn(String email, String phone, String bvn) {
+        String url = baseUrl + "/verify-bvn";
+
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("email", email);
+        payload.put("phone", phone);
+        payload.put("bvn", bvn);
+
+        log.info("[BVN] Sending verification request to SecureWave for bvn={}***", bvn.substring(0, 4));
+
+        try {
+            ResponseEntity<Map> response = restTemplate.postForEntity(
+                    url, new HttpEntity<>(payload, getSecureWaveHeaders()), Map.class);
+
+            if (response.getStatusCode().is2xxSuccessful() && response.getBody() != null) {
+                Map<String, Object> body = response.getBody();
+                Boolean status = (Boolean) body.get("status");
+
+                if (Boolean.FALSE.equals(status)) {
+                    String message = String.valueOf(body.getOrDefault("message", "BVN verification failed"));
+                    log.error("[BVN] SecureWave returned status=false: {}", message);
+                    throw new RuntimeException("BVN verification failed: " + message);
+                }
+
+                @SuppressWarnings("unchecked")
+                Map<String, Object> data = (Map<String, Object>) body.get("data");
+                if (data == null) {
+                    throw new RuntimeException("BVN verification failed: empty data in response");
+                }
+
+                log.info("[BVN] Verification successful for bvn={}***", bvn.substring(0, 4));
+                return mapToBvnResult(data);
+            }
+
+            throw new RuntimeException("BVN verification failed: unexpected HTTP status " + response.getStatusCode());
+
+        } catch (HttpClientErrorException e) {
+            log.error("[BVN] SecureWave rejected request — HTTP {}: {}", e.getStatusCode(), e.getResponseBodyAsString());
+            throw new RuntimeException("BVN verification failed: " + e.getResponseBodyAsString());
+        } catch (RuntimeException e) {
+            throw e; // already wrapped, re-throw as-is
+        } catch (Exception e) {
+            log.error("[BVN] Unexpected error during BVN verification: {}", e.getMessage(), e);
+            throw new RuntimeException("BVN verification failed: " + e.getMessage());
+        }
+    }
+
+    /** Maps the SecureWave {@code data} block to our DTO (image field excluded). */
+    @SuppressWarnings("unchecked")
+    private BvnVerificationResultDto mapToBvnResult(Map<String, Object> data) {
+        BvnVerificationResultDto dto = new BvnVerificationResultDto();
+
+        dto.setBvnNumber(str(data, "bvn_number"));
+        dto.setNameOnCard(str(data, "name_on_card"));
+        dto.setEnrolmentBank(str(data, "enrolment_bank"));
+        dto.setEnrolmentBranch(str(data, "enrolment_branch"));
+        dto.setFormattedRegistrationDate(str(data, "formatted_registration_date"));
+        dto.setLevelOfAccount(str(data, "level_of_account"));
+        dto.setNin(str(data, "nin"));
+        dto.setWatchlisted(str(data, "watchlisted"));
+        dto.setVerificationStatus(str(data, "verification_status"));
+
+        Object personalInfoObj = data.get("personal_info");
+        if (personalInfoObj instanceof Map) {
+            Map<String, Object> p = (Map<String, Object>) personalInfoObj;
+            dto.setFirstName(str(p, "first_name"));
+            dto.setMiddleName(str(p, "middle_name"));
+            dto.setLastName(str(p, "last_name"));
+            dto.setFullName(str(p, "full_name"));
+            dto.setGender(str(p, "gender"));
+            dto.setDateOfBirth(str(p, "date_of_birth"));
+            dto.setStateOfOrigin(str(p, "state_of_origin"));
+            dto.setLgaOfOrigin(str(p, "lga_of_origin"));
+            dto.setNationality(str(p, "nationality"));
+            dto.setMaritalStatus(str(p, "marital_status"));
+            // "image" intentionally omitted
+        }
+
+        Object residentialInfoObj = data.get("residential_info");
+        if (residentialInfoObj instanceof Map) {
+            Map<String, Object> r = (Map<String, Object>) residentialInfoObj;
+            dto.setStateOfResidence(str(r, "state_of_residence"));
+            dto.setLgaOfResidence(str(r, "lga_of_residence"));
+            dto.setResidentialAddress(str(r, "residential_address"));
+        }
+
+        return dto;
+    }
+
+    /** Safely extracts a String value from a Map without NPE. */
+    private String str(Map<String, Object> map, String key) {
+        Object val = map.get(key);
+        return (val == null || "null".equals(val)) ? null : String.valueOf(val);
     }
 
     // ==========================================================

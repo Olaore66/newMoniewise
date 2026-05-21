@@ -1413,6 +1413,7 @@ import com.moniewise.moniewise_backend.entity.*;
 import com.moniewise.moniewise_backend.enums.*;
 import com.moniewise.moniewise_backend.exception.EntityNotFoundException;
 import com.moniewise.moniewise_backend.externalTransfers.PaymentProvider;
+import com.moniewise.moniewise_backend.psp.ProvidusExpressGateway;
 import com.moniewise.moniewise_backend.repository.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -1455,6 +1456,7 @@ public class EnvelopeService {
     private final BeneficiaryService beneficiaryService;
 
     private final PaymentProvider paymentProvider;
+    private final ProvidusExpressGateway providusExpressGateway;
 
     @Value("${moniewise.revenue.wallet.user-id}")
     private Long revenueWalletUserId;
@@ -1470,7 +1472,8 @@ public class EnvelopeService {
             ScheduledTaskRepository scheduledTaskRepository,
             @Lazy BudgetLifeCycleManager budgetLifeCycleManager,
             BudgetService budgetService, PendingDisbursementRepository pendingDisbursementRepository,
-            JdbcTemplate jdbcTemplate, BeneficiaryService beneficiaryService, PaymentProvider paymentProvider) {
+            JdbcTemplate jdbcTemplate, BeneficiaryService beneficiaryService, PaymentProvider paymentProvider,
+            ProvidusExpressGateway providusExpressGateway) {
         this.envelopeRepository = envelopeRepository;
         this.budgetRepository = budgetRepository;
         this.revenueLogRepository = revenueLogRepository;
@@ -1486,6 +1489,7 @@ public class EnvelopeService {
         this.jdbcTemplate = jdbcTemplate;
         this.beneficiaryService = beneficiaryService;
         this.paymentProvider = paymentProvider;
+        this.providusExpressGateway = providusExpressGateway;
     }
 
     @PostConstruct
@@ -1502,6 +1506,72 @@ public class EnvelopeService {
     private LocalDateTime fetchUserLocalTime(User user) {
         ZonedDateTime nowUTC = ZonedDateTime.now(ZoneId.of("UTC"));
         return nowUTC.withZoneSameInstant(user.getZoneId()).toLocalDateTime();
+    }
+
+    private String processProvidusP2pIfEnabled(User sender, User recipient, BigDecimal amount) {
+        if (!providusExpressGateway.isEnabled()) {
+            return null;
+        }
+
+        Wallet senderWallet = walletService.getWalletByUserId(sender.getId());
+        Wallet recipientWallet = walletService.getWalletByUserId(recipient.getId());
+
+        if (!isProvidusWallet(senderWallet) || !isProvidusWallet(recipientWallet)) {
+            throw new IllegalStateException("Providus P2P is enabled, but both users do not have Providus wallets.");
+        }
+
+        if (senderWallet.getProviderCustomerRef() == null || senderWallet.getProviderCustomerRef().isBlank()) {
+            throw new IllegalStateException("Sender Providus customer reference is missing.");
+        }
+
+        if (recipientWallet.getAccountNumber() == null || recipientWallet.getAccountNumber().isBlank()) {
+            throw new IllegalStateException("Recipient Providus account number is missing.");
+        }
+
+        String reference = providusExpressGateway.initiateWalletTransfer(
+                senderWallet.getProviderCustomerRef(),
+                recipientWallet.getAccountNumber(),
+                amount
+        );
+
+        logger.info("Providus P2P transfer completed from user {} to user {} with reference {}",
+                sender.getId(), recipient.getId(), reference);
+
+        return reference;
+    }
+
+    private boolean isProvidusWallet(Wallet wallet) {
+        return wallet != null
+                && wallet.getProviderName() != null
+                && wallet.getProviderName().equalsIgnoreCase(ProvidusExpressGateway.PROVIDER_NAME);
+    }
+
+    private String initiateProvidusExternalTransfer(User sender,
+                                                    BudgetController.ExternalAccount externalAccount,
+                                                    String resolvedAccountName,
+                                                    BigDecimal amount,
+                                                    String reference,
+                                                    String narration) {
+        Wallet senderWallet = walletService.getWalletByUserId(sender.getId());
+
+        if (!isProvidusWallet(senderWallet)) {
+            throw new IllegalStateException("Providus integration is enabled, but the sender does not have a Providus wallet.");
+        }
+
+        if (senderWallet.getProviderCustomerRef() == null || senderWallet.getProviderCustomerRef().isBlank()) {
+            throw new IllegalStateException("Sender Providus customer reference is missing.");
+        }
+
+        return providusExpressGateway.initiateCustomerBankTransfer(
+                senderWallet.getProviderCustomerRef(),
+                externalAccount.getBankCode(),
+                externalAccount.getAccountNumber(),
+                resolvedAccountName,
+                getSafeName(sender),
+                amount,
+                reference,
+                narration
+        );
     }
 
     // =========================================================================
@@ -1625,6 +1695,12 @@ public class EnvelopeService {
         }
 
         User sender = userService.findByEmail(senderEmail);
+        if (request.getTransactionPin() == null || request.getTransactionPin().isBlank()) {
+            throw new IllegalArgumentException("Transaction PIN is required");
+        }
+        if (!userService.verifyTransactionPin(sender, request.getTransactionPin())) {
+            throw new IllegalArgumentException("Invalid transaction PIN");
+        }
 
         User recipient = userService.findByEmailOrPhone(request.getRecipientIdentity())
                 .orElseThrow(() -> new EntityNotFoundException("Recipient not found"));
@@ -1669,10 +1745,13 @@ public class EnvelopeService {
         // Credit & Logs
         String senderName = getSafeName(sender);
         String recipientName = getSafeName(recipient);
+        String providerReference = processProvidusP2pIfEnabled(sender, recipient, amount);
         walletService.fundWallet(recipient.getId(), amount, null, true);
 
 //        String baseRef = UUID.randomUUID().toString();
-        String baseRef = recipient.getId() + "-" + System.currentTimeMillis();
+        String baseRef = providerReference != null && !providerReference.isBlank()
+                ? providerReference
+                : recipient.getId() + "-" + System.currentTimeMillis();
 
         String description = "Transfer to " + recipientName;
         String type = (String) sourceEnvelope.getConditions().getOrDefault("type", "");
@@ -1692,7 +1771,9 @@ public class EnvelopeService {
                 .fee(BigDecimal.ZERO)
                 .transactionType(TransactionType.ENVELOPE_TO_USER)
                 .status(TransactionStatus.COMPLETED)
-                .reference("P2P-DB-" + baseRef)
+                .reference((providerReference != null ? "P2P-PROVIDUS-DB-" : "P2P-DB-") + baseRef)
+                .providerName(providerReference != null ? ProvidusExpressGateway.PROVIDER_NAME : null)
+                .providerReference(providerReference)
                 .description(description)
                 .createdAt(now)
                 .build();
@@ -1705,7 +1786,9 @@ public class EnvelopeService {
                 .fee(BigDecimal.ZERO)
                 .transactionType(TransactionType.USER_TO_ENVELOPE)
                 .status(TransactionStatus.COMPLETED)
-                .reference("P2P-CR-" + baseRef)
+                .reference((providerReference != null ? "P2P-PROVIDUS-CR-" : "P2P-CR-") + baseRef)
+                .providerName(providerReference != null ? ProvidusExpressGateway.PROVIDER_NAME : null)
+                .providerReference(providerReference)
                 .description("Received from " + senderName)
                 .createdAt(now)
                 .build();
@@ -1957,7 +2040,9 @@ public class EnvelopeService {
         if (amount.compareTo(source.getRemainingAmount()) > 0) throw new IllegalStateException("Exceeds period limit: Ã¢â€šÂ¦" + source.getRemainingAmount());
         if (amount.compareTo(source.getTotalRemainingAmount()) > 0) throw new IllegalStateException("Insufficient funds");
 
-        String resolvedName = paymentProvider.resolveAccount(externalAccount.getBankCode(), externalAccount.getAccountNumber());
+        String resolvedName = providusExpressGateway.isEnabled()
+                ? providusExpressGateway.resolveAccount(externalAccount.getBankCode(), externalAccount.getAccountNumber())
+                : paymentProvider.resolveAccount(externalAccount.getBankCode(), externalAccount.getAccountNumber());
         if (resolvedName == null) {
             throw new IllegalArgumentException("Invalid Account Number");
         }
@@ -1997,17 +2082,34 @@ public class EnvelopeService {
 
         String providerRef;
         try {
-            providerRef = paymentProvider.initiateTransfer(
-                    externalAccount.getBankCode(),
-                    externalAccount.getAccountNumber(),
-                    resolvedName,
-                    amount,
-                    myReference,
-                    narration != null && !narration.trim().isEmpty()
-                            ? narration.trim()
-                            : "Transfer from " + source.getName()
-            );
+            String providerNarration = narration != null && !narration.trim().isEmpty()
+                    ? narration.trim()
+                    : "Transfer from " + source.getName();
+
+            if (providusExpressGateway.isEnabled()) {
+                providerRef = initiateProvidusExternalTransfer(
+                        user,
+                        externalAccount,
+                        resolvedName,
+                        amount,
+                        myReference,
+                        providerNarration
+                );
+            } else {
+                providerRef = paymentProvider.initiateTransfer(
+                        externalAccount.getBankCode(),
+                        externalAccount.getAccountNumber(),
+                        resolvedName,
+                        amount,
+                        myReference,
+                        providerNarration
+                );
+            }
             txn.setStatus(TransactionStatus.PROCESSING);
+            if (providusExpressGateway.isEnabled()) {
+                txn.setProviderName(ProvidusExpressGateway.PROVIDER_NAME);
+                txn.setProviderReference(providerRef);
+            }
             transactionLogRepository.save(txn);
             // Ã¢Å“â€¦ ADD NEW EVENT
             Map<String, Object> params = Map.of(

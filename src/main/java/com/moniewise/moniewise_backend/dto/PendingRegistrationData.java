@@ -1,11 +1,19 @@
 package com.moniewise.moniewise_backend.dto;
 
+import com.moniewise.moniewise_backend.dto.response.BvnVerificationResultDto;
+
 import java.io.Serializable;
 
 /**
  * Holds the signup data of a user who has submitted the registration form but
  * has not yet verified their OTP.  Stored in Redis with a TTL so unverified
  * registrations are automatically discarded and never pollute the database.
+ *
+ * <p>After the user completes the optional BVN pre-verify step
+ * ({@code POST /auth/bvn/pre-verify}), the {@link #bvn} and
+ * {@link #bvnVerificationResult} fields are populated so they can be
+ * persisted to PostgreSQL when the OTP is verified and the user record is
+ * created.
  */
 public class PendingRegistrationData implements Serializable {
 
@@ -17,6 +25,18 @@ public class PendingRegistrationData implements Serializable {
     private String otpCode;
     /** Epoch-millis at which the OTP expires (5 minutes after creation). */
     private long otpExpiresAtEpochMillis;
+
+    /**
+     * The raw 11-digit BVN submitted during the pre-verify step.
+     * {@code null} if the user skipped BVN verification during signup.
+     */
+    private String bvn;
+
+    /**
+     * The full structured result returned by SecureWave during the pre-verify step.
+     * {@code null} if BVN pre-verification has not yet been completed.
+     */
+    private BvnVerificationResultDto bvnVerificationResult;
 
     // ── No-arg constructor required for Jackson deserialization ──────────────
     public PendingRegistrationData() {}
@@ -50,5 +70,13 @@ public class PendingRegistrationData implements Serializable {
     public long getOtpExpiresAtEpochMillis() { return otpExpiresAtEpochMillis; }
     public void setOtpExpiresAtEpochMillis(long otpExpiresAtEpochMillis) {
         this.otpExpiresAtEpochMillis = otpExpiresAtEpochMillis;
+    }
+
+    public String getBvn() { return bvn; }
+    public void setBvn(String bvn) { this.bvn = bvn; }
+
+    public BvnVerificationResultDto getBvnVerificationResult() { return bvnVerificationResult; }
+    public void setBvnVerificationResult(BvnVerificationResultDto bvnVerificationResult) {
+        this.bvnVerificationResult = bvnVerificationResult;
     }
 }

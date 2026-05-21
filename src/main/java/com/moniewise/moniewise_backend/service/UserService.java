@@ -5,12 +5,15 @@ import com.google.cloud.storage.Bucket;
 import com.google.firebase.cloud.StorageClient;
 import com.moniewise.moniewise_backend.dto.PendingRegistrationData;
 import com.moniewise.moniewise_backend.dto.request.ProfileRequest;
+import com.moniewise.moniewise_backend.dto.response.BvnVerificationResultDto;
 import com.moniewise.moniewise_backend.dto.response.SignupResponse;
 import com.moniewise.moniewise_backend.dto.response.UserSummaryResponse;
 import com.moniewise.moniewise_backend.entity.*;
 import com.moniewise.moniewise_backend.enums.BudgetStatus;
 import com.moniewise.moniewise_backend.enums.Role;
+import com.moniewise.moniewise_backend.psp.ProvidusExpressGateway;
 import com.moniewise.moniewise_backend.repository.BudgetRepository;
+import com.moniewise.moniewise_backend.repository.KycProfileRepository;
 import com.moniewise.moniewise_backend.repository.PasswordResetTokenRepository;
 import com.moniewise.moniewise_backend.repository.UserRepository;
 import com.moniewise.moniewise_backend.repository.WalletRepository;
@@ -56,8 +59,10 @@ public class UserService implements UserDetailsService {
     private final BudgetRepository budgetRepository;
 
     private final RegistrationCacheService registrationCacheService;
+    private final ProvidusExpressGateway providusExpressGateway;
+    private final KycProfileRepository kycProfileRepository;
 
-    public UserService(UserRepository userRepository, PasswordEncoder passwordEncoder, WalletService walletService, WalletRepository walletRepository, WalletService walletService1, OtpService otpService, PasswordResetTokenRepository passwordResetTokenRepository, NotificationService notificationService, BudgetRepository budgetRepository, RegistrationCacheService registrationCacheService) {
+    public UserService(UserRepository userRepository, PasswordEncoder passwordEncoder, WalletService walletService, WalletRepository walletRepository, WalletService walletService1, OtpService otpService, PasswordResetTokenRepository passwordResetTokenRepository, NotificationService notificationService, BudgetRepository budgetRepository, RegistrationCacheService registrationCacheService, ProvidusExpressGateway providusExpressGateway, KycProfileRepository kycProfileRepository) {
         this.userRepository = userRepository;
         this.passwordEncoder = passwordEncoder; // No link to SecurityConfig
         this.walletRepository = walletRepository;
@@ -67,6 +72,8 @@ public class UserService implements UserDetailsService {
         this.notificationService = notificationService;
         this.budgetRepository = budgetRepository;
         this.registrationCacheService = registrationCacheService;
+        this.providusExpressGateway = providusExpressGateway;
+        this.kycProfileRepository = kycProfileRepository;
     }
 
     /**
@@ -183,7 +190,51 @@ public class UserService implements UserDetailsService {
         user.setCreatedAt(LocalDateTime.now());
         user.setTncAccepted(false);
 
+        // Carry across BVN if the pre-verify step was completed during signup
+        if (pending.getBvn() != null && !pending.getBvn().isBlank()) {
+            user.setBvn(pending.getBvn());
+        }
+
         User savedUser = userRepository.save(user);
+
+        // 4b. If BVN was pre-verified, create the KycProfile now so the user
+        //     starts their session already verified — no second prompt needed
+        BvnVerificationResultDto bvnResult = pending.getBvnVerificationResult();
+        if (bvnResult != null && pending.getBvn() != null) {
+            try {
+                KycProfile profile = new KycProfile();
+                profile.setUser(savedUser);
+                profile.setBvn(pending.getBvn());
+                profile.setBvnVerified(true);
+                profile.setKycStatus(KycProfile.KycStatus.VERIFIED);
+                profile.setNameOnCard(bvnResult.getNameOnCard());
+                profile.setEnrolmentBank(bvnResult.getEnrolmentBank());
+                profile.setEnrolmentBranch(bvnResult.getEnrolmentBranch());
+                profile.setFormattedRegistrationDate(bvnResult.getFormattedRegistrationDate());
+                profile.setLevelOfAccount(bvnResult.getLevelOfAccount());
+                profile.setNin(bvnResult.getNin());
+                profile.setWatchlisted(bvnResult.getWatchlisted());
+                profile.setBvnVerificationStatus(bvnResult.getVerificationStatus());
+                profile.setFirstName(bvnResult.getFirstName());
+                profile.setMiddleName(bvnResult.getMiddleName());
+                profile.setLastName(bvnResult.getLastName());
+                profile.setGender(bvnResult.getGender());
+                profile.setDateOfBirth(bvnResult.getDateOfBirth());
+                profile.setStateOfOrigin(bvnResult.getStateOfOrigin());
+                profile.setLgaOfOrigin(bvnResult.getLgaOfOrigin());
+                profile.setNationality(bvnResult.getNationality());
+                profile.setMaritalStatus(bvnResult.getMaritalStatus());
+                profile.setStateOfResidence(bvnResult.getStateOfResidence());
+                profile.setLgaOfResidence(bvnResult.getLgaOfResidence());
+                profile.setResidentialAddress(bvnResult.getResidentialAddress());
+                kycProfileRepository.save(profile);
+                logger.info("KycProfile created from pre-verified BVN for user {}", email);
+            } catch (Exception e) {
+                // Never block account creation because of a KYC save failure
+                logger.error("Failed to persist pre-verified KycProfile for {} — manual remediation required: {}",
+                        email, e.getMessage());
+            }
+        }
 
         // 5. Clean up Redis ────────────────────────────────────────────────────────
         registrationCacheService.delete(email);
@@ -479,6 +530,7 @@ public class UserService implements UserDetailsService {
 
         // Save the user entity so it's ready for WalletService
         User savedUser = userRepository.save(user);
+        syncProvidusCustomerProfileIfEnabled(savedUser, request);
 
         // ============================================================
         // âš¡ 3. CHECK & CREATE WALLET (Synchronous)
@@ -506,6 +558,42 @@ public class UserService implements UserDetailsService {
         }
 
         return savedUser;
+    }
+
+    private void syncProvidusCustomerProfileIfEnabled(User user, ProfileRequest request) {
+        if (!providusExpressGateway.isEnabled()) {
+            return;
+        }
+
+        walletRepository.findByUser(user).ifPresent(wallet -> {
+            if (wallet.getProviderName() == null
+                    || !wallet.getProviderName().equalsIgnoreCase(ProvidusExpressGateway.PROVIDER_NAME)) {
+                return;
+            }
+
+            if (wallet.getProviderCustomerRef() == null || wallet.getProviderCustomerRef().isBlank()) {
+                logger.warn("Skipping Providus profile sync for {} because providerCustomerRef is missing", user.getEmail());
+                return;
+            }
+
+            Map<String, Object> updates = new LinkedHashMap<>();
+            putIfPresent(updates, "firstName", request.getFirstName());
+            putIfPresent(updates, "lastName", request.getLastName());
+            putIfPresent(updates, "phoneNumber", user.getPhone());
+            if (request.getDob() != null) {
+                updates.put("dateOfBirth", request.getDob().toString());
+            }
+
+            if (!updates.isEmpty()) {
+                providusExpressGateway.updateCustomerProfile(wallet.getProviderCustomerRef(), updates);
+            }
+        });
+    }
+
+    private void putIfPresent(Map<String, Object> updates, String key, String value) {
+        if (value != null && !value.isBlank()) {
+            updates.put(key, value.trim());
+        }
     }
 //    @Transactional
 //    public User updateProfile(String email, ProfileRequest request) {

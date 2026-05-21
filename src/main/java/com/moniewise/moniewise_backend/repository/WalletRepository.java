@@ -30,5 +30,7 @@ public interface WalletRepository extends JpaRepository<Wallet, Long> {
 
     Optional<Wallet> findByProviderWalletRef(String providerWalletRef);
     Optional<Wallet> findBySubWalletRef(String subWalletRef);
+    Optional<Wallet> findByProviderCustomerRef(String providerCustomerRef);
+    Optional<Wallet> findByAccountNumber(String accountNumber);
     List<Wallet> findByProviderName(String providerName);
 }

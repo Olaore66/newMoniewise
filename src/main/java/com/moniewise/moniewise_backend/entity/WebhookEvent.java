@@ -11,10 +11,17 @@ import java.time.LocalDateTime;
 @Entity
 @Table(
     name = "webhook_events",
+    uniqueConstraints = {
+        // DB-level guard: prevents double-credit from concurrent duplicate webhooks
+        @UniqueConstraint(
+            name  = "uq_webhook_events_provider_idempotency",
+            columnNames = {"provider_name", "idempotency_key"}
+        )
+    },
     indexes = {
         @Index(name = "idx_webhook_events_external_reference", columnList = "external_reference"),
-        @Index(name = "idx_webhook_events_processing_status", columnList = "processing_status"),
-        @Index(name = "idx_webhook_events_received_at", columnList = "received_at")
+        @Index(name = "idx_webhook_events_processing_status",  columnList = "processing_status"),
+        @Index(name = "idx_webhook_events_received_at",        columnList = "received_at")
     }
 )
 public class WebhookEvent {

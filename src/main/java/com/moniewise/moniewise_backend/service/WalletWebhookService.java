@@ -23,4 +23,31 @@ public class WalletWebhookService {
             throw new RuntimeException("Webhook processing failed", e);
         }
     }
+
+    /** Handles a Providus deposit / credit event. */
+    public void processProvidusDepositWebhook(String payloadJson) {
+        try {
+            logger.info("[PROVIDUS-WEBHOOK] Delegating deposit event to WalletService");
+            walletService.fundWalletFromProvidusWebhook(payloadJson);
+        } catch (Exception e) {
+            logger.error("[PROVIDUS-WEBHOOK] Deposit processing failed", e);
+            throw new RuntimeException("Providus deposit webhook processing failed", e);
+        }
+    }
+
+    /**
+     * Handles a Providus transfer-success or transfer-failed event.
+     *
+     * @param isSuccess {@code true} → mark withdrawal COMPLETED,
+     *                  {@code false} → mark withdrawal FAILED and reverse balance
+     */
+    public void processProvidusWithdrawalWebhook(String payloadJson, boolean isSuccess) {
+        try {
+            logger.info("[PROVIDUS-WEBHOOK] Delegating withdrawal confirmation (success={}) to WalletService", isSuccess);
+            walletService.processProvidusWithdrawalConfirmation(payloadJson, isSuccess);
+        } catch (Exception e) {
+            logger.error("[PROVIDUS-WEBHOOK] Withdrawal confirmation processing failed", e);
+            throw new RuntimeException("Providus withdrawal webhook processing failed", e);
+        }
+    }
 }

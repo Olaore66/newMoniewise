@@ -59,6 +59,12 @@ public class TransactionLog {
     @Column(nullable = false, unique = true)
     private String reference;
 
+    @Column(name = "provider_name", length = 50)
+    private String providerName;
+
+    @Column(name = "provider_reference")
+    private String providerReference;
+
     @Column(nullable = false)
     @Enumerated(EnumType.STRING)
     private TransactionStatus status;
@@ -122,6 +128,12 @@ public class TransactionLog {
     public String getReference() { return reference; }
     public void setReference(String reference) { this.reference = reference; }
 
+    public String getProviderName() { return providerName; }
+    public void setProviderName(String providerName) { this.providerName = providerName; }
+
+    public String getProviderReference() { return providerReference; }
+    public void setProviderReference(String providerReference) { this.providerReference = providerReference; }
+
     public TransactionStatus getStatus() { return status; }
     public void setStatus(TransactionStatus status) { this.status = status; }
 
@@ -147,6 +159,8 @@ public class TransactionLog {
         private BigDecimal amount;
         private BigDecimal fee;
         private String reference;
+        private String providerName;
+        private String providerReference;
         private TransactionStatus status;
         private TransactionType transactionType;
         private String description;
@@ -199,6 +213,16 @@ public class TransactionLog {
             return this;
         }
 
+        public TransactionLogBuilder providerName(String providerName) {
+            this.providerName = providerName;
+            return this;
+        }
+
+        public TransactionLogBuilder providerReference(String providerReference) {
+            this.providerReference = providerReference;
+            return this;
+        }
+
         public TransactionLogBuilder status(TransactionStatus status) {
             this.status = status;
             return this;
@@ -232,6 +256,8 @@ public class TransactionLog {
             log.setAmount(this.amount);
             log.setFee(this.fee);
             log.setReference(this.reference);
+            log.setProviderName(this.providerName);
+            log.setProviderReference(this.providerReference);
             log.setStatus(this.status);
             log.setTransactionType(this.transactionType);
             log.setDescription(this.description);

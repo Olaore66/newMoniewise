@@ -18,14 +18,25 @@ public class PaymentGatewayResolver {
 
     public PaymentGatewayResolver(
             List<PaymentGateway> gateways,
-            @Value("${moniewise.psp.default-provider:SECUREWAVE}") String defaultProviderName
+            @Value("${moniewise.psp.default-provider:SECUREWAVE}") String defaultProviderName,
+            @Value("${moniewise.psp.providus-integration-enabled:false}") boolean providusIntegrationEnabled
     ) {
         this.gatewaysByProviderName = gateways.stream()
+                .filter(gateway -> providusIntegrationEnabled
+                        || !ProvidusExpressGateway.PROVIDER_NAME.equalsIgnoreCase(gateway.getProviderName()))
                 .collect(Collectors.toMap(
                         gateway -> normalize(gateway.getProviderName()),
                         Function.identity()
                 ));
-        this.defaultProviderName = normalize(defaultProviderName);
+
+        String requestedDefaultProviderName = normalize(defaultProviderName);
+        if (gatewaysByProviderName.containsKey(requestedDefaultProviderName)) {
+            this.defaultProviderName = requestedDefaultProviderName;
+        } else if (gatewaysByProviderName.containsKey(SecureWaveGateway.PROVIDER_NAME)) {
+            this.defaultProviderName = SecureWaveGateway.PROVIDER_NAME;
+        } else {
+            this.defaultProviderName = requestedDefaultProviderName;
+        }
     }
 
     public PaymentGateway resolveDefault() {

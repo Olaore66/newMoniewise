@@ -1,94 +1,217 @@
 package com.moniewise.moniewise_backend.service;
 
 import com.moniewise.moniewise_backend.exception.TooManyRequestsException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
-import java.time.LocalDateTime;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 
+/**
+ * Redis-backed rate limiter.
+ *
+ * <p>Two Redis keys are used per (action, caller-key) pair:
+ * <ul>
+ *   <li>{@code rl:{action}:{key}:cnt} — failure/request counter, TTL = window duration</li>
+ *   <li>{@code rl:{action}:{key}:lck} — lockout sentinel, TTL = lockout duration</li>
+ * </ul>
+ *
+ * <p>The service fails <b>open</b> when Redis is unreachable — legitimate users are
+ * never blocked by infrastructure failures.  Attackers only benefit briefly; Redis
+ * reconnection restores protection automatically.
+ */
 @Service
 public class AbuseProtectionService {
 
-    public static final String LOGIN = "auth.login";
-    public static final String SIGNUP = "auth.signup";
-    public static final String SIGNUP_VERIFY = "auth.signup_verify";
-    public static final String OTP_GENERATE = "otp.generate";
-    public static final String OTP_VERIFY = "otp.verify";
+    private static final Logger logger = LoggerFactory.getLogger(AbuseProtectionService.class);
+    private static final String PREFIX = "rl:";
+    private static final String CNT    = ":cnt";
+    private static final String LCK    = ":lck";
+
+    // ── Auth ─────────────────────────────────────────────────────────────────
+    public static final String LOGIN           = "auth.login";
+    public static final String SIGNUP          = "auth.signup";
+    public static final String SIGNUP_VERIFY   = "auth.signup_verify";
     public static final String FORGOT_PASSWORD = "auth.forgot_password";
-    public static final String RESET_VERIFY = "auth.verify_reset_otp";
-    public static final String GOOGLE_LOGIN = "auth.google";
+    public static final String RESET_VERIFY    = "auth.verify_reset_otp";
+    public static final String GOOGLE_LOGIN    = "auth.google";
 
-    private final Map<String, AttemptWindow> attempts = new ConcurrentHashMap<>();
+    // ── OTP ──────────────────────────────────────────────────────────────────
+    public static final String OTP_GENERATE = "otp.generate";
+    public static final String OTP_VERIFY   = "otp.verify";
 
+    // ── Wallet ───────────────────────────────────────────────────────────────
+    public static final String WALLET_WITHDRAW        = "wallet.withdraw";
+    public static final String WALLET_RESOLVE_ACCOUNT = "wallet.resolve_account";
+    public static final String WALLET_BANK_INFO       = "wallet.bank_info";
+
+    // ── Transaction PIN ───────────────────────────────────────────────────────
+    public static final String PIN_VERIFY         = "pin.verify";
+    public static final String PIN_CHANGE         = "pin.change";
+    public static final String PIN_FORGOT_REQUEST = "pin.forgot_request";
+    public static final String PIN_FORGOT_VERIFY  = "pin.forgot_verify";
+    public static final String PIN_FORGOT_RESET   = "pin.forgot_reset";
+
+    // ── Transactions / Transfers ──────────────────────────────────────────────
+    public static final String TXN_WITHDRAW = "txn.withdraw";
+    public static final String TXN_TRANSFER = "txn.transfer";
+
+    // ── Disbursements ─────────────────────────────────────────────────────────
+    public static final String DISBURSEMENT_CLAIM = "disbursement.claim";
+
+    // ── AI (volume-limited — counts every call, not just failures) ────────────
+    public static final String AI_QUERY = "ai.query";
+
+    // ── Beneficiaries ─────────────────────────────────────────────────────────
+    public static final String BENEFICIARY_ADD = "beneficiary.add";
+
+    // ── KYC / BVN ─────────────────────────────────────────────────────────────
+    /** Public pre-verify step during signup — 3 attempts per 10 min before lockout. */
+    public static final String BVN_PRE_VERIFY = "kyc.bvn_pre_verify";
+
+    private final StringRedisTemplate redis;
+
+    public AbuseProtectionService(StringRedisTemplate redis) {
+        this.redis = redis;
+    }
+
+    // ── Public API ────────────────────────────────────────────────────────────
+
+    /**
+     * Checks whether this action+key is currently locked out.
+     * Throws {@link TooManyRequestsException} if it is.
+     * Call this at the very start of the request handler, before any work.
+     */
     public void checkAllowed(String action, String key) {
-        AttemptWindow window = attempts.get(compose(action, key));
-        if (window == null) return;
-        if (window.lockedUntil != null && window.lockedUntil.isAfter(LocalDateTime.now())) {
-            long retryAfter = Duration.between(LocalDateTime.now(), window.lockedUntil).getSeconds();
-            throw new TooManyRequestsException("Too many attempts. Please wait before trying again.", Math.max(retryAfter, 1));
-        }
-        if (window.lockedUntil != null && !window.lockedUntil.isAfter(LocalDateTime.now())) {
-            attempts.remove(compose(action, key));
+        try {
+            String lck = redis.opsForValue().get(lockKey(action, key));
+            if (lck != null) {
+                Long ttl = redis.getExpire(lockKey(action, key), TimeUnit.SECONDS);
+                long retryAfter = (ttl != null && ttl > 0) ? ttl : 1L;
+                throw new TooManyRequestsException(
+                        "Too many attempts. Please wait before trying again.", retryAfter);
+            }
+        } catch (TooManyRequestsException e) {
+            throw e;
+        } catch (Exception e) {
+            logger.warn("[RateLimit] Redis unavailable during checkAllowed action={} — failing open: {}",
+                    action, e.getMessage());
         }
     }
 
+    /**
+     * Records a <b>failed</b> attempt.  When the failure count inside the
+     * current window reaches the policy threshold, a lockout key is written.
+     */
     public void recordFailure(String action, String key) {
-        String composite = compose(action, key);
         AttemptPolicy policy = policyFor(action);
-        attempts.compute(composite, (ignored, existing) -> {
-            LocalDateTime now = LocalDateTime.now();
-            AttemptWindow state = existing;
-            if (state == null || state.windowStartedAt.plus(policy.windowDuration).isBefore(now)) {
-                state = new AttemptWindow(now, 0, null);
+        try {
+            String cntKey = countKey(action, key);
+            Long count = redis.opsForValue().increment(cntKey);
+            if (count != null && count == 1L) {
+                // First failure in this window — attach window TTL
+                redis.expire(cntKey, policy.windowDuration());
             }
-            state.failures++;
-            if (state.failures >= policy.maxAttempts) {
-                state.lockedUntil = now.plus(policy.lockoutDuration);
+            if (count != null && count >= policy.maxAttempts()) {
+                redis.opsForValue().set(lockKey(action, key), "1", policy.lockoutDuration());
+                redis.delete(cntKey);
             }
-            return state;
-        });
+        } catch (Exception e) {
+            logger.warn("[RateLimit] Redis unavailable during recordFailure action={}: {}", action, e.getMessage());
+        }
     }
 
+    /**
+     * Resets the failure window on a successful operation.
+     */
     public void recordSuccess(String action, String key) {
-        attempts.remove(compose(action, key));
+        try {
+            redis.delete(countKey(action, key));
+            redis.delete(lockKey(action, key));
+        } catch (Exception e) {
+            logger.warn("[RateLimit] Redis unavailable during recordSuccess action={}: {}", action, e.getMessage());
+        }
     }
 
+    /**
+     * Counts <b>every</b> request (success or failure) against the rate limit.
+     * Use for volume-limited endpoints such as AI queries where even successful
+     * calls consume an external quota or incur cost.
+     */
+    public void recordRequest(String action, String key) {
+        recordFailure(action, key); // identical mechanics — just semantically different call site
+    }
+
+    /**
+     * Builds a composite throttle key from the caller's identity (e.g. email)
+     * and their remote IP address.  Either alone can be spoofed; together they
+     * make abuse significantly harder.
+     */
     public String buildKey(String identity, String remoteAddress) {
-        String cleanIdentity = identity == null || identity.isBlank() ? "anonymous" : identity.trim().toLowerCase();
-        String cleanAddress = remoteAddress == null || remoteAddress.isBlank() ? "unknown" : remoteAddress.trim();
-        return cleanIdentity + "|" + cleanAddress;
+        String id = (identity == null || identity.isBlank()) ? "anon" : identity.trim().toLowerCase();
+        String ip = (remoteAddress == null || remoteAddress.isBlank()) ? "unknown" : remoteAddress.trim();
+        return id + "|" + ip;
     }
 
-    private String compose(String action, String key) {
-        return action + "::" + key;
+    // ── Key builders ──────────────────────────────────────────────────────────
+
+    private String countKey(String action, String key) {
+        return PREFIX + action + ":" + key + CNT;
     }
+
+    private String lockKey(String action, String key) {
+        return PREFIX + action + ":" + key + LCK;
+    }
+
+    // ── Policy table ──────────────────────────────────────────────────────────
 
     private AttemptPolicy policyFor(String action) {
         return switch (action) {
-            case LOGIN -> new AttemptPolicy(5, Duration.ofMinutes(15), Duration.ofMinutes(15));
-            case SIGNUP -> new AttemptPolicy(5, Duration.ofHours(1), Duration.ofHours(1));
-            case SIGNUP_VERIFY -> new AttemptPolicy(5, Duration.ofMinutes(15), Duration.ofMinutes(30));
-            case OTP_GENERATE -> new AttemptPolicy(3, Duration.ofMinutes(10), Duration.ofMinutes(10));
-            case OTP_VERIFY -> new AttemptPolicy(5, Duration.ofMinutes(15), Duration.ofMinutes(15));
-            case FORGOT_PASSWORD -> new AttemptPolicy(3, Duration.ofMinutes(15), Duration.ofMinutes(15));
-            case RESET_VERIFY -> new AttemptPolicy(5, Duration.ofMinutes(15), Duration.ofMinutes(15));
-            case GOOGLE_LOGIN -> new AttemptPolicy(5, Duration.ofMinutes(10), Duration.ofMinutes(10));
+
+            // Auth endpoints — moderate limits, meaningful lockouts
+            case LOGIN           -> new AttemptPolicy(5,  Duration.ofMinutes(15), Duration.ofMinutes(15));
+            case SIGNUP          -> new AttemptPolicy(5,  Duration.ofHours(1),    Duration.ofHours(1));
+            case SIGNUP_VERIFY   -> new AttemptPolicy(5,  Duration.ofMinutes(15), Duration.ofMinutes(30));
+            case OTP_GENERATE    -> new AttemptPolicy(3,  Duration.ofMinutes(10), Duration.ofMinutes(10));
+            case OTP_VERIFY      -> new AttemptPolicy(5,  Duration.ofMinutes(15), Duration.ofMinutes(15));
+            case FORGOT_PASSWORD -> new AttemptPolicy(3,  Duration.ofMinutes(15), Duration.ofMinutes(15));
+            case RESET_VERIFY    -> new AttemptPolicy(5,  Duration.ofMinutes(15), Duration.ofMinutes(15));
+            case GOOGLE_LOGIN    -> new AttemptPolicy(5,  Duration.ofMinutes(10), Duration.ofMinutes(10));
+
+            // Wallet — generous limits for normal use, blocks abuse
+            case WALLET_WITHDRAW        -> new AttemptPolicy(10, Duration.ofHours(1),   Duration.ofHours(1));
+            case WALLET_RESOLVE_ACCOUNT -> new AttemptPolicy(30, Duration.ofMinutes(5), Duration.ofMinutes(10));
+            case WALLET_BANK_INFO       -> new AttemptPolicy(10, Duration.ofMinutes(15),Duration.ofMinutes(15));
+
+            // PIN — tight limits; a 4-digit PIN is the main brute-force surface
+            case PIN_VERIFY         -> new AttemptPolicy(5, Duration.ofMinutes(15), Duration.ofMinutes(30));
+            case PIN_CHANGE         -> new AttemptPolicy(5, Duration.ofMinutes(15), Duration.ofMinutes(30));
+            case PIN_FORGOT_REQUEST -> new AttemptPolicy(3, Duration.ofMinutes(10), Duration.ofMinutes(10));
+            case PIN_FORGOT_VERIFY  -> new AttemptPolicy(5, Duration.ofMinutes(15), Duration.ofMinutes(30));
+            case PIN_FORGOT_RESET   -> new AttemptPolicy(5, Duration.ofMinutes(15), Duration.ofMinutes(30));
+
+            // Transactions
+            case TXN_WITHDRAW -> new AttemptPolicy(10, Duration.ofHours(1),    Duration.ofHours(1));
+            case TXN_TRANSFER -> new AttemptPolicy(20, Duration.ofHours(1),    Duration.ofMinutes(30));
+
+            // Disbursements
+            case DISBURSEMENT_CLAIM -> new AttemptPolicy(10, Duration.ofMinutes(15), Duration.ofMinutes(15));
+
+            // AI — every call counts (Gemini costs money); 20 req/hour per user+IP
+            case AI_QUERY -> new AttemptPolicy(20, Duration.ofHours(1), Duration.ofMinutes(30));
+
+            // Beneficiaries
+            case BENEFICIARY_ADD -> new AttemptPolicy(10, Duration.ofHours(1), Duration.ofMinutes(30));
+
+            // KYC / BVN — tight: 3 attempts per window, 10-minute lockout
+            // Each call hits SecureWave; abuse wastes real money and is an enumeration risk
+            case BVN_PRE_VERIFY -> new AttemptPolicy(3, Duration.ofMinutes(10), Duration.ofMinutes(10));
+
+            // Safe fallback
             default -> new AttemptPolicy(5, Duration.ofMinutes(15), Duration.ofMinutes(15));
         };
-    }
-
-    private static final class AttemptWindow {
-        private final LocalDateTime windowStartedAt;
-        private int failures;
-        private LocalDateTime lockedUntil;
-
-        private AttemptWindow(LocalDateTime windowStartedAt, int failures, LocalDateTime lockedUntil) {
-            this.windowStartedAt = windowStartedAt;
-            this.failures = failures;
-            this.lockedUntil = lockedUntil;
-        }
     }
 
     private record AttemptPolicy(int maxAttempts, Duration windowDuration, Duration lockoutDuration) {}

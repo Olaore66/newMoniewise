@@ -16,6 +16,7 @@ import com.moniewise.moniewise_backend.enums.WalletStatus;
 import com.moniewise.moniewise_backend.enums.WithdrawalStatus;
 import com.moniewise.moniewise_backend.psp.PaymentGateway;
 import com.moniewise.moniewise_backend.psp.PaymentGatewayResolver;
+import com.moniewise.moniewise_backend.psp.ProvidusExpressGateway;
 import com.moniewise.moniewise_backend.repository.TransactionLogRepository;
 import com.moniewise.moniewise_backend.repository.UserRepository;
 import com.moniewise.moniewise_backend.repository.WalletRepository;
@@ -54,6 +55,7 @@ public class WalletService {
     private final NotificationService notificationService;
     private final UserRepository userRepository;
     private final PaymentGatewayResolver paymentGatewayResolver;
+    private final ProvidusExpressGateway providusExpressGateway;
     private final WithdrawalRepository withdrawalRepository;
     private final UserService userService;
 
@@ -69,6 +71,7 @@ public class WalletService {
             NotificationService notificationService,
             UserRepository userRepository,
             PaymentGatewayResolver paymentGatewayResolver,
+            ProvidusExpressGateway providusExpressGateway,
             WithdrawalRepository withdrawalRepository,
             @Lazy UserService userService
     ) {
@@ -77,6 +80,7 @@ public class WalletService {
         this.notificationService = notificationService;
         this.userRepository = userRepository;
         this.paymentGatewayResolver = paymentGatewayResolver;
+        this.providusExpressGateway = providusExpressGateway;
         this.withdrawalRepository = withdrawalRepository;
         this.userService = userService;
     }
@@ -707,6 +711,303 @@ public class WalletService {
                 .orElseThrow(() -> new IllegalArgumentException("Wallet not found for sub-wallet ref: " + subWalletRef));
     }
 
+    public Map<String, Object> getProviderTransactions(Long userId, int page, int perPage) {
+        Wallet wallet = getProvidusWalletForUser(userId);
+        return providusExpressGateway.getCustomerTransactions(wallet.getProviderCustomerRef(), page, perPage);
+    }
+
+    public Map<String, Object> getProviderTransactionDetails(Long userId, String transactionReference) {
+        getProvidusWalletForUser(userId);
+        return providusExpressGateway.getTransactionDetails(transactionReference);
+    }
+
+    private Wallet getProvidusWalletForUser(Long userId) {
+        Wallet wallet = walletRepository.findByUserId(userId)
+                .orElseThrow(() -> new IllegalArgumentException("Wallet not found for user ID: " + userId));
+
+        if (!providusExpressGateway.isEnabled()) {
+            throw new IllegalStateException("Providus integration is disabled.");
+        }
+
+        if (wallet.getProviderName() == null
+                || !wallet.getProviderName().equalsIgnoreCase(ProvidusExpressGateway.PROVIDER_NAME)) {
+            throw new IllegalStateException("This wallet is not a Providus wallet.");
+        }
+
+        if (wallet.getProviderCustomerRef() == null || wallet.getProviderCustomerRef().isBlank()) {
+            throw new IllegalStateException("Providus customer reference is missing for this wallet.");
+        }
+
+        return wallet;
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────
+    // Providus webhook processors
+    // ─────────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Processes an incoming deposit/credit webhook event from Providus.
+     *
+     * <p>Because Providus has not yet shared their exact payload structure, this
+     * method tries multiple common field name patterns to extract the recipient's
+     * email/account, the credited amount, and the transaction reference.  The raw
+     * payload is already logged at INFO level by {@code WebhookService} before this
+     * is called, so once the first live webhook arrives the exact field names can be
+     * confirmed and this method can be narrowed down.
+     */
+    @Transactional
+    public void fundWalletFromProvidusWebhook(String payloadJson) {
+        try {
+            JsonNode root = objectMapper.readTree(payloadJson);
+
+            // ── 1. Extract recipient identity ──────────────────────────────────
+            String email = extractProvidusEmail(root);
+
+            // If no email in payload, fall back to account-number lookup
+            if (email == null || email.isBlank()) {
+                String accountNumber = extractProvidusAccountNumber(root);
+                if (accountNumber != null && !accountNumber.isBlank()) {
+                    Wallet found = walletRepository.findByAccountNumber(accountNumber).orElse(null);
+                    if (found != null && found.getUser() != null) {
+                        email = found.getUser().getEmail();
+                        logger.info("[PROVIDUS-WEBHOOK] Resolved email {} from accountNumber {}", email, accountNumber);
+                    }
+                }
+            }
+
+            if (email == null || email.isBlank()) {
+                logger.error("[PROVIDUS-WEBHOOK] Cannot determine recipient from payload — manual review required:\n{}", payloadJson);
+                throw new RuntimeException("Providus deposit webhook: could not identify recipient email or account number");
+            }
+
+            // ── 2. Extract amount ──────────────────────────────────────────────
+            BigDecimal amount = extractProvidusAmount(root);
+            if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {
+                throw new RuntimeException("Providus deposit webhook: could not extract a positive amount");
+            }
+
+            // ── 3. Extract reference ───────────────────────────────────────────
+            String reference = extractProvidusReference(root);
+            if (reference == null || reference.isBlank()) {
+                // Generate a fallback reference so we don't lose the credit
+                reference = "PRV-" + System.currentTimeMillis();
+                logger.warn("[PROVIDUS-WEBHOOK] No reference found in payload — using generated fallback {}", reference);
+            }
+
+            // ── 4. Build description ───────────────────────────────────────────
+            String description = extractProvidusDescription(root, amount);
+
+            logger.info("[PROVIDUS-WEBHOOK] Processing deposit: email={} amount={} ref={}", email, amount, reference);
+
+            // ── 5. Credit wallet (idempotent — skips if reference already processed)
+            processSuccessfulFunding(email, amount, amount, BigDecimal.ZERO, reference, description, LocalDateTime.now());
+
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Exception e) {
+            logger.error("[PROVIDUS-WEBHOOK] Deposit processing crashed", e);
+            throw new RuntimeException("Providus deposit webhook processing failed", e);
+        }
+    }
+
+    /**
+     * Processes a transfer-success or transfer-failed webhook event from Providus.
+     *
+     * <p>Matches the event to an existing {@link Withdrawal} record by provider reference
+     * or client reference, then updates the withdrawal status and notifies the user.
+     *
+     * @param payloadJson the raw (already normalised) webhook JSON
+     * @param isSuccess   {@code true} for TRANSFER_SUCCESSFUL, {@code false} for TRANSFER_FAILED
+     */
+    @Transactional
+    public void processProvidusWithdrawalConfirmation(String payloadJson, boolean isSuccess) {
+        try {
+            JsonNode root = objectMapper.readTree(payloadJson);
+            String reference = extractProvidusReference(root);
+
+            if (reference == null || reference.isBlank()) {
+                logger.warn("[PROVIDUS-WEBHOOK] Withdrawal confirmation has no reference — cannot match record. Payload logged above.");
+                return;
+            }
+
+            // Try provider reference first, then our own client reference
+            Withdrawal withdrawal = withdrawalRepository.findByProviderReference(reference)
+                    .or(() -> withdrawalRepository.findByClientReference(reference))
+                    .orElse(null);
+
+            if (withdrawal == null) {
+                logger.warn("[PROVIDUS-WEBHOOK] No withdrawal found for reference {} — may have been processed already or reference mismatch", reference);
+                return;
+            }
+
+            // Guard against double-processing
+            if (withdrawal.getStatus() == WithdrawalStatus.COMPLETED
+                    || withdrawal.getStatus() == WithdrawalStatus.FAILED
+                    || withdrawal.getStatus() == WithdrawalStatus.REVERSED) {
+                logger.info("[PROVIDUS-WEBHOOK] Withdrawal {} already in terminal state {} — skipping", reference, withdrawal.getStatus());
+                return;
+            }
+
+            if (isSuccess) {
+                withdrawal.setStatus(WithdrawalStatus.COMPLETED);
+                withdrawal.setCompletedAt(LocalDateTime.now());
+                withdrawalRepository.save(withdrawal);
+
+                // Mark transaction log as completed
+                transactionLogRepository.findByReference(withdrawal.getClientReference()).ifPresent(log -> {
+                    log.setStatus(TransactionStatus.COMPLETED);
+                    log.setDescription(log.getDescription() + " | Confirmed by Providus");
+                    transactionLogRepository.save(log);
+                });
+
+                // Push notification to user
+                String msg = String.format("Your withdrawal of ₦%.2f to %s (%s) was successful.",
+                        withdrawal.getAmount(), withdrawal.getAccountNumber(), withdrawal.getBankName());
+                CompletableFuture.runAsync(() -> {
+                    try {
+                        notificationService.sendNotification(
+                                withdrawal.getUserId().toString(),
+                                msg,
+                                NotificationType.WITHDRAWAL,
+                                null, null, "VIEW_WALLET", "/wallet"
+                        );
+                    } catch (Exception e) {
+                        logger.error("[PROVIDUS-WEBHOOK] Failed to send withdrawal success notification", e);
+                    }
+                });
+
+                logger.info("[PROVIDUS-WEBHOOK] Withdrawal {} marked COMPLETED", reference);
+
+            } else {
+                // Failure — mark failed and reverse the balance
+                String failureReason = extractProvidusFailureReason(root);
+                markWithdrawalFailed(withdrawal.getId(), "Providus: " + (failureReason != null ? failureReason : "Transfer failed"));
+                logger.info("[PROVIDUS-WEBHOOK] Withdrawal {} marked FAILED — reason: {}", reference, failureReason);
+            }
+
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Exception e) {
+            logger.error("[PROVIDUS-WEBHOOK] Withdrawal confirmation processing crashed", e);
+            throw new RuntimeException("Providus withdrawal webhook processing failed", e);
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────
+    // Providus payload extraction helpers
+    // (multi-pattern because Providus hasn't confirmed their exact field names)
+    // ─────────────────────────────────────────────────────────────────────────────
+
+    private String extractProvidusEmail(JsonNode root) {
+        // Root-level
+        String val = root.path("email").asText(null);
+        if (isPresent(val)) return val;
+        // customer.email
+        val = root.path("customer").path("email").asText(null);
+        if (isPresent(val)) return val;
+        // data.email / data.customer.email
+        JsonNode data = root.path("data");
+        if (!data.isMissingNode()) {
+            val = data.path("email").asText(null);
+            if (isPresent(val)) return val;
+            val = data.path("customer").path("email").asText(null);
+            if (isPresent(val)) return val;
+        }
+        // eventData.customer.email (SecureWave-style)
+        val = root.path("eventData").path("customer").path("email").asText(null);
+        if (isPresent(val)) return val;
+        // wallet.email
+        val = root.path("wallet").path("email").asText(null);
+        if (isPresent(val)) return val;
+        return null;
+    }
+
+    private String extractProvidusAccountNumber(JsonNode root) {
+        for (String field : new String[]{"accountNumber", "destinationAccountNumber",
+                "walletAccountNumber", "creditAccountNumber", "account_number"}) {
+            String val = root.path(field).asText(null);
+            if (isPresent(val)) return val;
+        }
+        JsonNode data = root.path("data");
+        if (!data.isMissingNode()) {
+            for (String field : new String[]{"accountNumber", "destinationAccountNumber", "account_number"}) {
+                String val = data.path(field).asText(null);
+                if (isPresent(val)) return val;
+            }
+        }
+        // wallet.accountNumber
+        String val = root.path("wallet").path("accountNumber").asText(null);
+        if (isPresent(val)) return val;
+        return null;
+    }
+
+    private BigDecimal extractProvidusAmount(JsonNode root) {
+        for (String field : new String[]{"amount", "amountPaid", "value", "credit_amount", "settlementAmount"}) {
+            JsonNode node = root.path(field);
+            if (!node.isMissingNode() && !node.isNull()) return decimalFromNode(node);
+        }
+        JsonNode data = root.path("data");
+        if (!data.isMissingNode()) {
+            for (String field : new String[]{"amount", "amountPaid", "value"}) {
+                JsonNode node = data.path(field);
+                if (!node.isMissingNode() && !node.isNull()) return decimalFromNode(node);
+            }
+        }
+        JsonNode eventData = root.path("eventData");
+        if (!eventData.isMissingNode()) {
+            JsonNode node = eventData.path("amountPaid");
+            if (!node.isMissingNode() && !node.isNull()) return decimalFromNode(node);
+        }
+        return null;
+    }
+
+    private String extractProvidusReference(JsonNode root) {
+        for (String field : new String[]{"reference", "transactionReference", "transaction_reference",
+                "ref", "transactionId", "transaction_id", "txRef", "tx_ref"}) {
+            String val = root.path(field).asText(null);
+            if (isPresent(val)) return val;
+        }
+        JsonNode data = root.path("data");
+        if (!data.isMissingNode()) {
+            for (String field : new String[]{"reference", "transactionReference", "transaction_reference", "ref", "tx_ref"}) {
+                String val = data.path(field).asText(null);
+                if (isPresent(val)) return val;
+            }
+        }
+        String val = root.path("eventData").path("transactionReference").asText(null);
+        if (isPresent(val)) return val;
+        return null;
+    }
+
+    private String extractProvidusDescription(JsonNode root, BigDecimal amount) {
+        for (String field : new String[]{"narration", "description", "paymentDescription",
+                "remark", "remarks", "memo"}) {
+            String val = root.path(field).asText(null);
+            if (isPresent(val)) return val;
+        }
+        JsonNode data = root.path("data");
+        if (!data.isMissingNode()) {
+            for (String field : new String[]{"narration", "description", "remark"}) {
+                String val = data.path(field).asText(null);
+                if (isPresent(val)) return val;
+            }
+        }
+        return String.format("Providus Deposit of ₦%.2f", amount);
+    }
+
+    private String extractProvidusFailureReason(JsonNode root) {
+        for (String field : new String[]{"message", "reason", "failureReason",
+                "failure_reason", "responseMessage", "responseDescription"}) {
+            String val = root.path(field).asText(null);
+            if (isPresent(val)) return val;
+        }
+        return "Transfer failed";
+    }
+
+    private boolean isPresent(String val) {
+        return val != null && !val.isBlank() && !"null".equalsIgnoreCase(val);
+    }
+
     private BigDecimal decimalFromNode(JsonNode node) {
         if (node == null || node.isNull() || node.asText().isBlank()) {
             return BigDecimal.ZERO;
@@ -714,6 +1015,4 @@ public class WalletService {
         return new BigDecimal(node.asText());
     }
 }
-
-
 

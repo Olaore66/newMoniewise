@@ -3,6 +3,7 @@ package com.moniewise.moniewise_backend.service;
 import com.moniewise.moniewise_backend.entity.WebhookEvent;
 import com.moniewise.moniewise_backend.psp.PaymentGateway;
 import com.moniewise.moniewise_backend.psp.PaymentGatewayResolver;
+import com.moniewise.moniewise_backend.psp.ProvidusExpressGateway;
 import com.moniewise.moniewise_backend.psp.SecureWaveGateway;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -101,6 +102,113 @@ public class WebhookService {
         } catch (Exception e) {
             throw new RuntimeException("Error generating idempotency key", e);
         }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Providus webhook processing
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Entry point for all Providus webhook events.
+     *
+     * <p>Flow:
+     * <ol>
+     *   <li>Log the raw payload immediately (critical for learning Providus's format)</li>
+     *   <li>Validate signature (HMAC-SHA256 if secret configured, catch-all mode otherwise)</li>
+     *   <li>Extract event type and reference, generate idempotency key</li>
+     *   <li>Persist to {@code webhook_events} for auditability</li>
+     *   <li>Route to deposit processor, withdrawal-success, or withdrawal-failed handler</li>
+     * </ol>
+     *
+     * @param signatureHeader value of whichever signature header Providus sends
+     *                        (accepted from multiple header names in the controller)
+     * @param rawPayload      the raw request body exactly as Providus sent it
+     */
+    public void processProvidusWebhook(String signatureHeader, String rawPayload) {
+        String cleanPayload = normalizePayload(rawPayload);
+
+        // ── Log FIRST — before any processing so we capture the real Providus format ──
+        logger.info("[PROVIDUS-WEBHOOK] ===== Incoming payload =====\n{}", cleanPayload);
+
+        PaymentGateway gateway = paymentGatewayResolver.resolveByProviderName(ProvidusExpressGateway.PROVIDER_NAME);
+
+        if (!gateway.validateWebhookSignature(signatureHeader, cleanPayload)) {
+            logger.warn("[PROVIDUS-WEBHOOK] Rejected — invalid signature");
+            throw new SecurityException("Invalid Providus webhook signature");
+        }
+
+        String providerName  = gateway.getProviderName();
+        String eventType     = gateway.extractWebhookEventType(cleanPayload);
+        String externalRef   = gateway.extractWebhookReference(cleanPayload);
+        String idempotencyKey = generateIdempotencyKey(providerName, externalRef, cleanPayload);
+
+        logger.info("[PROVIDUS-WEBHOOK] eventType={} reference={} idempotencyKey={}",
+                eventType, externalRef, idempotencyKey);
+
+        if (webhookEventService.alreadyProcessed(providerName, idempotencyKey)) {
+            logger.info("[PROVIDUS-WEBHOOK] Duplicate detected (key={}) — skipping", idempotencyKey);
+            return;
+        }
+
+        String headersJson = signatureHeader != null
+                ? "{\"X-Signature\":\"" + signatureHeader + "\"}"
+                : null;
+
+        WebhookEvent event = webhookEventService.saveIfNew(
+                providerName, eventType, externalRef,
+                idempotencyKey, signatureHeader, cleanPayload, headersJson);
+
+        try {
+            if (isProvidusDepositEvent(eventType)) {
+                walletWebhookService.processProvidusDepositWebhook(cleanPayload);
+
+            } else if (isProvidusTransferSuccessEvent(eventType)) {
+                walletWebhookService.processProvidusWithdrawalWebhook(cleanPayload, true);
+
+            } else if (isProvidusTransferFailedEvent(eventType)) {
+                walletWebhookService.processProvidusWithdrawalWebhook(cleanPayload, false);
+
+            } else {
+                // Unknown/unhandled event type — record it but don't crash.
+                // Once the first live webhook arrives we can add handling here.
+                logger.info("[PROVIDUS-WEBHOOK] Unhandled event type '{}' — stored for review", eventType);
+            }
+
+            webhookEventService.markProcessed(event.getId());
+
+        } catch (Exception e) {
+            logger.error("[PROVIDUS-WEBHOOK] Processing failed for WebhookEvent id={}", event.getId(), e);
+            webhookEventService.markFailed(event.getId(), e.getMessage());
+            throw e;
+        }
+    }
+
+    // ── Providus event-type classifiers ──────────────────────────────────────
+
+    private boolean isProvidusDepositEvent(String eventType) {
+        if (eventType == null) return false;
+        String u = eventType.toUpperCase();
+        return u.contains("DEPOSIT")   || u.contains("CREDIT")
+            || u.contains("FUND")      || u.contains("SUCCESSFUL_TRANSACTION")
+            || u.contains("PAYMENT_SUCCESSFUL") || u.contains("TRANSACTION_SUCCESSFUL")
+            || u.contains("INCOMING")  || u.contains("WALLET_CREDITED")
+            || u.contains("WALLET_FUNDED");
+    }
+
+    private boolean isProvidusTransferSuccessEvent(String eventType) {
+        if (eventType == null) return false;
+        String u = eventType.toUpperCase();
+        return (u.contains("TRANSFER") && (u.contains("SUCCESS") || u.contains("SUCCESSFUL")))
+            || (u.contains("WITHDRAWAL") && (u.contains("SUCCESS") || u.contains("SUCCESSFUL")))
+            || (u.contains("DEBIT") && (u.contains("SUCCESS") || u.contains("SUCCESSFUL")));
+    }
+
+    private boolean isProvidusTransferFailedEvent(String eventType) {
+        if (eventType == null) return false;
+        String u = eventType.toUpperCase();
+        return (u.contains("TRANSFER") && (u.contains("FAIL") || u.contains("FAILED")))
+            || (u.contains("WITHDRAWAL") && (u.contains("FAIL") || u.contains("FAILED")))
+            || (u.contains("DEBIT") && (u.contains("FAIL") || u.contains("FAILED")));
     }
 
     private boolean isFundingEvent(String eventType) {

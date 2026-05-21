@@ -5,7 +5,10 @@ import com.google.api.client.googleapis.auth.oauth2.GoogleIdTokenVerifier;
 import com.google.api.client.http.javanet.NetHttpTransport;
 import com.google.api.client.json.gson.GsonFactory;
 import com.moniewise.moniewise_backend.dto.request.AuthRequest;
+import com.moniewise.moniewise_backend.dto.request.BvnPreVerifyRequest;
 import com.moniewise.moniewise_backend.dto.request.ChangePasswordRequest;
+import com.moniewise.moniewise_backend.dto.response.BvnVerificationResultDto;
+import com.moniewise.moniewise_backend.service.KycService;
 import com.moniewise.moniewise_backend.dto.response.AuthResponse;
 import com.moniewise.moniewise_backend.dto.response.LogoutResponse;
 import com.moniewise.moniewise_backend.entity.PasswordResetToken;
@@ -29,6 +32,7 @@ import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.web.bind.annotation.*;
 
 import javax.servlet.http.HttpServletRequest;
+import javax.validation.Valid;
 import java.io.IOException;
 import java.security.GeneralSecurityException;
 import java.util.Collections;
@@ -51,6 +55,7 @@ public class AuthController {
     @Autowired private NotificationService notificationService;
     @Autowired private AuthSessionService authSessionService;
     @Autowired private AbuseProtectionService abuseProtectionService;
+    @Autowired private KycService kycService;
 
     @Value("${spring.security.oauth2.client.registration.google.client-id:}")
     private String googleClientId;
@@ -136,6 +141,51 @@ public class AuthController {
             logger.error("verify-signup-otp failed for {}", email, e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(Map.of("status", "error", "message", "Verification failed. Please try again."));
+        }
+    }
+
+    /**
+     * Stage-1.5: BVN pre-verification — called AFTER /auth/signup but BEFORE
+     * /auth/verify-signup-otp, while the user is still unauthenticated.
+     *
+     * <p>The caller submits their email (used to locate the in-progress pending
+     * registration in Redis) and their 11-digit BVN.  The backend:
+     * <ol>
+     *   <li>Confirms a pending registration exists for the email.</li>
+     *   <li>Calls SecureWave's BVN verification API using the email + phone on record.</li>
+     *   <li>Stores the verified BVN data inside the Redis pending record so it is
+     *       automatically persisted to PostgreSQL when the OTP is verified.</li>
+     * </ol>
+     *
+     * <p>POST /auth/bvn/pre-verify
+     *
+     * <p>Request body: {@code {"email": "user@example.com", "bvn": "22435553718"}}
+     */
+    @PostMapping("/bvn/pre-verify")
+    public ResponseEntity<?> bvnPreVerify(
+            @Valid @RequestBody BvnPreVerifyRequest request,
+            HttpServletRequest httpRequest) {
+
+        String throttleKey = abuseProtectionService.buildKey(request.getEmail(), httpRequest.getRemoteAddr());
+        abuseProtectionService.checkAllowed(AbuseProtectionService.BVN_PRE_VERIFY, throttleKey);
+
+        try {
+            BvnVerificationResultDto result = kycService.preVerifyBvn(
+                    request.getEmail().toLowerCase().trim(), request.getBvn().trim());
+
+            abuseProtectionService.recordSuccess(AbuseProtectionService.BVN_PRE_VERIFY, throttleKey);
+            return ResponseEntity.ok(result);
+
+        } catch (IllegalArgumentException e) {
+            // No pending registration found — user hasn't called /auth/signup yet
+            abuseProtectionService.recordFailure(AbuseProtectionService.BVN_PRE_VERIFY, throttleKey);
+            return ResponseEntity.badRequest().body(Map.of("status", "error", "message", e.getMessage()));
+        } catch (Exception e) {
+            // SecureWave rejected or returned an error
+            abuseProtectionService.recordFailure(AbuseProtectionService.BVN_PRE_VERIFY, throttleKey);
+            logger.error("BVN pre-verify failed for {}: {}", request.getEmail(), e.getMessage());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("status", "error", "message", e.getMessage()));
         }
     }
 

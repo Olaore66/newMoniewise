@@ -10,4 +10,5 @@ public class P2PTransferRequest {
     private BigDecimal amount;
     private String note; // Optional description
     private String withdrawalReason; // New Field
+    private String transactionPin;
 }

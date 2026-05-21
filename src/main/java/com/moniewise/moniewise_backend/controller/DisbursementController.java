@@ -7,20 +7,18 @@ import com.moniewise.moniewise_backend.entity.PendingDisbursement;
 import com.moniewise.moniewise_backend.repository.BudgetRepository;
 import com.moniewise.moniewise_backend.repository.EnvelopeRepository;
 import com.moniewise.moniewise_backend.repository.PendingDisbursementRepository;
+import com.moniewise.moniewise_backend.service.AbuseProtectionService;
 import com.moniewise.moniewise_backend.service.EnvelopeService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
-import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.security.core.Authentication;
 
-import javax.transaction.Transactional;
-import java.nio.file.attribute.UserPrincipal;
+import javax.servlet.http.HttpServletRequest;
 
 @RestController
 @RequestMapping("/disbursements")
@@ -32,20 +30,25 @@ public class DisbursementController {
     private final PendingDisbursementRepository pendingDisbursementRepository;
     private final EnvelopeRepository envelopeRepository;
     private final BudgetRepository budgetRepository;
+    private final AbuseProtectionService abuseProtectionService;
 
+    /**
+     * POST /disbursements/{id}/claim
+     * Rate-limited — prevents rapid double-claim attempts.
+     */
     @PostMapping("/{id}/claim")
     public ResponseEntity<ClaimDisbursementResponse> claim(
-            @PathVariable("id") Long pendingDisbursementId){
+            @PathVariable("id") Long pendingDisbursementId,
+            HttpServletRequest httpRequest) {
 
-        String email = SecurityContextHolder.getContext()
-                .getAuthentication()
-                .getName();
+        String email = SecurityContextHolder.getContext().getAuthentication().getName();
         log.info("User {} attempting to claim disbursement {}", email, pendingDisbursementId);
 
-        // 1. Call service (your existing method)
+        String throttleKey = abuseProtectionService.buildKey(email, httpRequest.getRemoteAddr());
+        abuseProtectionService.checkAllowed(AbuseProtectionService.DISBURSEMENT_CLAIM, throttleKey);
+
         envelopeService.claimDisbursement(pendingDisbursementId, email);
 
-        // 2. Reload entities to build response
         PendingDisbursement pd = pendingDisbursementRepository.findById(pendingDisbursementId)
                 .orElseThrow(() -> new IllegalStateException("Disbursement disappeared after claim"));
 
@@ -53,6 +56,9 @@ public class DisbursementController {
                 .orElseThrow(() -> new IllegalStateException("Envelope not found"));
 
         Budget budget = envelope.getBudget();
+
+        // Claim succeeded — clear the failure window so transient errors don't compound
+        abuseProtectionService.recordSuccess(AbuseProtectionService.DISBURSEMENT_CLAIM, throttleKey);
 
         ClaimDisbursementResponse resp = new ClaimDisbursementResponse(
                 pd.getId(),
