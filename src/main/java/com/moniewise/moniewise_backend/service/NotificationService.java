@@ -538,7 +538,7 @@ public class NotificationService {
 
             helper.setFrom(fromEmail);
             helper.setTo(email);
-            helper.setSubject("ðŸš€ Welcome to Wisemonie! Your Account is Ready");
+            helper.setSubject("🎊 Welcome to Wisemonie! Your Account is Ready");
             helper.setText(htmlContent, true);
 
             mailSender.send(mimeMessage);
