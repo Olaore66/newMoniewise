@@ -7,8 +7,14 @@ import org.springframework.stereotype.Component;
 @ConfigurationProperties(prefix = "gemini")
 public class GeminiProperties {
     private String apiKey;
-    private String model;
-    private String url;
+
+    // Code-level defaults for model and url — these are overridden by the
+    // application.properties / env-var bindings when the deployed JAR includes
+    // those lines.  Having the defaults here means an older compiled JAR that
+    // is missing the property lines (the root cause of model=<missing> in the
+    // server log) still works correctly without any container restart.
+    private String model = "gemini-1.5-flash";
+    private String url   = "https://generativelanguage.googleapis.com/v1beta/models";
 
     public String getApiKey() {
         return apiKey;

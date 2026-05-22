@@ -33,7 +33,10 @@ import javax.annotation.PostConstruct;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -359,10 +362,66 @@ public class WalletService {
         }
     }
 
-    // Last known-good bank list — serves as a stale-on-error fallback so a
-    // temporary upstream outage doesn't make the withdrawal flow completely unusable.
-    // Volatile so updates from any thread are immediately visible to all others.
+    // ─────────────────────────────────────────────────────────────────────────
+    // Bank-list resilience — three-layer fallback so /wallets/banks NEVER
+    // returns 503 in production:
+    //   1. Fresh upstream call  → update stale cache, return results.
+    //   2. Upstream fails/empty → serve last known-good in-memory cache.
+    //   3. No stale cache (cold start with upstream down) → return the
+    //      embedded static list of Nigerian banks.  Bank codes are stable;
+    //      this list covers all major institutions and keeps the withdrawal
+    //      flow open even during full upstream outages.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /** In-memory stale-on-error cache.  Volatile for cross-thread visibility. */
     private volatile List<Map<String, Object>> _lastKnownBanks = null;
+
+    /** Embedded static Nigerian bank list — the last-resort fallback. */
+    private static final List<Map<String, Object>> NIGERIAN_BANK_FALLBACK;
+    static {
+        List<Map<String, Object>> b = new ArrayList<>();
+        b.add(bankEntry(1,  "Access Bank",                 "access",     "044"));
+        b.add(bankEntry(2,  "Citibank Nigeria",             "citibank",   "023"));
+        b.add(bankEntry(3,  "Ecobank Nigeria",              "ecobank",    "050"));
+        b.add(bankEntry(4,  "First Bank of Nigeria",        "firstbank",  "011"));
+        b.add(bankEntry(5,  "First City Monument Bank",     "fcmb",       "214"));
+        b.add(bankEntry(6,  "Fidelity Bank",                "fidelity",   "070"));
+        b.add(bankEntry(7,  "Guaranty Trust Bank",          "gtbank",     "058"));
+        b.add(bankEntry(8,  "Heritage Bank",                null,         "030"));
+        b.add(bankEntry(9,  "Jaiz Bank",                    null,         "301"));
+        b.add(bankEntry(10, "Keystone Bank",                "keystone",   "082"));
+        b.add(bankEntry(11, "Polaris Bank",                 "polaris",    "076"));
+        b.add(bankEntry(12, "Stanbic IBTC Bank",            "stanbic",    "039"));
+        b.add(bankEntry(13, "Sterling Bank",                "sterling",   "232"));
+        b.add(bankEntry(14, "Union Bank of Nigeria",        "unionbank",  "032"));
+        b.add(bankEntry(15, "United Bank for Africa",       "uba",        "033"));
+        b.add(bankEntry(16, "Unity Bank",                   null,         "215"));
+        b.add(bankEntry(17, "Wema Bank",                    "wema",       "035"));
+        b.add(bankEntry(18, "Zenith Bank",                  "zenith",     "057"));
+        b.add(bankEntry(19, "Kuda Microfinance Bank",       "kuda",       "999991"));
+        b.add(bankEntry(20, "OPay",                         null,         "100004"));
+        b.add(bankEntry(21, "PalmPay",                      null,         "999992"));
+        b.add(bankEntry(22, "Moniepoint Microfinance Bank", "moniepoint", "50515"));
+        b.add(bankEntry(23, "VFD Microfinance Bank",        "vfd",        "566"));
+        b.add(bankEntry(24, "Providus Bank",                "providus",   "101"));
+        b.add(bankEntry(25, "Standard Chartered Bank",      "scb",        "068"));
+        b.add(bankEntry(26, "Coronation Merchant Bank",     null,         "559"));
+        b.add(bankEntry(27, "Parallex Bank",                null,         "526"));
+        b.add(bankEntry(28, "Titan Trust Bank",             "titan",      "102"));
+        b.add(bankEntry(29, "Lotus Bank",                   null,         "303"));
+        b.add(bankEntry(30, "Carbon (One Finance)",         "carbon",     "565"));
+        NIGERIAN_BANK_FALLBACK = Collections.unmodifiableList(b);
+    }
+
+    /** Builds one bank map in the format expected by Flutter's Bank.fromJson. */
+    private static Map<String, Object> bankEntry(int id, String name, String alias, String bankCode) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("id", id);
+        m.put("name", name);
+        if (alias != null) m.put("alias", alias);
+        m.put("bank_code", bankCode);
+        return m;
+    }
 
     public List<Map<String, Object>> getSupportedBanks(Long userId) {
         Wallet wallet = walletRepository.findByUserId(userId).orElse(null);
@@ -370,24 +429,34 @@ public class WalletService {
                 ? paymentGatewayResolver.resolveForWallet(wallet)
                 : paymentGatewayResolver.resolveDefault();
 
-        List<Map<String, Object>> fresh = gateway.getSupportedBanks();
+        // Layer 1: try fresh upstream call (gateway already swallows HTTP errors
+        // and returns [], but wrap in try-catch for any unexpected runtime exceptions).
+        List<Map<String, Object>> fresh;
+        try {
+            fresh = gateway.getSupportedBanks();
+        } catch (Exception e) {
+            logger.warn("Bank list upstream threw exception — will try stale/static fallback: {}", e.getMessage());
+            fresh = Collections.emptyList();
+        }
 
         if (fresh != null && !fresh.isEmpty()) {
-            // Upstream returned data — update the fallback and return fresh results.
-            _lastKnownBanks = fresh;
+            _lastKnownBanks = fresh;   // refresh the stale-on-error cache
             return fresh;
         }
 
-        // Upstream is down or returned empty. Serve the last known-good list so
-        // users can still initiate withdrawals. If we've never had a successful
-        // fetch (cold start with upstream already down), return empty — the
-        // controller will return a proper 503 JSON and the user sees a clear message.
+        // Layer 2: stale in-memory cache (populated from a previous successful call
+        // within this JVM lifetime — survives transient upstream blips but not restarts).
         if (_lastKnownBanks != null && !_lastKnownBanks.isEmpty()) {
-            logger.warn("Bank list upstream returned empty — serving stale cache ({} banks)", _lastKnownBanks.size());
+            logger.warn("Bank list upstream empty — serving stale in-memory cache ({} banks)", _lastKnownBanks.size());
             return _lastKnownBanks;
         }
 
-        return fresh; // still empty — controller handles this as 503
+        // Layer 3: static embedded list — cold start with upstream already down.
+        // Nigerian bank codes are stable; this list covers all major institutions.
+        // The 503 path in WalletController is now effectively unreachable.
+        logger.warn("No upstream data and no stale cache — serving static Nigerian bank fallback ({} banks)",
+                NIGERIAN_BANK_FALLBACK.size());
+        return NIGERIAN_BANK_FALLBACK;
     }
 
     public String resolveBankAccount(Long userId, String bankCode, String accountNumber) {

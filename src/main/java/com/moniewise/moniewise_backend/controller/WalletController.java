@@ -96,11 +96,13 @@ public class WalletController {
             List<Map<String, Object>> banks = walletService.getSupportedBanks(userId);
 
             if (banks.isEmpty()) {
-                // Always return JSON — a plain-text body causes the Flutter client to
-                // crash with "type 'String' is not a subtype of type 'int' of 'index'"
-                // when it tries to deserialise the error as if it were a Map/List.
+                // Safety-net: WalletService now has a three-layer fallback
+                // (upstream → stale cache → static Nigerian list) so this branch
+                // should never be reached in practice.  Keep it here as a last-
+                // resort guard; always return JSON so the Flutter client doesn't
+                // crash on a plain-text body.
                 return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
-                        .body(Map.of("message", "Bank list is currently unavailable. Please try again shortly."));
+                        .body(Map.of("message", "Bank list is temporarily unavailable. Please try again shortly."));
             }
 
             return ResponseEntity.ok(banks);
