@@ -182,8 +182,10 @@ public class ProvidusExpressGateway implements PaymentGateway {
         }
     }
 
+    // @Cacheable removed — same reason as SecureWavePaymentProvider: Spring caches
+    // empty lists on upstream failure, locking users out of the bank list for hours.
+    // Stale-on-error is handled by WalletService._lastKnownBanks instead.
     @Override
-    @Cacheable(value = "banks")
     public List<Map<String, Object>> getSupportedBanks() {
         requireEnabled();
         String url = baseUrl + "/api/v1/transfer/banks";

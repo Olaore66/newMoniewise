@@ -9,9 +9,15 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 @Entity
-// 👇 ADD THIS INDEX. It organizes logs by Envelope + Date for instant lookups.
 @Table(name = "transaction_logs", indexes = {
-        @Index(name = "idx_envelope_date", columnList = "source_envelope_id, created_at")
+        // Covers every user-facing transaction list/page query (findByUserIdOrderByCreatedAtDesc,
+        // findUserVisibleTransactions, etc.). Without this Postgres scans the entire table
+        // and sorts in-memory for every request — the root cause of slow transaction screens.
+        @Index(name = "idx_txlog_user_created", columnList = "user_id, created_at"),
+        // Covers envelope-level spend queries (calculateTotalSpent, findBySourceEnvelopeIdAndTimeRange).
+        @Index(name = "idx_txlog_envelope_date", columnList = "source_envelope_id, created_at"),
+        // Covers budget-level transaction lookups (findByBudgetIdOrderByCreatedAtDesc).
+        @Index(name = "idx_txlog_budget_created", columnList = "budget_id, created_at")
 })
 public class TransactionLog {
     @Id

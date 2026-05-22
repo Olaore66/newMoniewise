@@ -359,13 +359,35 @@ public class WalletService {
         }
     }
 
+    // Last known-good bank list — serves as a stale-on-error fallback so a
+    // temporary upstream outage doesn't make the withdrawal flow completely unusable.
+    // Volatile so updates from any thread are immediately visible to all others.
+    private volatile List<Map<String, Object>> _lastKnownBanks = null;
+
     public List<Map<String, Object>> getSupportedBanks(Long userId) {
-        Wallet wallet = walletRepository.findByUserId(userId)
-                .orElse(null);
+        Wallet wallet = walletRepository.findByUserId(userId).orElse(null);
         PaymentGateway gateway = wallet != null
                 ? paymentGatewayResolver.resolveForWallet(wallet)
                 : paymentGatewayResolver.resolveDefault();
-        return gateway.getSupportedBanks();
+
+        List<Map<String, Object>> fresh = gateway.getSupportedBanks();
+
+        if (fresh != null && !fresh.isEmpty()) {
+            // Upstream returned data — update the fallback and return fresh results.
+            _lastKnownBanks = fresh;
+            return fresh;
+        }
+
+        // Upstream is down or returned empty. Serve the last known-good list so
+        // users can still initiate withdrawals. If we've never had a successful
+        // fetch (cold start with upstream already down), return empty — the
+        // controller will return a proper 503 JSON and the user sees a clear message.
+        if (_lastKnownBanks != null && !_lastKnownBanks.isEmpty()) {
+            logger.warn("Bank list upstream returned empty — serving stale cache ({} banks)", _lastKnownBanks.size());
+            return _lastKnownBanks;
+        }
+
+        return fresh; // still empty — controller handles this as 503
     }
 
     public String resolveBankAccount(Long userId, String bankCode, String accountNumber) {

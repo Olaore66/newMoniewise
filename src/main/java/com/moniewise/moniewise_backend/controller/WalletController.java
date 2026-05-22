@@ -96,12 +96,18 @@ public class WalletController {
             List<Map<String, Object>> banks = walletService.getSupportedBanks(userId);
 
             if (banks.isEmpty()) {
-                return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body("Bank list is currently unavailable");
+                // Always return JSON — a plain-text body causes the Flutter client to
+                // crash with "type 'String' is not a subtype of type 'int' of 'index'"
+                // when it tries to deserialise the error as if it were a Map/List.
+                return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                        .body(Map.of("message", "Bank list is currently unavailable. Please try again shortly."));
             }
 
             return ResponseEntity.ok(banks);
         } catch (Exception e) {
-            return ResponseEntity.internalServerError().body(Map.of("error", "An error occurred while fetching banks"));
+            log.error("getSupportedBanks error: {}", e.getMessage());
+            return ResponseEntity.internalServerError()
+                    .body(Map.of("message", "An error occurred while fetching banks"));
         }
     }
 

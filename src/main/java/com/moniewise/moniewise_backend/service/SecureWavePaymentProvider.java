@@ -339,10 +339,15 @@ public class SecureWavePaymentProvider implements PaymentProvider {
     private List<Map<String, Object>> cachedBanks = null;
 
     // ==========================================================
-    // 5. GET BANKS (With In-Memory Caching)
+    // 5. GET BANKS
     // ==========================================================
+    // @Cacheable REMOVED: Spring's @Cacheable stores the return value unconditionally,
+    // including empty lists returned on upstream failure. A single 503 from SecureWave
+    // would cache [] for up to 12 hours (the CacheConfig evict interval), making the
+    // entire bank list completely unavailable until the next server restart or evict.
+    // Stale-on-error fallback is now handled in WalletService._lastKnownBanks —
+    // it only updates on non-empty results, so a failure always serves real data.
     @Override
-    @Cacheable(value = "banks")
     public List<Map<String, Object>> getSupportedBanks() {
         // Using the base URL from your environment variables
         String url = baseUrl + "/banks";

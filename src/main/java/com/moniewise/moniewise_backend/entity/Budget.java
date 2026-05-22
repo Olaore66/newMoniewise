@@ -101,7 +101,18 @@ import java.util.ArrayList;
 import java.util.List;
 
 @Entity
-@Table(name = "budgets")
+@Table(
+    name = "budgets",
+    indexes = {
+        // Covers every query that filters by user_id (dashboard summary, active budget
+        // lookup, budget list). Without this index Postgres/MySQL does a full table scan
+        // for every user — gets noticeably slow once the budgets table grows past ~10k rows.
+        @Index(name = "idx_budgets_user_id", columnList = "user_id"),
+        // Covers the most common compound filter: user's budgets in a given status.
+        // Used by findByUserIdAndStatus, findTopByUserIdAndStatusOrderByCreatedAtDesc.
+        @Index(name = "idx_budgets_user_status", columnList = "user_id, status")
+    }
+)
 @Getter
 @NoArgsConstructor
 @AllArgsConstructor
