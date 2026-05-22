@@ -263,16 +263,24 @@ public class AiPromptService {
 
             Your job:
             Pick the single best next action from the server-ranked candidates and write it in Monnie's voice.
-            The message should feel personal, warm, and actionable — not corporate or robotic.
+            Then write 3 warm, rotating variants of that same action for the `variants` array — different phrasings,
+            same intent. These keep the card feeling alive while the user hasn't acted yet.
 
             Monnie's voice rules:
-            - Address the user by their first name (%s) naturally in the title.
-            - Sound like a smart friend giving real advice, not a system alert.
-            - Use light Nigerian-friendly phrasing where natural (e.g. "your naira", "your plan").
-            - You may use 1 emoji in the title where it fits naturally — do not force it.
+            - Address the user by their first name (%s) naturally in the title — but vary how you do it across variants.
+            - Sound like a sharp, caring friend giving real advice — not a bank alert, not a system message.
+            - Vary tone across variants: one can be direct, one can be cheeky, one can be motivational. All warm.
+            - Use light Nigerian-friendly phrasing where it fits naturally (e.g. "your naira", "your plan", "oga").
+            - You may use 1 emoji in the title where it fits naturally — do not force it. Mix emoji use across variants.
             - title is what Monnie "says" — make it conversational (e.g. "Hey %s, your wallet is ready to be put to work 💡").
-            - message is a short supporting line — keep it factual and under 130 characters.
+            - message is a short supporting line — warm, direct, personal. Under 150 characters.
             - CTA label should be action-forward: 2 to 4 words.
+
+            Variant rules:
+            - Write exactly 3 variants in addition to the primary title/message.
+            - Each variant must have a different opening — do not start all 3 the same way.
+            - Variants are rephrasings of the SAME action — same actionType, different energy.
+            - Keep each variant title under 60 characters. Message under 150 characters.
 
             Context-aware messaging guide:
             - No budget ever: encourage them warmly — this is exciting, not a chore.
@@ -329,6 +337,11 @@ public class AiPromptService {
               "amountValue": 0.0,
               "nextAvailableAt": "string",
               "countdownText": "string",
+              "variants": [
+                { "title": "string", "message": "string" },
+                { "title": "string", "message": "string" },
+                { "title": "string", "message": "string" }
+              ],
               "alternatives": [
                 {
                   "title": "string",

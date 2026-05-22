@@ -20,6 +20,14 @@ public class AiDashboardNextActionResponse {
     private String nextAvailableAt;
     private String countdownText;
     private List<AlternativeAction> alternatives = new ArrayList<>();
+    /**
+     * 2–4 warm, rotating phrasings of the SAME action.
+     * Gemini generates these so the card feels alive while the user
+     * hasn't acted yet. Each entry carries only title + message;
+     * the rest of the action metadata (actionType, budgetId, etc.)
+     * is shared from the parent object.
+     */
+    private List<PromptVariant> variants = new ArrayList<>();
 
     public String getTitle() {
         return title;
@@ -147,6 +155,25 @@ public class AiDashboardNextActionResponse {
 
     public void setAlternatives(List<AlternativeAction> alternatives) {
         this.alternatives = alternatives == null ? new ArrayList<>() : alternatives;
+    }
+
+    public List<PromptVariant> getVariants() {
+        return variants;
+    }
+
+    public void setVariants(List<PromptVariant> variants) {
+        this.variants = variants == null ? new ArrayList<>() : variants;
+    }
+
+    /** A single warm rephrasing of the parent action. Title + message only. */
+    public static class PromptVariant {
+        private String title;
+        private String message;
+
+        public String getTitle() { return title; }
+        public void setTitle(String title) { this.title = title; }
+        public String getMessage() { return message; }
+        public void setMessage(String message) { this.message = message; }
     }
 
     public static class AlternativeAction {

@@ -132,8 +132,8 @@ public class AiInsightService {
 
         if (context.hasBudgetHistory && context.walletBalance.compareTo(BigDecimal.ZERO) <= 0) {
             candidates.add(baseCandidate(
-                "Fund your wallet first",
-                "Your wallet balance is zero right now. Add money so your active budget and spending plan can keep moving.",
+                "Boss, your wallet is empty 👀",
+                "Fund your wallet so your budget can actually do something. No money in = no plan running.",
                 "Fund wallet",
                 "fund_wallet",
                 "high",
@@ -167,8 +167,8 @@ public class AiInsightService {
 
         if (context.activeBudget == null && context.completedBudget == null) {
             candidates.add(baseCandidate(
-                "Create your first budget",
-                "Turn your wallet balance into a clear spending plan with envelopes that match your goals.",
+                "Let's build your first budget 🎯",
+                "Give your wallet balance a real job — build a spending plan with envelopes that match how you actually live.",
                 "Start budget",
                 "create_budget",
                 "high",
@@ -179,8 +179,8 @@ public class AiInsightService {
 
         if (context.activeBudget == null && context.completedBudget != null) {
             candidates.add(baseCandidate(
-                "Plan the next budget cycle",
-                "You have completed a budget before. Start the next one while your recent spending pattern is still fresh.",
+                "New cycle, new plan — let's go 📅",
+                "Your last budget wrapped up. Set up a fresh one so your money doesn't float around without a job this month.",
                 "Create budget",
                 "create_budget",
                 "high",
@@ -193,7 +193,7 @@ public class AiInsightService {
             double score = context.walletBalance.compareTo(new BigDecimal("50000")) > 0 ? 620 : 420;
             candidates.add(baseCandidate(
                 "Link your payout account",
-                "Set your account details now so withdrawals stay fast and friction-free when you need them.",
+                "Add your account details so when it's time to withdraw, everything's ready and friction-free.",
                 "Set account",
                 "set_account",
                 "normal",
@@ -356,6 +356,11 @@ public class AiInsightService {
         merged.setAmountValue(candidate.amountValue);
         merged.setNextAvailableAt(candidate.nextAvailableAt);
         merged.setCountdownText(candidate.countdownText);
+        // Preserve AI-generated variants; clear them for server-ranked/fallback paths
+        // (the "ai" source check ensures only Gemini responses carry variants through)
+        if ("ai".equals(source) && response.getVariants() != null && !response.getVariants().isEmpty()) {
+            merged.setVariants(response.getVariants());
+        }
         return merged;
     }
 
@@ -458,8 +463,8 @@ public class AiInsightService {
 
     private AiDashboardNextActionResponse buildFallback(DashboardActionContext context) {
         AiDashboardNextActionResponse response = new AiDashboardNextActionResponse();
-        response.setTitle("Create your next budget");
-        response.setMessage("Build a fresh budget and give every naira a clear job.");
+        response.setTitle("New cycle, new plan — let's go 📅");
+        response.setMessage("Set up a fresh budget so your money has direction this month — not just vibes.");
         response.setCtaLabel("Create budget");
         response.setActionType("create_budget");
         response.setPriority("high");
