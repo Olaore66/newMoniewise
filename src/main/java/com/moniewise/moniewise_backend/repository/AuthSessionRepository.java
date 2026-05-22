@@ -36,4 +36,8 @@ public interface AuthSessionRepository extends JpaRepository<AuthSession, Long> 
     @Modifying
     @Query("UPDATE AuthSession s SET s.revoked = true, s.revokedAt = :revokedAt, s.fcmToken = NULL WHERE s.sessionId = :sessionId AND s.revoked = false")
     int revokeSession(@Param("sessionId") String sessionId, @Param("revokedAt") LocalDateTime revokedAt);
+
+    @Modifying
+    @Query("UPDATE AuthSession s SET s.revoked = true, s.revokedAt = :revokedAt, s.fcmToken = NULL WHERE s.user.id = :userId AND s.revoked = false")
+    int revokeAllSessionsForUser(@Param("userId") Long userId, @Param("revokedAt") LocalDateTime revokedAt);
 }

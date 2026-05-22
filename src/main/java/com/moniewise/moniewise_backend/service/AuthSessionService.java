@@ -21,6 +21,11 @@ public class AuthSessionService {
 
     @Transactional
     public String createSession(User user) {
+        // Revoke all previous sessions for this user before issuing a new one.
+        // This enforces single-device login: logging in on a new device automatically
+        // invalidates every other active session, so stolen/old tokens stop working.
+        authSessionRepository.revokeAllSessionsForUser(user.getId(), LocalDateTime.now());
+
         AuthSession session = new AuthSession();
         session.setUser(user);
         session.setSessionId(UUID.randomUUID().toString());
