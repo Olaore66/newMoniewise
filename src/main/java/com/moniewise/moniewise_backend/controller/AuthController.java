@@ -290,23 +290,37 @@ public class AuthController {
     }
 
     @PostMapping("/reset-password")
-    public ResponseEntity<?> resetPassword(@RequestBody Map<String, String> body) {
+    public ResponseEntity<?> resetPassword(@RequestBody Map<String, String> body,
+                                           HttpServletRequest httpRequest) {
         String email = body.get("email");
+        String throttleKey = abuseProtectionService.buildKey(email, httpRequest.getRemoteAddr());
+        abuseProtectionService.checkAllowed(AbuseProtectionService.RESET_PASSWORD, throttleKey);
         String token = body.get("token");
         String newPassword = body.get("password");
         if (!resetService.isValidToken(email, token)) {
+            abuseProtectionService.recordFailure(AbuseProtectionService.RESET_PASSWORD, throttleKey);
             return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of("error", "Invalid or expired reset session"));
         }
-        resetService.updateUserPassword(email, token, newPassword);
-        resetService.markTokenAsUsed(email, token);
-        return ResponseEntity.ok(Map.of("message", "Password reset successful"));
+        try {
+            resetService.updateUserPassword(email, token, newPassword);
+            resetService.markTokenAsUsed(email, token);
+            abuseProtectionService.recordSuccess(AbuseProtectionService.RESET_PASSWORD, throttleKey);
+            return ResponseEntity.ok(Map.of("message", "Password reset successful"));
+        } catch (Exception e) {
+            abuseProtectionService.recordFailure(AbuseProtectionService.RESET_PASSWORD, throttleKey);
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
     }
 
     @PostMapping("/change-password")
     public ResponseEntity<?> changePassword(
             @AuthenticationPrincipal UserDetails userDetails,
-            @RequestBody ChangePasswordRequest request
+            @RequestBody ChangePasswordRequest request,
+            HttpServletRequest httpRequest
     ) {
+        String throttleKey = abuseProtectionService.buildKey(
+                userDetails.getUsername(), httpRequest.getRemoteAddr());
+        abuseProtectionService.checkAllowed(AbuseProtectionService.CHANGE_PASSWORD, throttleKey);
         try {
             userService.changePassword(
                     userDetails.getUsername(),
@@ -314,8 +328,10 @@ public class AuthController {
                     request.getNewPassword(),
                     request.getConfirmNewPassword()
             );
+            abuseProtectionService.recordSuccess(AbuseProtectionService.CHANGE_PASSWORD, throttleKey);
             return ResponseEntity.ok(Map.of("message", "Password changed successfully"));
         } catch (IllegalArgumentException e) {
+            abuseProtectionService.recordFailure(AbuseProtectionService.CHANGE_PASSWORD, throttleKey);
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }
     }

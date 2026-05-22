@@ -31,12 +31,14 @@ public class AbuseProtectionService {
     private static final String LCK    = ":lck";
 
     // ── Auth ─────────────────────────────────────────────────────────────────
-    public static final String LOGIN           = "auth.login";
-    public static final String SIGNUP          = "auth.signup";
-    public static final String SIGNUP_VERIFY   = "auth.signup_verify";
-    public static final String FORGOT_PASSWORD = "auth.forgot_password";
-    public static final String RESET_VERIFY    = "auth.verify_reset_otp";
-    public static final String GOOGLE_LOGIN    = "auth.google";
+    public static final String LOGIN            = "auth.login";
+    public static final String SIGNUP           = "auth.signup";
+    public static final String SIGNUP_VERIFY    = "auth.signup_verify";
+    public static final String FORGOT_PASSWORD  = "auth.forgot_password";
+    public static final String RESET_VERIFY     = "auth.verify_reset_otp";
+    public static final String RESET_PASSWORD   = "auth.reset_password";
+    public static final String CHANGE_PASSWORD  = "auth.change_password";
+    public static final String GOOGLE_LOGIN     = "auth.google";
 
     // ── OTP ──────────────────────────────────────────────────────────────────
     public static final String OTP_GENERATE = "otp.generate";
@@ -178,6 +180,10 @@ public class AbuseProtectionService {
             case OTP_VERIFY      -> new AttemptPolicy(5,  Duration.ofMinutes(15), Duration.ofMinutes(15));
             case FORGOT_PASSWORD -> new AttemptPolicy(3,  Duration.ofMinutes(15), Duration.ofMinutes(15));
             case RESET_VERIFY    -> new AttemptPolicy(5,  Duration.ofMinutes(15), Duration.ofMinutes(15));
+            // Token is random/unguessable, but still cap attempts as defence-in-depth
+            case RESET_PASSWORD  -> new AttemptPolicy(5,  Duration.ofMinutes(15), Duration.ofMinutes(30));
+            // Authenticated endpoint — wrong current-password is the threat
+            case CHANGE_PASSWORD -> new AttemptPolicy(5,  Duration.ofMinutes(15), Duration.ofMinutes(30));
             case GOOGLE_LOGIN    -> new AttemptPolicy(5,  Duration.ofMinutes(10), Duration.ofMinutes(10));
 
             // Wallet — generous limits for normal use, blocks abuse

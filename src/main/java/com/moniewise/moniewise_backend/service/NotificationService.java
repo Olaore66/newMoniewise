@@ -597,6 +597,40 @@ public class NotificationService {
             logger.error("⚠️ Failed to send Reset OTP to {}", to, e);
         }
     }
+    /**
+     * Sent immediately after a successful transaction PIN change.
+     * Passive security alert — no action required if the user made the change.
+     * Fired async so the API response is not delayed.
+     */
+    @Async
+    public void sendTransactionPinChangedAlert(String to, String userName, String changedAt) {
+        if ("stub".equals(activeProfile) || mailSender == null) {
+            logger.info("[STUB] Sending Transaction PIN changed alert to {}", to);
+            return;
+        }
+        try {
+            Context context = new Context();
+            context.setVariable("userName", userName);
+            context.setVariable("email", to);
+            context.setVariable("changedAt", changedAt);
+
+            String htmlContent = templateEngine.process("pin-changed-alert", context);
+
+            MimeMessage mimeMessage = mailSender.createMimeMessage();
+            MimeMessageHelper helper = new MimeMessageHelper(mimeMessage, true);
+
+            helper.setFrom(fromEmail);
+            helper.setTo(to);
+            helper.setSubject("🔐 Your Wisemonie transaction PIN was changed");
+            helper.setText(htmlContent, true);
+
+            mailSender.send(mimeMessage);
+            logger.info("Sent transaction PIN changed alert to {}", to);
+        } catch (Exception e) {
+            logger.error("Failed to send transaction PIN changed alert to {}", to, e);
+        }
+    }
+
     @Async
     public void sendTransactionPinResetOtp(String to, String userName, String otpCode) {
         if ("stub".equals(activeProfile) || mailSender == null) {

@@ -276,7 +276,7 @@ public class UserService implements UserDetailsService {
     }
 
     @Transactional
-    public void changeTransactionPin(User user, String currentPin, String newPin, String confirmNewPin) {
+    public void changeTransactionPin(User user, String currentPin, String newPin) {
         if (!hasPin(user)) {
             throw new IllegalStateException("User has not set a transaction PIN");
         }
@@ -286,7 +286,7 @@ public class UserService implements UserDetailsService {
         if (!passwordEncoder.matches(currentPin, user.getTransactionPin())) {
             throw new IllegalArgumentException("Current PIN is incorrect");
         }
-        validateNewPin(newPin, confirmNewPin);
+        validatePin(newPin);
         if (passwordEncoder.matches(newPin, user.getTransactionPin())) {
             throw new IllegalArgumentException("New PIN must be different from current PIN");
         }
@@ -333,18 +333,27 @@ public class UserService implements UserDetailsService {
         userRepository.save(user);
     }
 
-    private void validateNewPin(String pin, String confirmPin) {
+    /** Validates a single PIN value — format only, no confirmation. */
+    private void validatePin(String pin) {
         if (pin == null || pin.isBlank()) {
             throw new IllegalArgumentException("PIN is required");
         }
+        if (pin.length() != 4 || !pin.matches("\\d+")) {
+            throw new IllegalArgumentException("PIN must be exactly 4 digits");
+        }
+    }
+
+    /**
+     * Validates a new PIN + its confirmation (used by create and forgot-reset
+     * flows where the frontend sends confirmPin for an extra server-side check).
+     */
+    private void validateNewPin(String pin, String confirmPin) {
+        validatePin(pin);
         if (confirmPin == null || confirmPin.isBlank()) {
             throw new IllegalArgumentException("PIN confirmation is required");
         }
         if (!pin.equals(confirmPin)) {
             throw new IllegalArgumentException("PINs do not match");
-        }
-        if (pin.length() != 4 || !pin.matches("\\d+")) {
-            throw new IllegalArgumentException("PIN must be exactly 4 digits");
         }
     }
 

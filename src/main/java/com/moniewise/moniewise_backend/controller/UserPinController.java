@@ -15,6 +15,9 @@ import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
 import javax.servlet.http.HttpServletRequest;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.Map;
 
 @RestController
@@ -105,10 +108,16 @@ public class UserPinController {
             userService.changeTransactionPin(
                     user,
                     request.getCurrentPin(),
-                    request.getNewPin(),
-                    request.getConfirmNewPin()
+                    request.getNewPin()
             );
             abuseProtectionService.recordSuccess(AbuseProtectionService.PIN_CHANGE, throttleKey);
+
+            // Fire-and-forget security alert — async, never blocks the response
+            String userName = user.getName() != null ? user.getName() : "there";
+            String changedAt = ZonedDateTime.now(ZoneId.of("Africa/Lagos"))
+                    .format(DateTimeFormatter.ofPattern("dd MMM yyyy, HH:mm 'WAT'"));
+            notificationService.sendTransactionPinChangedAlert(user.getEmail(), userName, changedAt);
+
             return ResponseEntity.ok(Map.of("message", "Transaction PIN changed successfully"));
         } catch (IllegalArgumentException | IllegalStateException e) {
             abuseProtectionService.recordFailure(AbuseProtectionService.PIN_CHANGE, throttleKey);
