@@ -142,6 +142,51 @@ public class UserService implements UserDetailsService {
     }
 
     /**
+     * Regenerates and resends the signup OTP for an existing pending registration.
+     *
+     * <p>The pending record must still be alive in Redis (i.e. the original signup
+     * was called within the last {@code RegistrationCacheService.TTL_MINUTES} minutes).
+     * If the Redis key has expired the user must restart the signup flow.
+     *
+     * <p>A fresh 6-digit OTP replaces the previous one and the TTL is reset, giving
+     * the user another full window to verify.
+     *
+     * @param email the email address used during {@link #signup}
+     * @throws IllegalArgumentException if no pending registration exists for the email
+     */
+    public void resendSignupOtp(String email) {
+        PendingRegistrationData existing = registrationCacheService
+                .findByEmail(email.toLowerCase())
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "No pending registration found for this email. Please sign up again."));
+
+        // Generate a fresh OTP and reset the TTL
+        SecureRandom random = new SecureRandom();
+        String newOtp = String.valueOf(random.nextInt(900000) + 100000);
+        long newExpiry = System.currentTimeMillis() + (5L * 60 * 1000);
+
+        PendingRegistrationData refreshed = new PendingRegistrationData(
+                existing.getEmail(),
+                existing.getPhone(),
+                existing.getEncodedPassword(),
+                newOtp,
+                newExpiry
+        );
+        registrationCacheService.save(refreshed);
+
+        // Send the new OTP email asynchronously
+        CompletableFuture.runAsync(() -> {
+            try {
+                notificationService.sendOtpEmail(existing.getEmail(), newOtp);
+            } catch (Exception ex) {
+                logger.error("Failed to resend signup OTP email to {}: {}", existing.getEmail(), ex.getMessage());
+            }
+        });
+
+        logger.info("Signup OTP resent for {} — new OTP generated and Redis TTL reset.", email);
+    }
+
+    /**
      * Stage-2 of the two-step signup flow.
      *
      * <p>Validates the OTP submitted by the client, then atomically pulls the

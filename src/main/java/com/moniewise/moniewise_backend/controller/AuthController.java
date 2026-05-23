@@ -100,6 +100,36 @@ public class AuthController {
      *
      * <p>Request body: {@code {"email": "...", "otp": "123456"}}
      */
+    /**
+     * Resend a signup OTP for a pending (Redis-only) registration.
+     * Safe to call multiple times — each call generates a fresh OTP and resets the TTL.
+     * Rate-limited via the SIGNUP bucket to prevent OTP flooding.
+     */
+    @PostMapping("/resend-signup-otp")
+    public ResponseEntity<?> resendSignupOtp(@RequestBody Map<String, String> body,
+                                             HttpServletRequest httpRequest) {
+        String email = body.get("email");
+        if (email == null || email.isBlank()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "email is required"));
+        }
+        String throttleKey = abuseProtectionService.buildKey(email, httpRequest.getRemoteAddr());
+        abuseProtectionService.checkAllowed(AbuseProtectionService.SIGNUP, throttleKey);
+        try {
+            userService.resendSignupOtp(email);
+            abuseProtectionService.recordSuccess(AbuseProtectionService.SIGNUP, throttleKey);
+            return ResponseEntity.ok(Map.of("message", "A new verification code has been sent to " + email + ". Please check your inbox."));
+        } catch (IllegalArgumentException e) {
+            // No pending registration — session expired, user needs to sign up again
+            abuseProtectionService.recordFailure(AbuseProtectionService.SIGNUP, throttleKey);
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        } catch (Exception e) {
+            abuseProtectionService.recordFailure(AbuseProtectionService.SIGNUP, throttleKey);
+            logger.error("resend-signup-otp failed for {}: {}", email, e.getMessage());
+            // Non-leaking fallback — same message regardless of whether the email exists
+            return ResponseEntity.ok(Map.of("message", "If a pending registration exists, a new code has been sent."));
+        }
+    }
+
     @PostMapping("/verify-signup-otp")
     public ResponseEntity<?> verifySignupOtp(@RequestBody Map<String, String> body,
                                              HttpServletRequest httpRequest) {
@@ -283,7 +313,14 @@ public class AuthController {
         boolean isValid = resetService.isValidToken(email, otp);
         if (isValid) {
             abuseProtectionService.recordSuccess(AbuseProtectionService.RESET_VERIFY, throttleKey);
-            return ResponseEntity.ok(Map.of("status", "success", "message", "OTP verified", "email", email));
+            // Return the OTP as "token" so the Flutter client can pass it directly to
+            // /auth/reset-password without needing a fragile null-fallback.
+            return ResponseEntity.ok(Map.of(
+                    "status", "success",
+                    "message", "OTP verified",
+                    "email", email,
+                    "token", otp
+            ));
         }
         abuseProtectionService.recordFailure(AbuseProtectionService.RESET_VERIFY, throttleKey);
         return ResponseEntity.badRequest().body(Map.of("error", "Invalid or expired OTP"));
