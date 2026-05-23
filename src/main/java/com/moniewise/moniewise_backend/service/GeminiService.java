@@ -46,10 +46,9 @@ public class GeminiService {
         }
 
         String endpoint = String.format(
-            "%s/%s:generateContent?key=%s",
+            "%s/%s:generateContent",
             geminiProperties.getUrl(),
-            geminiProperties.getModel(),
-            geminiProperties.getApiKey()
+            geminiProperties.getModel()
         );
 
         Map<String, Object> part = new HashMap<>();
@@ -60,9 +59,11 @@ public class GeminiService {
 
         Map<String, Object> body = new HashMap<>();
         body.put("contents", List.of(content));
+        body.put("generationConfig", Map.of("responseMimeType", "application/json"));
 
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
+        headers.set("x-goog-api-key", geminiProperties.getApiKey());
 
         HttpEntity<Map<String, Object>> entity = new HttpEntity<>(body, headers);
 

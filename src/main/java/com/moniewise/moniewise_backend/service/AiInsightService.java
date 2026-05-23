@@ -99,6 +99,7 @@ public class AiInsightService {
 
             return sanitizeResponse(response, context, deterministic);
         } catch (Exception e) {
+            logger.warn("AiInsightService: Gemini dashboard action failed, using deterministic response: {}", e.getMessage());
             return deterministic != null ? deterministic : buildFallback(context);
         }
     }
@@ -308,11 +309,21 @@ public class AiInsightService {
         AiDashboardNextActionResponse deterministic
     ) {
         if (response == null || !isAllowedActionType(response.getActionType())) {
+            logger.warn(
+                "AiInsightService: Gemini dashboard action rejected due to unsupported actionType={}",
+                response != null ? response.getActionType() : null
+            );
             return deterministic != null ? deterministic : buildFallback(context);
         }
 
         ActionCandidate selectedCandidate = findMatchingCandidate(response, context.candidates);
         if (selectedCandidate == null) {
+            logger.warn(
+                "AiInsightService: Gemini dashboard action rejected because no candidate matched actionType={}, budgetId={}, envelopeId={}",
+                response.getActionType(),
+                response.getBudgetId(),
+                response.getEnvelopeId()
+            );
             return deterministic != null ? deterministic : buildFallback(context);
         }
 
