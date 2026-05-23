@@ -90,9 +90,22 @@ public class UserService implements UserDetailsService {
      * (e.g. user did not receive the email), the OTP is refreshed and re-sent.
      *
      * @param email    the user's email address
+     * @param phone    the user's phone number
      * @param password the plain-text password (will be BCrypt-encoded before storage)
      */
-    public void signup(String email, String password) {
+    public void signup(String email, String phone, String password) {
+        if (email == null || email.isBlank()) {
+            throw new IllegalArgumentException("Email is required.");
+        }
+        if (phone == null || phone.isBlank()) {
+            throw new IllegalArgumentException("Phone number is required.");
+        }
+        if (password == null || password.isBlank()) {
+            throw new IllegalArgumentException("Password is required.");
+        }
+
+        email = email.toLowerCase().trim();
+        phone = phone.trim();
 
         // 1. Guard: reject if a fully-verified account already exists in the DB ──────
         Optional<User> existingUser = userRepository.findGlobalByEmail(email);
@@ -104,9 +117,9 @@ public class UserService implements UserDetailsService {
             throw new IllegalArgumentException("Email already registered: " + email);
         }
 
-        // Note: phone-number duplicate check is performed during profile completion
-        // (PUT /users/profile) where the phone is actually collected.  There is no
-        // phone to validate at this stage.
+        if (userRepository.findByPhone(phone).isPresent()) {
+            throw new IllegalArgumentException("An account with the phone number '" + phone + "' already exists.");
+        }
 
         // 2. Build the pending record ──────────────────────────────────────────────
         String encodedPassword = passwordEncoder.encode(password);
@@ -117,11 +130,13 @@ public class UserService implements UserDetailsService {
         long expiresAt = System.currentTimeMillis() + (5L * 60 * 1000);
 
         PendingRegistrationData pending = new PendingRegistrationData(
-                email.toLowerCase(),
+                email,
+                phone,
                 encodedPassword,
                 otpCode,
                 expiresAt
         );
+        final String signupEmail = email;
 
         // 3. Store in Redis (overwrites any previous pending entry for this email) ──
         registrationCacheService.save(pending);
@@ -129,9 +144,9 @@ public class UserService implements UserDetailsService {
         // 4. Send OTP email asynchronously (mirrors existing OtpService behaviour) ──
         CompletableFuture.runAsync(() -> {
             try {
-                notificationService.sendOtpEmail(email, otpCode);
+                notificationService.sendOtpEmail(signupEmail, otpCode);
             } catch (Exception ex) {
-                logger.error("Failed to send signup OTP email to {}: {}", email, ex.getMessage());
+                logger.error("Failed to send signup OTP email to {}: {}", signupEmail, ex.getMessage());
             }
         });
 
@@ -164,6 +179,7 @@ public class UserService implements UserDetailsService {
 
         PendingRegistrationData refreshed = new PendingRegistrationData(
                 existing.getEmail(),
+                existing.getPhone(),
                 existing.getEncodedPassword(),
                 newOtp,
                 newExpiry
@@ -218,6 +234,14 @@ public class UserService implements UserDetailsService {
         if (userRepository.findByEmail(email).isPresent()) {
             registrationCacheService.delete(email);
             throw new IllegalArgumentException("Email already registered: " + email);
+        }
+        if (pending.getPhone() == null || pending.getPhone().isBlank()) {
+            registrationCacheService.delete(email);
+            throw new IllegalArgumentException("Phone number is required. Please sign up again.");
+        }
+        if (userRepository.findByPhone(pending.getPhone()).isPresent()) {
+            registrationCacheService.delete(email);
+            throw new IllegalArgumentException("An account with the phone number '" + pending.getPhone() + "' already exists.");
         }
 
         // 4. Persist user to PostgreSQL ───────────────────────────────────────────

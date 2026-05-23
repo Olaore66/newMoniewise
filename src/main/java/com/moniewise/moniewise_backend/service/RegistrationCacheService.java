@@ -49,6 +49,7 @@ public class RegistrationCacheService {
         try {
             findByEmail(data.getEmail())
                     .map(PendingRegistrationData::getPhone)
+                    .filter(this::hasText)
                     .filter(existingPhone -> !existingPhone.equals(data.getPhone()))
                     .ifPresent(existingPhone -> redisTemplate.delete(phoneKey(existingPhone)));
 
@@ -59,12 +60,14 @@ public class RegistrationCacheService {
                     TTL_MINUTES,
                     TimeUnit.MINUTES
             );
-            redisTemplate.opsForValue().set(
-                    phoneKey(data.getPhone()),
-                    data.getEmail(),
-                    TTL_MINUTES,
-                    TimeUnit.MINUTES
-            );
+            if (hasText(data.getPhone())) {
+                redisTemplate.opsForValue().set(
+                        phoneKey(data.getPhone()),
+                        data.getEmail(),
+                        TTL_MINUTES,
+                        TimeUnit.MINUTES
+                );
+            }
             logger.debug("Cached pending registration for {}", data.getEmail());
         } catch (Exception e) {
             logger.error("Failed to cache pending registration for {}", data.getEmail(), e);
@@ -108,7 +111,10 @@ public class RegistrationCacheService {
 
     /** Removes the pending registration entry. Call this after successful OTP verification. */
     public void delete(String email) {
-        findByEmail(email).ifPresent(data -> redisTemplate.delete(phoneKey(data.getPhone())));
+        findByEmail(email)
+                .map(PendingRegistrationData::getPhone)
+                .filter(this::hasText)
+                .ifPresent(phone -> redisTemplate.delete(phoneKey(phone)));
         redisTemplate.delete(emailKey(email));
     }
 
@@ -123,5 +129,9 @@ public class RegistrationCacheService {
 
     private String phoneKey(String phone) {
         return PHONE_KEY_PREFIX + phone.trim();
+    }
+
+    private boolean hasText(String value) {
+        return value != null && !value.isBlank();
     }
 }

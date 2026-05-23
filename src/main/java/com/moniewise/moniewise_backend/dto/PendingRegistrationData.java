@@ -9,6 +9,9 @@ import java.io.Serializable;
  * has not yet verified their OTP.  Stored in Redis with a TTL so unverified
  * registrations are automatically discarded and never pollute the database.
  *
+ * <p>The phone number is collected during signup so BVN pre-verification can
+ * locate the pending registration before the account is persisted.
+ *
  * <p>After the user completes the optional BVN pre-verify step
  * ({@code POST /auth/bvn/pre-verify}), the {@link #bvn} and
  * {@link #bvnVerificationResult} fields are populated so they can be
@@ -42,9 +45,8 @@ public class PendingRegistrationData implements Serializable {
     public PendingRegistrationData() {}
 
     /**
-     * Phone-free constructor used for new signups where the phone number is
-     * collected later during profile completion.  The {@code phone} field is
-     * left {@code null} and will be populated by {@code PUT /users/profile}.
+     * Phone-free constructor retained for backward compatibility with older
+     * Redis entries. New signup data should use the 5-arg constructor.
      */
     public PendingRegistrationData(String email,
                                    String encodedPassword,
