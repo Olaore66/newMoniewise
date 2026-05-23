@@ -41,6 +41,28 @@ public class PendingRegistrationData implements Serializable {
     // ── No-arg constructor required for Jackson deserialization ──────────────
     public PendingRegistrationData() {}
 
+    /**
+     * Phone-free constructor used for new signups where the phone number is
+     * collected later during profile completion.  The {@code phone} field is
+     * left {@code null} and will be populated by {@code PUT /users/profile}.
+     */
+    public PendingRegistrationData(String email,
+                                   String encodedPassword,
+                                   String otpCode,
+                                   long otpExpiresAtEpochMillis) {
+        this.email = email;
+        this.phone = null;
+        this.encodedPassword = encodedPassword;
+        this.otpCode = otpCode;
+        this.otpExpiresAtEpochMillis = otpExpiresAtEpochMillis;
+    }
+
+    /**
+     * @deprecated Phone is no longer collected at signup — use the 4-arg constructor.
+     *             Kept for backward-compat deserialization of Redis entries written
+     *             by previous app versions.
+     */
+    @Deprecated
     public PendingRegistrationData(String email,
                                    String phone,
                                    String encodedPassword,

@@ -64,7 +64,14 @@ public class AbuseProtectionService {
     public static final String DISBURSEMENT_CLAIM = "disbursement.claim";
 
     // ── AI (volume-limited — counts every call, not just failures) ────────────
+    /** Expensive AI calls: budget generation, allocation, assistant turns — 20/hour. */
     public static final String AI_QUERY = "ai.query";
+    /**
+     * Dashboard nudge endpoint — mostly server-ranked (no Gemini cost), called on
+     * every dashboard load/refresh.  Intentionally higher limit so normal browsing
+     * never triggers a lockout.  Keeps the 1-hour window but raises the cap to 120.
+     */
+    public static final String AI_DASHBOARD_ACTION = "ai.dashboard_action";
 
     // ── Beneficiaries ─────────────────────────────────────────────────────────
     public static final String BENEFICIARY_ADD = "beneficiary.add";
@@ -207,6 +214,10 @@ public class AbuseProtectionService {
 
             // AI — every call counts (Gemini costs money); 20 req/hour per user+IP
             case AI_QUERY -> new AttemptPolicy(20, Duration.ofHours(1), Duration.ofMinutes(30));
+
+            // Dashboard nudge — mostly free server-ranked path; allow 120 req/hour
+            // so normal dashboard browsing never triggers a lockout
+            case AI_DASHBOARD_ACTION -> new AttemptPolicy(120, Duration.ofHours(1), Duration.ofMinutes(15));
 
             // Beneficiaries
             case BENEFICIARY_ADD -> new AttemptPolicy(10, Duration.ofHours(1), Duration.ofMinutes(30));

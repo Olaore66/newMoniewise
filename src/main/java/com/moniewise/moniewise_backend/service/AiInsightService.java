@@ -2,6 +2,8 @@ package com.moniewise.moniewise_backend.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.moniewise.moniewise_backend.dto.response.AiDashboardNextActionResponse;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import com.moniewise.moniewise_backend.entity.Budget;
 import com.moniewise.moniewise_backend.entity.Envelope;
 import com.moniewise.moniewise_backend.entity.User;
@@ -32,6 +34,7 @@ import java.util.Set;
 @Service
 public class AiInsightService {
 
+    private static final Logger logger = LoggerFactory.getLogger(AiInsightService.class);
     private static final ZoneId LAGOS_ZONE = ZoneId.of("Africa/Lagos");
     private static final DateTimeFormatter NEXT_AVAILABLE_FORMATTER =
         DateTimeFormatter.ofPattern("EEE, d MMM - h:mm a");
@@ -60,7 +63,16 @@ public class AiInsightService {
     }
 
     public AiDashboardNextActionResponse getDashboardNextAction(String email) {
-        DashboardActionContext context = buildContext(email);
+        // Build the context outside the Gemini try/catch — but guard against any
+        // transient DB/wallet error so a single bad query never surfaces as a 500
+        // and silently kills the AI card in the Flutter app.
+        DashboardActionContext context;
+        try {
+            context = buildContext(email);
+        } catch (Exception e) {
+            logger.warn("AiInsightService: buildContext failed for {}: {}", email, e.getMessage());
+            return buildFallback(new DashboardActionContext());
+        }
 
         AiDashboardNextActionResponse deterministic = buildDeterministicRecommendation(context);
         if (context.candidates.isEmpty()) {

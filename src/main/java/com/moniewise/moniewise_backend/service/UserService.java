@@ -90,10 +90,9 @@ public class UserService implements UserDetailsService {
      * (e.g. user did not receive the email), the OTP is refreshed and re-sent.
      *
      * @param email    the user's email address
-     * @param phone    the user's phone number
      * @param password the plain-text password (will be BCrypt-encoded before storage)
      */
-    public void signup(String email, String phone, String password) {
+    public void signup(String email, String password) {
 
         // 1. Guard: reject if a fully-verified account already exists in the DB ──────
         Optional<User> existingUser = userRepository.findGlobalByEmail(email);
@@ -105,10 +104,9 @@ public class UserService implements UserDetailsService {
             throw new IllegalArgumentException("Email already registered: " + email);
         }
 
-        // Also check by phone (DB only — phones are not stored in the Redis key)
-        if (userRepository.findByPhone(phone).isPresent()) {
-            throw new IllegalArgumentException("An account with the phone number '" + phone + "' already exists.");
-        }
+        // Note: phone-number duplicate check is performed during profile completion
+        // (PUT /users/profile) where the phone is actually collected.  There is no
+        // phone to validate at this stage.
 
         // 2. Build the pending record ──────────────────────────────────────────────
         String encodedPassword = passwordEncoder.encode(password);
@@ -120,7 +118,6 @@ public class UserService implements UserDetailsService {
 
         PendingRegistrationData pending = new PendingRegistrationData(
                 email.toLowerCase(),
-                phone,
                 encodedPassword,
                 otpCode,
                 expiresAt
@@ -167,7 +164,6 @@ public class UserService implements UserDetailsService {
 
         PendingRegistrationData refreshed = new PendingRegistrationData(
                 existing.getEmail(),
-                existing.getPhone(),
                 existing.getEncodedPassword(),
                 newOtp,
                 newExpiry

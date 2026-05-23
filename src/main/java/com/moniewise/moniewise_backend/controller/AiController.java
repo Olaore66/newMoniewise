@@ -96,7 +96,10 @@ public class AiController {
 
     /**
      * GET /ai/dashboard-next-action
-     * Volume-limited — Gemini API call on dashboard load.
+     * Light rate-limited — the endpoint falls back to a server-ranked deterministic
+     * recommendation when Gemini is unavailable, so it is cheap most of the time.
+     * Uses the AI_DASHBOARD_ACTION bucket (120/hour) rather than the shared AI_QUERY
+     * bucket (20/hour) so normal dashboard navigation never triggers a lockout.
      */
     @GetMapping("/dashboard-next-action")
     public ResponseEntity<AiDashboardNextActionResponse> getDashboardNextAction(
@@ -105,9 +108,9 @@ public class AiController {
 
         String throttleKey = abuseProtectionService.buildKey(
                 authentication.getName(), httpRequest.getRemoteAddr());
-        abuseProtectionService.checkAllowed(AbuseProtectionService.AI_QUERY, throttleKey);
+        abuseProtectionService.checkAllowed(AbuseProtectionService.AI_DASHBOARD_ACTION, throttleKey);
         AiDashboardNextActionResponse response = aiInsightService.getDashboardNextAction(authentication.getName());
-        abuseProtectionService.recordRequest(AbuseProtectionService.AI_QUERY, throttleKey);
+        abuseProtectionService.recordRequest(AbuseProtectionService.AI_DASHBOARD_ACTION, throttleKey);
         return ResponseEntity.ok(response);
     }
 

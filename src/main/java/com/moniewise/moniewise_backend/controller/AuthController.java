@@ -76,7 +76,7 @@ public class AuthController {
         String throttleKey = abuseProtectionService.buildKey(request.getEmail(), httpRequest.getRemoteAddr());
         abuseProtectionService.checkAllowed(AbuseProtectionService.SIGNUP, throttleKey);
         try {
-            userService.signup(request.getEmail(), request.getPhone(), request.getPassword());
+            userService.signup(request.getEmail(), request.getPassword());
             abuseProtectionService.recordSuccess(AbuseProtectionService.SIGNUP, throttleKey);
             Map<String, Object> response = new HashMap<>();
             response.put("status", "success");
