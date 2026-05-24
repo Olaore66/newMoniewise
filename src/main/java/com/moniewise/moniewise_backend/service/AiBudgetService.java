@@ -445,6 +445,9 @@ public class AiBudgetService {
             return "REMOVE_ENVELOPE";
         }
         // Detect specific intents
+        if (isRenameEnvelopeIntent(normalized)) {
+            return "UPDATE_ENVELOPE";
+        }
         if (containsAny(normalized, "move") && containsAny(normalized, " from ", " to ")) {
             return "UPDATE_ENVELOPE";
         }
@@ -592,6 +595,7 @@ public class AiBudgetService {
             mergedItems = normalizeItems(mergedItems, 100.0);
         }
 
+        applyRenameEnvelopeIntent(latestMessage, request, mergedItems);
         applyMoveAmountIntent(latestMessage, request, mergedItems);
         applyReduceEnvelopeIntent(latestMessage, request, mergedItems);
         applyUnallocatedAmountIntent(latestMessage, request, mergedItems);
@@ -708,6 +712,8 @@ public class AiBudgetService {
     private List<EnvelopeKeyword> buildEnvelopeKeywords(AiBudgetAssistantTurnRequest request) {
         return List.of(
             new EnvelopeKeyword("emergency buffer", "Emergency Buffer", "security", "emergency"),
+            new EnvelopeKeyword("school fee", "School Fee", "education", chooseRecurringType(toStarterRequest(request), "education")),
+            new EnvelopeKeyword("school fees", "School Fees", "education", chooseRecurringType(toStarterRequest(request), "education")),
             new EnvelopeKeyword("school runs", "School Runs", "education", chooseRecurringType(toStarterRequest(request), "education")),
             new EnvelopeKeyword("work tools", "Work Tools", "tools", chooseRecurringType(toStarterRequest(request), "tools")),
             new EnvelopeKeyword("client transport", "Client Transport", "car", chooseRecurringType(toStarterRequest(request), "car")),
@@ -722,11 +728,139 @@ public class AiBudgetService {
             new EnvelopeKeyword("tithe", "Tithe", "faith", "weekly"),
             new EnvelopeKeyword("offering", "Offering", "faith", "weekly"),
             new EnvelopeKeyword("travel", "Travel", "flight", "dynamic"),
+            new EnvelopeKeyword("housing", "Housing", "home", chooseRecurringType(toStarterRequest(request), "home")),
             new EnvelopeKeyword("education", "Education", "education", chooseRecurringType(toStarterRequest(request), "education")),
             new EnvelopeKeyword("lunch", "Lunch", "lunch", "daily"),
             new EnvelopeKeyword("home", "Home", "home", chooseRecurringType(toStarterRequest(request), "home")),
             new EnvelopeKeyword("misc", "Misc", "more", "daily")
         );
+    }
+
+    private void applyRenameEnvelopeIntent(
+        String latestMessage,
+        AiBudgetAssistantTurnRequest request,
+        List<AiEnvelopeSuggestion> mergedItems
+    ) {
+        RenameIntent intent = parseRenameIntent(latestMessage);
+        if (intent == null || mergedItems.isEmpty()) {
+            return;
+        }
+
+        AiEnvelopeSuggestion item = findSuggestionByNameOrKeyword(
+            mergedItems,
+            intent.sourceName,
+            buildEnvelopeKeywords(request)
+        );
+        if (item == null) {
+            return;
+        }
+
+        String newName = titleCaseEnvelopeName(intent.targetName);
+        if (newName.isBlank()) {
+            return;
+        }
+
+        item.setName(newName);
+        EnvelopeKeyword targetKeyword = matchEnvelopeKeyword(intent.targetName, buildEnvelopeKeywords(request));
+        if (targetKeyword != null) {
+            item.setCategory(targetKeyword.category);
+            item.setConditionType(targetKeyword.conditionType);
+        }
+    }
+
+    private RenameIntent parseRenameIntent(String latestMessage) {
+        if (!isRenameEnvelopeIntent(latestMessage)) {
+            return null;
+        }
+
+        String normalized = latestMessage.toLowerCase(Locale.ROOT).trim();
+        List<Pattern> patterns = List.of(
+            Pattern.compile("(?:rename|change)\\s+(?:the\\s+)?(?:envelope\\s+)?(?:name\\s+)?from\\s+(.+?)\\s+to\\s+(.+)$"),
+            Pattern.compile("(?:rename|change)\\s+(?:the\\s+)?(.+?)\\s+(?:envelope\\s+)?(?:name\\s+)?to\\s+(.+)$")
+        );
+
+        for (Pattern pattern : patterns) {
+            Matcher matcher = pattern.matcher(normalized);
+            if (!matcher.find()) {
+                continue;
+            }
+
+            String source = cleanRenameSegment(matcher.group(1));
+            String target = cleanRenameSegment(matcher.group(2));
+            if (!source.isBlank() && !target.isBlank()) {
+                return new RenameIntent(source, target);
+            }
+        }
+
+        return null;
+    }
+
+    private boolean isRenameEnvelopeIntent(String message) {
+        if (message == null || message.isBlank()) {
+            return false;
+        }
+
+        String normalized = message.toLowerCase(Locale.ROOT);
+        return containsAny(normalized, "rename", "change")
+            && containsAny(normalized, " to ")
+            && (
+                containsAny(normalized, "envelope", "name", " from ")
+                || Pattern.compile("(?:rename|change)\\s+\\w+\\s+to\\s+\\w+").matcher(normalized).find()
+            );
+    }
+
+    private String cleanRenameSegment(String value) {
+        if (value == null) {
+            return "";
+        }
+
+        return value
+            .replaceAll("\\b(?:the|my|envelope|name|from|to|please|i\\s+want\\s+to|i\\s+want|i\\s+would\\s+like\\s+to)\\b", " ")
+            .replaceAll("[^a-z0-9\\s-]", " ")
+            .replaceAll("\\s+", " ")
+            .trim();
+    }
+
+    private AiEnvelopeSuggestion findSuggestionByNameOrKeyword(
+        List<AiEnvelopeSuggestion> items,
+        String sourceName,
+        List<EnvelopeKeyword> keywords
+    ) {
+        if (sourceName == null || sourceName.isBlank()) {
+            return null;
+        }
+
+        for (AiEnvelopeSuggestion item : items) {
+            if (item.getName() != null && item.getName().equalsIgnoreCase(sourceName.trim())) {
+                return item;
+            }
+        }
+
+        EnvelopeKeyword keyword = matchEnvelopeKeyword(sourceName, keywords);
+        return keyword == null ? null : findSuggestionByLabel(items, keyword.label);
+    }
+
+    private String titleCaseEnvelopeName(String value) {
+        String cleaned = cleanRenameSegment(value);
+        if (cleaned.isBlank()) {
+            return "";
+        }
+
+        String[] parts = cleaned.split("\\s+");
+        StringBuilder builder = new StringBuilder();
+        for (String part : parts) {
+            if (part.isBlank()) {
+                continue;
+            }
+            if (builder.length() > 0) {
+                builder.append(' ');
+            }
+            builder.append(part.substring(0, 1).toUpperCase(Locale.ROOT));
+            if (part.length() > 1) {
+                builder.append(part.substring(1));
+            }
+        }
+        return builder.toString();
     }
 
     private void applyMoveAmountIntent(
@@ -1234,6 +1368,10 @@ public class AiBudgetService {
             );
         }
 
+        if (isRenameEnvelopeIntent(latestMessage)) {
+            return "I have renamed that envelope and kept the budget fully allocated. You can adjust the amount next or say you are done.";
+        }
+
         if (containsAny(latestMessage, "adjust", "change", "reduce", "increase", "move", "shift", "repurpose")) {
             return "I can help rebalance this, but I need one clearer instruction. Tell me which envelope to reduce, increase, or move money into, and I will recalculate what remains right away.";
         }
@@ -1274,6 +1412,9 @@ public class AiBudgetService {
             : request.getLatestUserMessage().toLowerCase(Locale.ROOT);
         if (containsAny(latestMessage, "move") && containsAny(latestMessage, " from ", " to ")) {
             return "This update shifts money between existing envelopes while preserving the rest of the budget structure.";
+        }
+        if (isRenameEnvelopeIntent(latestMessage)) {
+            return "This update changes the envelope name while preserving its existing allocation.";
         }
         if (containsAny(latestMessage, "reduce", "cut", "lower")) {
             return "This update frees some budget from the selected envelope so the remaining balance can be reassigned more intentionally.";
@@ -1352,6 +1493,16 @@ public class AiBudgetService {
             this.label = label;
             this.category = category;
             this.conditionType = conditionType;
+        }
+    }
+
+    private static class RenameIntent {
+        private final String sourceName;
+        private final String targetName;
+
+        private RenameIntent(String sourceName, String targetName) {
+            this.sourceName = sourceName;
+            this.targetName = targetName;
         }
     }
 

@@ -3,6 +3,7 @@ package com.moniewise.moniewise_backend.config;
 import com.moniewise.moniewise_backend.entity.User;
 import com.moniewise.moniewise_backend.security.JwtAuthenticationFilter;
 import com.moniewise.moniewise_backend.security.JwtUtil;
+import com.moniewise.moniewise_backend.service.AuthSessionService;
 import com.moniewise.moniewise_backend.service.UserService;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
@@ -39,6 +40,7 @@ public class SecurityConfig {
     private final JwtUtil jwtUtil;
     private final UserDetailsService userDetailsService;
     private final UserService userService;
+    private final AuthSessionService authSessionService;
 
     @Value("${app.security.dev-mode:true}")
     private boolean devMode;
@@ -46,11 +48,18 @@ public class SecurityConfig {
     @Value("${app.security.allowed-origins:}")
     private String allowedOrigins;
 
-    public SecurityConfig(@Lazy JwtAuthenticationFilter jwtAuthenticationFilter, JwtUtil jwtUtil, UserDetailsService userDetailsService, UserService userService) {
+    public SecurityConfig(
+            @Lazy JwtAuthenticationFilter jwtAuthenticationFilter,
+            JwtUtil jwtUtil,
+            UserDetailsService userDetailsService,
+            UserService userService,
+            AuthSessionService authSessionService
+    ) {
         this.jwtAuthenticationFilter = jwtAuthenticationFilter;
         this.jwtUtil = jwtUtil;
         this.userDetailsService = userDetailsService;
         this.userService = userService;
+        this.authSessionService = authSessionService;
     }
 
     @Bean
@@ -79,9 +88,7 @@ public class SecurityConfig {
                     String name = oidcUser.getFullName();
                     User user = userService.findOrCreateOAuthUser(email, name);
                     UserDetails userDetails = userService.loadUserByUsername(email);
-                    String sessionId = java.util.UUID.randomUUID().toString();
-                    user.setCurrentSessionId(sessionId);
-                    userService.updateUserSession(user);
+                    String sessionId = authSessionService.createSession(user);
                     String token = jwtUtil.generateToken(userDetails, sessionId);
                     response.setContentType("application/json");
                     response.getWriter().write("{\"token\":\"" + token + "\"}");

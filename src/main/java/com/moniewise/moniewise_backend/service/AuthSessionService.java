@@ -3,6 +3,7 @@ package com.moniewise.moniewise_backend.service;
 import com.moniewise.moniewise_backend.entity.AuthSession;
 import com.moniewise.moniewise_backend.entity.User;
 import com.moniewise.moniewise_backend.repository.AuthSessionRepository;
+import com.moniewise.moniewise_backend.repository.UserRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -14,20 +15,24 @@ import java.util.UUID;
 public class AuthSessionService {
 
     private final AuthSessionRepository authSessionRepository;
+    private final UserRepository userRepository;
 
-    public AuthSessionService(AuthSessionRepository authSessionRepository) {
+    public AuthSessionService(AuthSessionRepository authSessionRepository, UserRepository userRepository) {
         this.authSessionRepository = authSessionRepository;
+        this.userRepository = userRepository;
     }
 
     @Transactional
     public String createSession(User user) {
+        User lockedUser = userRepository.findByIdForUpdate(user.getId()).orElse(user);
+
         // Revoke all previous sessions for this user before issuing a new one.
         // This enforces single-device login: logging in on a new device automatically
         // invalidates every other active session, so stolen/old tokens stop working.
-        authSessionRepository.revokeAllSessionsForUser(user.getId(), LocalDateTime.now());
+        authSessionRepository.revokeAllSessionsForUser(lockedUser.getId(), LocalDateTime.now());
 
         AuthSession session = new AuthSession();
-        session.setUser(user);
+        session.setUser(lockedUser);
         session.setSessionId(UUID.randomUUID().toString());
         session.setCreatedAt(LocalDateTime.now());
         session.setLastSeenAt(LocalDateTime.now());
