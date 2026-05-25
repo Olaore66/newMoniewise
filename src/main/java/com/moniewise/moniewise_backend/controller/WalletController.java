@@ -1,7 +1,9 @@
 package com.moniewise.moniewise_backend.controller;
 
 import com.moniewise.moniewise_backend.dto.request.UpdateBankDetailsRequest;
+import com.moniewise.moniewise_backend.dto.request.WithdrawalQuoteRequest;
 import com.moniewise.moniewise_backend.dto.request.WithdrawalRequest;
+import com.moniewise.moniewise_backend.dto.response.WithdrawalQuoteResponse;
 import com.moniewise.moniewise_backend.dto.response.WalletResponse;
 import com.moniewise.moniewise_backend.entity.User;
 import com.moniewise.moniewise_backend.entity.Wallet;
@@ -18,6 +20,7 @@ import org.springframework.web.bind.annotation.*;
 import javax.servlet.http.HttpServletRequest;
 import javax.validation.Valid;
 import java.security.Principal;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -176,6 +179,21 @@ public class WalletController {
      * POST: Initiate a Withdrawal to the Settlement Account.
      * Rate-limited — 10 withdrawal attempts per hour per user+IP.
      */
+    /**
+     * POST: Preview withdrawal fees before confirmation.
+     */
+    @PostMapping("/withdraw/quote")
+    public ResponseEntity<?> quoteWithdrawal(@Valid @RequestBody WithdrawalQuoteRequest request,
+                                             Principal principal) {
+        userService.findByEmail(principal.getName());
+        WithdrawalQuoteResponse quote = walletService.quoteWithdrawal(request.getAmount());
+        return ResponseEntity.ok(Map.of(
+                "status", true,
+                "message", quote.getMessage(),
+                "data", quote
+        ));
+    }
+
     @PostMapping("/withdraw")
     public ResponseEntity<?> withdrawFunds(@Valid @RequestBody WithdrawalRequest request,
                                            Principal principal,
@@ -186,20 +204,26 @@ public class WalletController {
             User user = userService.findByEmail(principal.getName());
             Withdrawal withdrawal = walletService.processWithdrawal(user.getId(), request);
             abuseProtectionService.recordSuccess(AbuseProtectionService.WALLET_WITHDRAW, throttleKey);
+            Map<String, Object> withdrawalData = new LinkedHashMap<>();
+            withdrawalData.put("withdrawalId", withdrawal.getId());
+            withdrawalData.put("clientReference", withdrawal.getClientReference());
+            withdrawalData.put("reference", withdrawal.getProviderReference());
+            withdrawalData.put("amount", withdrawal.getAmount());
+            withdrawalData.put("withdrawalAmount", withdrawal.getAmount());
+            withdrawalData.put("fee", withdrawal.getFeeAmount());
+            withdrawalData.put("totalDebit", withdrawal.getTotalDebit());
+            withdrawalData.put("recipientReceives", withdrawal.getRecipientReceives());
+            withdrawalData.put("feePolicy", "FLAT_WITHDRAWAL_FEE");
+            withdrawalData.put("feeSource", "USER_BALANCE");
+            withdrawalData.put("narration", withdrawal.getNarration());
+            withdrawalData.put("status", withdrawal.getStatus().name());
             return ResponseEntity.ok(Map.of(
                     "status", true,
                     "message", "Withdrawal successful",
                     "data", Map.of(
                             "status", true,
                             "message", "Withdrawal request has been received and being processed",
-                            "data", Map.of(
-                                    "withdrawalId", withdrawal.getId(),
-                                    "clientReference", withdrawal.getClientReference(),
-                                    "reference", withdrawal.getProviderReference(),
-                                    "amount", withdrawal.getAmount(),
-                                    "narration", withdrawal.getNarration(),
-                                    "status", withdrawal.getStatus().name()
-                            )
+                            "data", withdrawalData
                     )
             ));
         } catch (IllegalArgumentException | IllegalStateException e) {

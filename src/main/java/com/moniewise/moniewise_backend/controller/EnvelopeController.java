@@ -118,9 +118,6 @@ public class EnvelopeController {
         if (account.getAccountNumber() == null || account.getAccountNumber().isBlank()) {
             throw new IllegalArgumentException("Account number is required");
         }
-        if (account.getBankCode() == null || account.getBankCode().isBlank()) {
-            throw new IllegalArgumentException("Bank code is required");
-        }
         if (account.getRecipientName() == null || account.getRecipientName().isBlank()) {
             throw new IllegalArgumentException("Recipient name is required");
         }

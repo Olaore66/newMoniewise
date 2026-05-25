@@ -18,4 +18,8 @@ public class WithdrawalInitiationResponseDto {
     private Long transactionRequestId;
     private String withdrawalReference;
     private BigDecimal amount;
+    private BigDecimal withdrawalAmount;
+    private BigDecimal fee;
+    private BigDecimal totalDebit;
+    private BigDecimal recipientReceives;
 }

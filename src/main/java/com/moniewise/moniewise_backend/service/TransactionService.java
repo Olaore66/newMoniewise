@@ -50,6 +50,7 @@ import static com.moniewise.moniewise_backend.enums.TransactionType.WALLET_DEDUC
 import static com.moniewise.moniewise_backend.enums.TransactionType.WALLET_DEPOSIT;
 import static com.moniewise.moniewise_backend.enums.TransactionType.WALLET_TO_BUDGET;
 import static com.moniewise.moniewise_backend.enums.TransactionType.WALLET_WITHDRAWAL;
+import static com.moniewise.moniewise_backend.enums.TransactionType.WALLET_WITHDRAWAL_FEE;
 
 @Service
 @Transactional(readOnly = true)
@@ -88,6 +89,7 @@ public class TransactionService {
             BUDGET_CREATION_FEE,
             BUDGET_ALLOCATION,
             WALLET_WITHDRAWAL,
+            WALLET_WITHDRAWAL_FEE,
             WALLET_TO_BUDGET
     );
 
@@ -150,6 +152,10 @@ public class TransactionService {
                     "Transaction blocked",
                     txRequest.getId(),
                     null,
+                    request.getAmount(),
+                    request.getAmount(),
+                    BigDecimal.ZERO,
+                    request.getAmount(),
                     request.getAmount()
             );
         }
@@ -165,7 +171,11 @@ public class TransactionService {
                 null,
                 txRequest.getId(),
                 withdrawal.getClientReference(),
-                request.getAmount()
+                withdrawal.getAmount(),
+                withdrawal.getAmount(),
+                withdrawal.getFeeAmount(),
+                withdrawal.getTotalDebit(),
+                withdrawal.getRecipientReceives()
         );
     }
 
@@ -386,6 +396,7 @@ public class TransactionService {
                 recipient = budgetName != null ? "Budget: " + budgetName : "Budget Envelopes";
                 break;
             case BUDGET_CREATION_FEE:
+            case WALLET_WITHDRAWAL_FEE:
                 sender = "Main Wallet";
                 recipient = "MonieWise Fee";
                 break;
@@ -429,6 +440,7 @@ public class TransactionService {
             case ENVELOPE_TO_USER -> "Sent to " + getCounterpartyName(transaction);
             case USER_TO_ENVELOPE -> "Received from " + getCounterpartyName(transaction);
             case BUDGET_CREATION_FEE -> "Budget creation fee";
+            case WALLET_WITHDRAWAL_FEE -> "Withdrawal fee";
             case BUDGET_ALLOCATION -> "Allocated to budget";
             case BUDGET_UNALLOCATED_REFUNDED -> "Refunded to wallet";
             default -> formatEnumName(transaction.getTransactionType());
@@ -489,6 +501,7 @@ public class TransactionService {
                     ENVELOPE_TO_ENVELOPE,
                     ENVELOPE_TO_USER,
                     WALLET_DEDUCTION,
+                    WALLET_WITHDRAWAL_FEE,
                     BUDGET_CREATION_FEE,
                     BUDGET_ALLOCATION,
                     WALLET_WITHDRAWAL -> true;

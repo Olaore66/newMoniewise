@@ -22,6 +22,7 @@ public enum TransactionType {
     USER_TO_ENVELOPE,
     ROLLOVER_REFUND,
     WALLET_WITHDRAWAL,
+    WALLET_WITHDRAWAL_FEE,
     SAVINGS_DEPOSIT
 
     }

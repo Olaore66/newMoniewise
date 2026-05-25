@@ -12,8 +12,11 @@ import org.springframework.cache.annotation.Cacheable;
 import org.springframework.context.annotation.Primary;
 import org.springframework.http.*;
 import org.springframework.stereotype.Service;
+import org.springframework.util.LinkedMultiValueMap;
+import org.springframework.util.MultiValueMap;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestTemplate;
+import org.springframework.web.util.UriComponentsBuilder;
 
 import java.math.BigDecimal;
 import java.util.*;
@@ -45,6 +48,12 @@ public class SecureWavePaymentProvider implements PaymentProvider {
         headers.setAccept(Collections.singletonList(MediaType.APPLICATION_JSON));
         headers.set("Authorization", "Bearer " + secretKey); // Ensure "Bearer " has a space!
         headers.set("x-api-key", publicKey);
+        return headers;
+    }
+
+    private HttpHeaders getSecureWaveFormHeaders() {
+        HttpHeaders headers = getSecureWaveHeaders();
+        headers.setContentType(MediaType.APPLICATION_FORM_URLENCODED);
         return headers;
     }
 
@@ -419,13 +428,13 @@ public class SecureWavePaymentProvider implements PaymentProvider {
     @Override
     public Map<String, Object> getWithdrawalBankInfo(String email) {
         String url = baseUrl + "/customer_withdrawals/bank-info";
-
-        Map<String, Object> payload = new HashMap<>();
-        payload.put("customer_email", email);
+        String uri = UriComponentsBuilder.fromHttpUrl(url)
+                .queryParam("customer_email", email)
+                .toUriString();
 
         try {
-            HttpEntity<Map<String, Object>> requestEntity = new HttpEntity<>(payload, getSecureWaveHeaders());
-            ResponseEntity<Map> response = restTemplate.exchange(url, HttpMethod.GET, requestEntity, Map.class);
+            HttpEntity<Void> requestEntity = new HttpEntity<>(getSecureWaveHeaders());
+            ResponseEntity<Map> response = restTemplate.exchange(uri, HttpMethod.GET, requestEntity, Map.class);
 
             if (response.getStatusCode() == HttpStatus.OK && response.getBody() != null) {
                 Map<String, Object> body = response.getBody();
@@ -448,14 +457,14 @@ public class SecureWavePaymentProvider implements PaymentProvider {
     public String initiateWithdrawal(String email, BigDecimal amount, String narration) {
         String url = baseUrl + "/customer_withdrawals/withdraw";
 
-        Map<String, Object> payload = new HashMap<>();
-        payload.put("customer_email", email);
-        payload.put("amount", amount);
-        payload.put("narration", narration);
+        MultiValueMap<String, String> payload = new LinkedMultiValueMap<>();
+        payload.add("customer_email", email);
+        payload.add("amount", amount.toPlainString());
+        payload.add("narration", narration);
 
         try {
             ResponseEntity<Map> response = restTemplate.postForEntity(
-                    url, new HttpEntity<>(payload, getSecureWaveHeaders()), Map.class);
+                    url, new HttpEntity<>(payload, getSecureWaveFormHeaders()), Map.class);
 
             if (response.getStatusCode() == HttpStatus.OK && response.getBody() != null) {
                 Map<String, Object> body = response.getBody();

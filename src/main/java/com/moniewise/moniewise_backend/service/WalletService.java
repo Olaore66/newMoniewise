@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.moniewise.moniewise_backend.dto.request.UpdateBankDetailsRequest;
 import com.moniewise.moniewise_backend.dto.request.WithdrawalRequest;
+import com.moniewise.moniewise_backend.dto.response.WithdrawalQuoteResponse;
 import com.moniewise.moniewise_backend.entity.TransactionLog;
 import com.moniewise.moniewise_backend.entity.User;
 import com.moniewise.moniewise_backend.entity.Wallet;
@@ -61,6 +62,7 @@ public class WalletService {
     private final ProvidusExpressGateway providusExpressGateway;
     private final WithdrawalRepository withdrawalRepository;
     private final UserService userService;
+    private final WithdrawalFeeService withdrawalFeeService;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -76,7 +78,8 @@ public class WalletService {
             PaymentGatewayResolver paymentGatewayResolver,
             ProvidusExpressGateway providusExpressGateway,
             WithdrawalRepository withdrawalRepository,
-            @Lazy UserService userService
+            @Lazy UserService userService,
+            WithdrawalFeeService withdrawalFeeService
     ) {
         this.walletRepository = walletRepository;
         this.transactionLogRepository = transactionLogRepository;
@@ -86,6 +89,7 @@ public class WalletService {
         this.providusExpressGateway = providusExpressGateway;
         this.withdrawalRepository = withdrawalRepository;
         this.userService = userService;
+        this.withdrawalFeeService = withdrawalFeeService;
     }
 
     public Wallet getWalletByUserId(Long userId) {
@@ -601,13 +605,16 @@ public class WalletService {
             throw new IllegalStateException("Please link a withdrawal bank account before withdrawing funds.");
         }
 
-        if (wallet.getBalance().compareTo(request.getAmount()) < 0) {
-            throw new IllegalArgumentException("Insufficient wallet balance.");
+        BigDecimal withdrawalFee = withdrawalFeeService.calculateWithdrawalFee(request.getAmount());
+        BigDecimal totalDebit = withdrawalFeeService.calculateTotalDebit(request.getAmount());
+
+        if (wallet.getBalance().compareTo(totalDebit) < 0) {
+            throw new IllegalArgumentException(insufficientWithdrawalBalanceMessage(totalDebit, withdrawalFee));
         }
 
         PaymentGateway gateway = paymentGatewayResolver.resolveForWallet(wallet);
         String narration = buildWithdrawalNarration(wallet, request);
-        Withdrawal withdrawal = createWithdrawalRecord(user, wallet, request, narration);
+        Withdrawal withdrawal = createWithdrawalRecord(user, wallet, request, narration, withdrawalFee, totalDebit);
         self.reserveWithdrawalForProvider(withdrawal.getId());
 
         String providerReference;
@@ -623,6 +630,22 @@ public class WalletService {
         }
 
         return self.finalizeAcceptedWithdrawal(withdrawal.getId(), providerReference);
+    }
+
+    public WithdrawalQuoteResponse quoteWithdrawal(BigDecimal amount) {
+        BigDecimal fee = withdrawalFeeService.calculateWithdrawalFee(amount);
+        BigDecimal totalDebit = withdrawalFeeService.calculateTotalDebit(amount);
+        return new WithdrawalQuoteResponse(
+                amount,
+                fee,
+                totalDebit,
+                amount,
+                "FLAT_WITHDRAWAL_FEE",
+                "USER_BALANCE",
+                String.format("A ₦%s withdrawal fee applies. ₦%s will be deducted from your available balance.",
+                        formatMoney(fee),
+                        formatMoney(totalDebit))
+        );
     }
 
     @Transactional
@@ -651,6 +674,16 @@ public class WalletService {
         withdrawal.setStatus(WithdrawalStatus.PROCESSING);
         withdrawal.setProcessedAt(LocalDateTime.now());
         withdrawal.setFailureReason(null);
+        transactionLogRepository.findByReference(withdrawal.getClientReference()).ifPresent(logEntry -> {
+            logEntry.setProviderReference(providerReference);
+            logEntry.setStatus(TransactionStatus.PROCESSING);
+            transactionLogRepository.save(logEntry);
+        });
+        transactionLogRepository.findByReference(buildWithdrawalFeeReference(withdrawal)).ifPresent(logEntry -> {
+            logEntry.setProviderReference(providerReference);
+            logEntry.setStatus(TransactionStatus.PROCESSING);
+            transactionLogRepository.save(logEntry);
+        });
         return withdrawalRepository.save(withdrawal);
     }
 
@@ -664,13 +697,19 @@ public class WalletService {
             Wallet wallet = walletRepository.findByUserIdForUpdate(withdrawal.getUserId())
                     .orElseThrow(() -> new IllegalArgumentException("Wallet not found"));
 
-            wallet.setBalance(wallet.getBalance().add(withdrawal.getAmount()));
+            wallet.setBalance(wallet.getBalance().add(withdrawal.getTotalDebit()));
             wallet.setUpdatedAt(LocalDateTime.now());
             walletRepository.save(wallet);
 
             transactionLogRepository.findByReference(withdrawal.getClientReference()).ifPresent(logEntry -> {
                 logEntry.setStatus(TransactionStatus.FAILED);
-                logEntry.setDescription(withdrawal.getNarration() + " | Failed: " + reason);
+                logEntry.setDescription(withdrawal.getNarration() + " | Failed: " + reason + " | Amount and withdrawal fee reversed.");
+                transactionLogRepository.save(logEntry);
+            });
+
+            transactionLogRepository.findByReference(buildWithdrawalFeeReference(withdrawal)).ifPresent(logEntry -> {
+                logEntry.setStatus(TransactionStatus.FAILED);
+                logEntry.setDescription("Withdrawal fee reversed for " + withdrawal.getClientReference());
                 transactionLogRepository.save(logEntry);
             });
 
@@ -689,11 +728,13 @@ public class WalletService {
         Wallet wallet = walletRepository.findByUserIdForUpdate(withdrawal.getUserId())
                 .orElseThrow(() -> new IllegalArgumentException("Wallet not found"));
 
-        if (wallet.getBalance().compareTo(withdrawal.getAmount()) < 0) {
-            throw new IllegalArgumentException("Insufficient wallet balance.");
+        BigDecimal fee = withdrawal.getFeeAmount() != null ? withdrawal.getFeeAmount() : BigDecimal.ZERO;
+        BigDecimal totalDebit = withdrawal.getTotalDebit();
+        if (wallet.getBalance().compareTo(totalDebit) < 0) {
+            throw new IllegalArgumentException(insufficientWithdrawalBalanceMessage(totalDebit, fee));
         }
 
-        wallet.setBalance(wallet.getBalance().subtract(withdrawal.getAmount()));
+        wallet.setBalance(wallet.getBalance().subtract(totalDebit));
         wallet.setUpdatedAt(LocalDateTime.now());
         wallet.setLastBalanceSyncAt(LocalDateTime.now());
         walletRepository.save(wallet);
@@ -703,22 +744,46 @@ public class WalletService {
                     .userId(withdrawal.getUserId())
                     .externalAccountId(withdrawal.getAccountNumber())
                     .amount(withdrawal.getAmount())
-                    .fee(BigDecimal.ZERO)
+                    .fee(fee)
                     .reference(withdrawal.getClientReference())
                     .status(TransactionStatus.PROCESSING)
                     .transactionType(TransactionType.WALLET_WITHDRAWAL)
-                    .description(withdrawal.getNarration())
+                    .description(withdrawal.getNarration() + " | Recipient receives ₦" + formatMoney(withdrawal.getRecipientReceives()))
                     .createdAt(LocalDateTime.now())
                     .build();
             transactionLogRepository.save(logEntry);
         }
+
+        String feeReference = buildWithdrawalFeeReference(withdrawal);
+        if (fee.compareTo(BigDecimal.ZERO) > 0 && transactionLogRepository.findByReference(feeReference).isEmpty()) {
+            TransactionLog feeLogEntry = TransactionLog.builder()
+                    .userId(withdrawal.getUserId())
+                    .externalAccountId(withdrawal.getAccountNumber())
+                    .amount(fee)
+                    .fee(BigDecimal.ZERO)
+                    .reference(feeReference)
+                    .status(TransactionStatus.PROCESSING)
+                    .transactionType(TransactionType.WALLET_WITHDRAWAL_FEE)
+                    .description("Withdrawal fee recovery for " + withdrawal.getClientReference())
+                    .createdAt(LocalDateTime.now())
+                    .build();
+            transactionLogRepository.save(feeLogEntry);
+        }
     }
 
-    private Withdrawal createWithdrawalRecord(User user, Wallet wallet, WithdrawalRequest request, String narration) {
+    private Withdrawal createWithdrawalRecord(User user,
+                                              Wallet wallet,
+                                              WithdrawalRequest request,
+                                              String narration,
+                                              BigDecimal fee,
+                                              BigDecimal totalDebit) {
         Withdrawal withdrawal = new Withdrawal();
         withdrawal.setUserId(user.getId());
         withdrawal.setWalletId(wallet.getId());
         withdrawal.setAmount(request.getAmount());
+        withdrawal.setFeeAmount(fee);
+        withdrawal.setTotalDebit(totalDebit);
+        withdrawal.setRecipientReceives(request.getAmount());
         withdrawal.setCurrency(wallet.getCurrency());
         withdrawal.setNarration(narration);
         withdrawal.setBankName(wallet.getSettlementBankName());
@@ -736,6 +801,20 @@ public class WalletService {
             return request.getNarration().trim();
         }
         return "Wisemonie Withdrawal to " + wallet.getSettlementBankName();
+    }
+
+    private String buildWithdrawalFeeReference(Withdrawal withdrawal) {
+        return withdrawal.getClientReference() + "-FEE";
+    }
+
+    private String insufficientWithdrawalBalanceMessage(BigDecimal totalDebit, BigDecimal fee) {
+        return String.format("Insufficient balance. You need ₦%s including the ₦%s withdrawal fee.",
+                formatMoney(totalDebit),
+                formatMoney(fee));
+    }
+
+    private String formatMoney(BigDecimal amount) {
+        return amount.stripTrailingZeros().toPlainString();
     }
 
     private String buildClientReference(Long userId) {
@@ -951,6 +1030,12 @@ public class WalletService {
                     transactionLogRepository.save(log);
                 });
 
+                transactionLogRepository.findByReference(buildWithdrawalFeeReference(withdrawal)).ifPresent(log -> {
+                    log.setStatus(TransactionStatus.COMPLETED);
+                    log.setDescription(log.getDescription() + " | Confirmed by Providus");
+                    transactionLogRepository.save(log);
+                });
+
                 // Push notification to user
                 String msg = String.format("Your withdrawal of ₦%.2f to %s (%s) was successful.",
                         withdrawal.getAmount(), withdrawal.getAccountNumber(), withdrawal.getBankName());
@@ -1106,4 +1191,3 @@ public class WalletService {
         return new BigDecimal(node.asText());
     }
 }
-

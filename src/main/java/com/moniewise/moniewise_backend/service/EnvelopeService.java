@@ -1414,6 +1414,7 @@ import com.moniewise.moniewise_backend.enums.*;
 import com.moniewise.moniewise_backend.exception.EntityNotFoundException;
 import com.moniewise.moniewise_backend.externalTransfers.PaymentProvider;
 import com.moniewise.moniewise_backend.psp.ProvidusExpressGateway;
+import com.moniewise.moniewise_backend.psp.SecureWaveGateway;
 import com.moniewise.moniewise_backend.repository.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -2023,6 +2024,7 @@ public class EnvelopeService {
         if (amount.compareTo(BigDecimal.ZERO) <= 0) throw new IllegalArgumentException("Amount must be positive");
 
         User user = userService.findByEmail(email);
+        Wallet linkedWallet = hydrateExternalAccountFromLinkedBank(externalAccount, user);
         if (!userService.verifyTransactionPin(user, transactionPin)) {
             throw new IllegalArgumentException("Invalid transaction PIN");
         }
@@ -2040,9 +2042,7 @@ public class EnvelopeService {
         if (amount.compareTo(source.getRemainingAmount()) > 0) throw new IllegalStateException("Exceeds period limit: Ã¢â€šÂ¦" + source.getRemainingAmount());
         if (amount.compareTo(source.getTotalRemainingAmount()) > 0) throw new IllegalStateException("Insufficient funds");
 
-        String resolvedName = providusExpressGateway.isEnabled()
-                ? providusExpressGateway.resolveAccount(externalAccount.getBankCode(), externalAccount.getAccountNumber())
-                : paymentProvider.resolveAccount(externalAccount.getBankCode(), externalAccount.getAccountNumber());
+        String resolvedName = resolveExternalRecipientName(externalAccount, linkedWallet);
         if (resolvedName == null) {
             throw new IllegalArgumentException("Invalid Account Number");
         }
@@ -2096,20 +2096,19 @@ public class EnvelopeService {
                         providerNarration
                 );
             } else {
-                providerRef = paymentProvider.initiateTransfer(
-                        externalAccount.getBankCode(),
-                        externalAccount.getAccountNumber(),
-                        resolvedName,
+                providerRef = paymentProvider.initiateWithdrawal(
+                        user.getEmail(),
                         amount,
-                        myReference,
                         providerNarration
                 );
             }
             txn.setStatus(TransactionStatus.PROCESSING);
             if (providusExpressGateway.isEnabled()) {
                 txn.setProviderName(ProvidusExpressGateway.PROVIDER_NAME);
-                txn.setProviderReference(providerRef);
+            } else {
+                txn.setProviderName(SecureWaveGateway.PROVIDER_NAME);
             }
+            txn.setProviderReference(providerRef);
             transactionLogRepository.save(txn);
             // Ã¢Å“â€¦ ADD NEW EVENT
             Map<String, Object> params = Map.of(
@@ -2146,6 +2145,63 @@ public class EnvelopeService {
                 externalAccount.getBankName(),
                 TransactionStatus.PROCESSING
         );
+    }
+
+    private Wallet hydrateExternalAccountFromLinkedBank(BudgetController.ExternalAccount externalAccount, User user) {
+        if (externalAccount == null) {
+            throw new IllegalArgumentException("External account details are required");
+        }
+
+        Wallet wallet = walletService.getWalletByUserId(user.getId());
+        boolean hasRequestAccountNumber = !isBlank(externalAccount.getAccountNumber());
+        boolean matchesLinkedAccount = hasRequestAccountNumber
+                && !isBlank(wallet.getSettlementAccountNumber())
+                && externalAccount.getAccountNumber().trim().equals(wallet.getSettlementAccountNumber().trim());
+
+        if (!hasRequestAccountNumber && !isBlank(wallet.getSettlementAccountNumber())) {
+            externalAccount.setAccountNumber(wallet.getSettlementAccountNumber());
+            matchesLinkedAccount = true;
+        }
+
+        if (matchesLinkedAccount) {
+            if (isBlank(externalAccount.getBankCode())) {
+                externalAccount.setBankCode(wallet.getSettlementBankCode());
+            }
+            if (isBlank(externalAccount.getBankName())) {
+                externalAccount.setBankName(wallet.getSettlementBankName());
+            }
+            if (isBlank(externalAccount.getRecipientName())) {
+                externalAccount.setRecipientName(wallet.getSettlementAccountName());
+            }
+        }
+
+        if (isBlank(externalAccount.getAccountNumber())) {
+            throw new IllegalArgumentException("Account number is required");
+        }
+        if (isBlank(externalAccount.getBankCode())) {
+            throw new IllegalArgumentException("Bank code is required. Please refresh your linked withdrawal account.");
+        }
+
+        return wallet;
+    }
+
+    private String resolveExternalRecipientName(BudgetController.ExternalAccount externalAccount, Wallet linkedWallet) {
+        boolean matchesLinkedAccount = linkedWallet != null
+                && !isBlank(linkedWallet.getSettlementAccountNumber())
+                && !isBlank(externalAccount.getAccountNumber())
+                && externalAccount.getAccountNumber().trim().equals(linkedWallet.getSettlementAccountNumber().trim());
+
+        if (matchesLinkedAccount && !isBlank(linkedWallet.getSettlementAccountName())) {
+            return linkedWallet.getSettlementAccountName().trim();
+        }
+
+        return providusExpressGateway.isEnabled()
+                ? providusExpressGateway.resolveAccount(externalAccount.getBankCode(), externalAccount.getAccountNumber())
+                : paymentProvider.resolveAccount(externalAccount.getBankCode(), externalAccount.getAccountNumber());
+    }
+
+    private boolean isBlank(String value) {
+        return value == null || value.trim().isEmpty();
     }
 
     @Transactional

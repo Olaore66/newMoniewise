@@ -26,6 +26,15 @@ public class Withdrawal {
     @Column(nullable = false)
     private BigDecimal amount;
 
+    @Column(name = "fee_amount", nullable = false)
+    private BigDecimal feeAmount = BigDecimal.ZERO;
+
+    @Column(name = "total_debit", nullable = false)
+    private BigDecimal totalDebit = BigDecimal.ZERO;
+
+    @Column(name = "recipient_receives", nullable = false)
+    private BigDecimal recipientReceives = BigDecimal.ZERO;
+
     @Column(nullable = false)
     private String currency = "NGN";
 
@@ -96,6 +105,30 @@ public class Withdrawal {
 
     public void setAmount(BigDecimal amount) {
         this.amount = amount;
+    }
+
+    public BigDecimal getFeeAmount() {
+        return feeAmount;
+    }
+
+    public void setFeeAmount(BigDecimal feeAmount) {
+        this.feeAmount = feeAmount;
+    }
+
+    public BigDecimal getTotalDebit() {
+        return totalDebit != null ? totalDebit : amount;
+    }
+
+    public void setTotalDebit(BigDecimal totalDebit) {
+        this.totalDebit = totalDebit;
+    }
+
+    public BigDecimal getRecipientReceives() {
+        return recipientReceives != null ? recipientReceives : amount;
+    }
+
+    public void setRecipientReceives(BigDecimal recipientReceives) {
+        this.recipientReceives = recipientReceives;
     }
 
     public String getCurrency() {
