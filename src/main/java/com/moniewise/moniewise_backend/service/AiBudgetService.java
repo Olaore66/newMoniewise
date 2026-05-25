@@ -124,7 +124,7 @@ public class AiBudgetService {
                 request.getLatestUserMessage(),
                 e.getMessage()
             );
-            return buildFallbackAssistantResponse(request);
+            return buildFallbackAssistantResponse(request, e);
         }
     }
 
@@ -395,7 +395,8 @@ public class AiBudgetService {
     }
 
     private AiBudgetAssistantTurnResponse buildFallbackAssistantResponse(
-        AiBudgetAssistantTurnRequest request
+        AiBudgetAssistantTurnRequest request,
+        Exception fallbackCause
     ) {
         AiBudgetAssistantTurnResponse response = new AiBudgetAssistantTurnResponse();
         List<AiEnvelopeSuggestion> currentItems = request.getEnvelopes() == null
@@ -420,8 +421,33 @@ public class AiBudgetService {
         response.setTotalAllocatedPercentage(round1(total));
         response.setRemainingAmount(round2(remaining));
         response.setSource("fallback");
+        response.setSourceDetail(buildFallbackSourceDetail(fallbackCause));
         response.setAction(inferFallbackAction(request.getLatestUserMessage(), currentItems, envelopes));
         return response;
+    }
+
+    private String buildFallbackSourceDetail(Exception fallbackCause) {
+        if (fallbackCause == null) {
+            return "Gemini was not used; fallback reason was not captured.";
+        }
+
+        Throwable root = fallbackCause;
+        while (root.getCause() != null) {
+            root = root.getCause();
+        }
+
+        String message = root.getMessage();
+        if (message == null || message.isBlank()) {
+            message = fallbackCause.getMessage();
+        }
+        if (message == null || message.isBlank()) {
+            message = "No error message.";
+        }
+
+        return "Gemini failed before a valid assistant response was produced: "
+            + root.getClass().getSimpleName()
+            + " - "
+            + message;
     }
 
     private String inferFallbackAction(

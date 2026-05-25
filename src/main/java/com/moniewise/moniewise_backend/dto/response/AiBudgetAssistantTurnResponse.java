@@ -6,6 +6,7 @@ public class AiBudgetAssistantTurnResponse {
     private String assistantMessage;
     private String reasoning;
     private String source;
+    private String sourceDetail;
     /**
      * What the assistant did this turn:
      * ADD_ENVELOPE    – one or more new envelopes were added
@@ -43,6 +44,14 @@ public class AiBudgetAssistantTurnResponse {
 
     public void setSource(String source) {
         this.source = source;
+    }
+
+    public String getSourceDetail() {
+        return sourceDetail;
+    }
+
+    public void setSourceDetail(String sourceDetail) {
+        this.sourceDetail = sourceDetail;
     }
 
     public String getAction() {

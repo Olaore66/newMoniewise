@@ -8,6 +8,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.*;
 import org.springframework.stereotype.Service;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.web.client.HttpStatusCodeException;
 import org.springframework.web.client.RestTemplate;
 
@@ -16,25 +17,40 @@ import com.moniewise.moniewise_backend.config.GeminiProperties;
 @Service
 public class GeminiService {
     private static final Logger logger = LoggerFactory.getLogger(GeminiService.class);
+    private static final int CONNECT_TIMEOUT_MS = 10_000;
+    private static final int READ_TIMEOUT_MS = 45_000;
+    private static final long QUOTA_COOLDOWN_MS = 60_000;
 
     private final GeminiProperties geminiProperties;
-    private final RestTemplate restTemplate = new RestTemplate();
+    private final RestTemplate restTemplate;
+    private volatile long quotaCooldownUntilEpochMs = 0L;
 
     public GeminiService(GeminiProperties geminiProperties) {
         this.geminiProperties = geminiProperties;
+        this.restTemplate = new RestTemplate(buildRequestFactory());
     }
 
     @PostConstruct
     public void logConfigurationStatus() {
         logger.info(
-            "Gemini config loaded: keyPresent={}, model={}, url={}",
+            "Gemini config loaded: keyPresent={}, model={}, url={}, connectTimeoutMs={}, readTimeoutMs={}",
             hasConfiguredApiKey(),
             sanitizeValue(geminiProperties.getModel()),
-            sanitizeValue(geminiProperties.getUrl())
+            sanitizeValue(geminiProperties.getUrl()),
+            CONNECT_TIMEOUT_MS,
+            READ_TIMEOUT_MS
         );
     }
 
     public String generateText(String prompt) {
+        long now = System.currentTimeMillis();
+        if (now < quotaCooldownUntilEpochMs) {
+            long remainingMs = quotaCooldownUntilEpochMs - now;
+            throw new IllegalStateException(
+                "Gemini quota cooldown active; retry after about " + Math.max(1, remainingMs / 1000) + "s"
+            );
+        }
+
         if (geminiProperties.getApiKey() == null || geminiProperties.getApiKey().isBlank()) {
             throw new IllegalStateException("GEMINI_API_KEY is missing or blank");
         }
@@ -66,28 +82,57 @@ public class GeminiService {
         headers.set("x-goog-api-key", geminiProperties.getApiKey());
 
         HttpEntity<Map<String, Object>> entity = new HttpEntity<>(body, headers);
+        long startedAt = System.currentTimeMillis();
+
+        logger.info(
+            "Calling Gemini model={} endpoint={} promptChars={}",
+            geminiProperties.getModel(),
+            endpoint,
+            prompt == null ? 0 : prompt.length()
+        );
 
         try {
             ResponseEntity<Map> response =
                 restTemplate.exchange(endpoint, HttpMethod.POST, entity, Map.class);
 
+            logger.info(
+                "Gemini response received status={} durationMs={}",
+                response.getStatusCode(),
+                System.currentTimeMillis() - startedAt
+            );
             return extractText(response.getBody());
         } catch (HttpStatusCodeException e) {
             logger.warn(
-                "Gemini HTTP error status={} model={} body={}",
+                "Gemini HTTP error status={} model={} durationMs={} body={}",
                 e.getStatusCode(),
                 geminiProperties.getModel(),
+                System.currentTimeMillis() - startedAt,
                 e.getResponseBodyAsString()
             );
+            if (e.getStatusCode() == HttpStatus.TOO_MANY_REQUESTS) {
+                quotaCooldownUntilEpochMs = System.currentTimeMillis() + QUOTA_COOLDOWN_MS;
+                logger.warn(
+                    "Gemini quota cooldown enabled for {}ms after 429 response",
+                    QUOTA_COOLDOWN_MS
+                );
+            }
             throw new RuntimeException("Gemini HTTP request failed with status " + e.getStatusCode(), e);
         } catch (Exception e) {
             logger.warn(
-                "Gemini request failed for model={}: {}",
+                "Gemini request failed for model={} durationMs={}: {}",
                 geminiProperties.getModel(),
+                System.currentTimeMillis() - startedAt,
                 e.getMessage()
             );
             throw new RuntimeException("Gemini request failed", e);
         }
+    }
+
+    private SimpleClientHttpRequestFactory buildRequestFactory() {
+        SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
+        requestFactory.setConnectTimeout(CONNECT_TIMEOUT_MS);
+        requestFactory.setReadTimeout(READ_TIMEOUT_MS);
+        return requestFactory;
     }
 
     public Map<String, Object> getConfigurationStatus() {
@@ -96,6 +141,8 @@ public class GeminiService {
         status.put("keyPresent", hasConfiguredApiKey());
         status.put("model", sanitizeValue(geminiProperties.getModel()));
         status.put("url", sanitizeValue(geminiProperties.getUrl()));
+        status.put("quotaCooldownActive", System.currentTimeMillis() < quotaCooldownUntilEpochMs);
+        status.put("quotaCooldownUntilEpochMs", quotaCooldownUntilEpochMs);
         return status;
     }
 
