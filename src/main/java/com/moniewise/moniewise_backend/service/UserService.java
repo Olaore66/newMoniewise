@@ -1,5 +1,8 @@
 package com.moniewise.moniewise_backend.service;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JavaType;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.cloud.storage.Blob;
 import com.google.cloud.storage.Bucket;
 import com.google.firebase.cloud.StorageClient;
@@ -20,6 +23,7 @@ import com.moniewise.moniewise_backend.repository.WalletRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.security.core.userdetails.UserDetailsService;
@@ -44,6 +48,11 @@ import java.util.stream.Collectors;
 public class UserService implements UserDetailsService {
 
     private static final Logger logger = LoggerFactory.getLogger(UserService.class);
+    private static final int P2P_SEARCH_LIMIT = 15;
+    private static final int P2P_SEARCH_MIN_LENGTH = 2;
+    private static final int P2P_SEARCH_MAX_LENGTH = 64;
+    private static final long P2P_SEARCH_CACHE_TTL_SECONDS = 30L;
+    private static final String P2P_SEARCH_CACHE_PREFIX = "p2p:user_search:";
 
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder; // Now sourced from AppConfig
@@ -61,8 +70,10 @@ public class UserService implements UserDetailsService {
     private final RegistrationCacheService registrationCacheService;
     private final ProvidusExpressGateway providusExpressGateway;
     private final KycProfileRepository kycProfileRepository;
+    private final StringRedisTemplate redisTemplate;
+    private final ObjectMapper objectMapper;
 
-    public UserService(UserRepository userRepository, PasswordEncoder passwordEncoder, WalletService walletService, WalletRepository walletRepository, WalletService walletService1, OtpService otpService, PasswordResetTokenRepository passwordResetTokenRepository, NotificationService notificationService, BudgetRepository budgetRepository, RegistrationCacheService registrationCacheService, ProvidusExpressGateway providusExpressGateway, KycProfileRepository kycProfileRepository) {
+    public UserService(UserRepository userRepository, PasswordEncoder passwordEncoder, WalletService walletService, WalletRepository walletRepository, WalletService walletService1, OtpService otpService, PasswordResetTokenRepository passwordResetTokenRepository, NotificationService notificationService, BudgetRepository budgetRepository, RegistrationCacheService registrationCacheService, ProvidusExpressGateway providusExpressGateway, KycProfileRepository kycProfileRepository, StringRedisTemplate redisTemplate, ObjectMapper objectMapper) {
         this.userRepository = userRepository;
         this.passwordEncoder = passwordEncoder; // No link to SecurityConfig
         this.walletRepository = walletRepository;
@@ -74,6 +85,8 @@ public class UserService implements UserDetailsService {
         this.registrationCacheService = registrationCacheService;
         this.providusExpressGateway = providusExpressGateway;
         this.kycProfileRepository = kycProfileRepository;
+        this.redisTemplate = redisTemplate;
+        this.objectMapper = objectMapper;
     }
 
     /**
@@ -435,8 +448,15 @@ public class UserService implements UserDetailsService {
     // âœ… SAFE SEARCH (Fixes Memory Crash)
 //     ==============================================================
     public List<UserSummaryResponse> searchUsers(String query, String currentEmail) {
-        if (query == null || query.trim().isEmpty()) {
+        String normalizedQuery = normalizeSearchQuery(query);
+        if (normalizedQuery.length() < P2P_SEARCH_MIN_LENGTH) {
             return Collections.emptyList();
+        }
+
+        String cacheKey = p2pSearchCacheKey(normalizedQuery, currentEmail);
+        List<UserSummaryResponse> cached = readCachedP2pSearch(cacheKey);
+        if (cached != null) {
+            return cached;
         }
 
         // 1. Define excluded emails (Self + Revenue)
@@ -445,10 +465,10 @@ public class UserService implements UserDetailsService {
         // 1. Use the NEW Repository Method (Fetches only name/email/tag)
         // We limit to 15 results at the DB level, saving massive RAM.
         List<UserSummary> results = userRepository.searchUsers(
-                query.trim(),
-                PageRequest.of(0, 15)
+                normalizedQuery,
+                PageRequest.of(0, P2P_SEARCH_LIMIT)
         );
-        return results.stream()
+        List<UserSummaryResponse> response = results.stream()
                 // 2. Filter self (Lightweight string check)
                 .filter(u -> !u.getEmail().equalsIgnoreCase(currentEmail))
                 .map(u -> {
@@ -460,7 +480,7 @@ public class UserService implements UserDetailsService {
                     // 4. Generate Display Name
                     String displayName = "Unknown";
                     if (u.getFirstName() != null && !u.getFirstName().isEmpty()) {
-                        displayName = u.getFirstName() + " " + u.getLastName();
+                        displayName = (u.getFirstName() + " " + Objects.toString(u.getLastName(), "")).trim();
                     } else {
                         // Fallback to handle
                         String cleanName = handle.startsWith("@") ? handle.substring(1) : handle;
@@ -471,10 +491,63 @@ public class UserService implements UserDetailsService {
                             displayName,
                             handle,
                             u.getProfileImageUrl(),
-                            u.getEmail()
+                            u.getEmail(),
+                            UserSummaryResponse.WalletMetadata.of(
+                                    u.getWalletAccountNumber(),
+                                    u.getWalletBankName(),
+                                    u.getWalletStatus()
+                            )
                     );
                 })
                 .collect(Collectors.toList());
+        cacheP2pSearch(cacheKey, response);
+        return response;
+    }
+
+    private String normalizeSearchQuery(String query) {
+        if (query == null) {
+            return "";
+        }
+        String normalized = query.trim().replaceAll("\\s+", " ");
+        if (normalized.length() > P2P_SEARCH_MAX_LENGTH) {
+            normalized = normalized.substring(0, P2P_SEARCH_MAX_LENGTH);
+        }
+        return normalized;
+    }
+
+    private String p2pSearchCacheKey(String query, String currentEmail) {
+        String email = currentEmail == null ? "unknown" : currentEmail.trim().toLowerCase(Locale.ROOT);
+        return P2P_SEARCH_CACHE_PREFIX + email + ":" + query.toLowerCase(Locale.ROOT);
+    }
+
+    private List<UserSummaryResponse> readCachedP2pSearch(String cacheKey) {
+        try {
+            String json = redisTemplate.opsForValue().get(cacheKey);
+            if (json == null) {
+                return null;
+            }
+            JavaType type = objectMapper.getTypeFactory()
+                    .constructCollectionType(List.class, UserSummaryResponse.class);
+            return objectMapper.readValue(json, type);
+        } catch (Exception e) {
+            logger.warn("P2P search cache read failed: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    private void cacheP2pSearch(String cacheKey, List<UserSummaryResponse> response) {
+        try {
+            redisTemplate.opsForValue().set(
+                    cacheKey,
+                    objectMapper.writeValueAsString(response),
+                    P2P_SEARCH_CACHE_TTL_SECONDS,
+                    TimeUnit.SECONDS
+            );
+        } catch (JsonProcessingException e) {
+            logger.warn("P2P search cache serialization failed: {}", e.getMessage());
+        } catch (Exception e) {
+            logger.warn("P2P search cache write failed: {}", e.getMessage());
+        }
     }
 
 //     In UserService.java

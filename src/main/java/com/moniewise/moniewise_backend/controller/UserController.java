@@ -125,11 +125,17 @@ public class UserController {
     }
 
     @GetMapping("/search")
-    public ResponseEntity<List<UserSummaryResponse>> searchUsers(@RequestParam String query, @AuthenticationPrincipal String email) {
+    public ResponseEntity<List<UserSummaryResponse>> searchUsers(@RequestParam String query,
+                                                                 @AuthenticationPrincipal String email,
+                                                                 HttpServletRequest httpRequest) {
         if (email == null) {
             email = SecurityContextHolder.getContext().getAuthentication().getName();
         }
-        return ResponseEntity.ok(userService.searchUsers(query, email));
+        String throttleKey = abuseProtectionService.buildKey(email, httpRequest.getRemoteAddr());
+        abuseProtectionService.checkAllowed(AbuseProtectionService.P2P_USER_SEARCH, throttleKey);
+        List<UserSummaryResponse> users = userService.searchUsers(query, email);
+        abuseProtectionService.recordRequest(AbuseProtectionService.P2P_USER_SEARCH, throttleKey);
+        return ResponseEntity.ok(users);
     }
 
     @PostMapping("/fcm-token")

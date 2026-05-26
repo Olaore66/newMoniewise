@@ -38,6 +38,8 @@ public class AiInsightService {
     private static final ZoneId LAGOS_ZONE = ZoneId.of("Africa/Lagos");
     private static final DateTimeFormatter NEXT_AVAILABLE_FORMATTER =
         DateTimeFormatter.ofPattern("EEE, d MMM - h:mm a");
+    private static final Duration SOON_DISBURSEMENT_WINDOW = Duration.ofHours(6);
+    private static final Duration RECENT_RELEASE_WINDOW = Duration.ofHours(24);
 
     private final UserService userService;
     private final BudgetRepository budgetRepository;
@@ -155,8 +157,16 @@ public class AiInsightService {
             ));
         }
 
-        candidates.addAll(buildSpendableEnvelopeCandidates(context.activeBudgets));
-        candidates.addAll(buildUpcomingEnvelopeCandidates(context.activeBudgets));
+        List<ActionCandidate> spendableEnvelopeCandidates = buildSpendableEnvelopeCandidates(context.activeBudgets);
+        candidates.addAll(spendableEnvelopeCandidates);
+        if (spendableEnvelopeCandidates.isEmpty()) {
+            List<ActionCandidate> dueDisbursementCandidates = buildDueDisbursementCandidates(context.activeBudgets);
+            candidates.addAll(dueDisbursementCandidates.isEmpty()
+                ? buildNoSpendableEnvelopeCandidates(context.activeBudgets)
+                : dueDisbursementCandidates);
+        } else {
+            candidates.addAll(buildUpcomingEnvelopeCandidates(context.activeBudgets));
+        }
 
         if (context.activeBudget != null
             && context.daysUntilActiveBudgetEnds >= 0
@@ -240,13 +250,21 @@ public class AiInsightService {
 
                 BigDecimal availableAmount = resolveSpendableAmount(envelope);
                 double score = scoreSpendableEnvelope(budget, envelope, now, availableAmount);
+                boolean disbursementReached = hasDisbursementReached(envelope, now) || wasRecentlyReleased(envelope, now);
+                String message = disbursementReached
+                    ? envelope.getName() + " has reached disbursement time. NGN "
+                        + formatMoney(availableAmount) + " is ready to spend from " + budget.getName() + "."
+                    : budget.getName() + " has NGN " + formatMoney(availableAmount)
+                        + " available now in " + envelope.getName() + ".";
                 ActionCandidate candidate = baseCandidate(
                     "Spend from " + envelope.getName(),
-                    "Budget " + budget.getName() + " has " + formatMoney(availableAmount) + " available now in envelope " + envelope.getName() + ".",
+                    message,
                     "Go to " + envelope.getName(),
                     "review_active_budget",
                     "high",
-                    "This envelope is currently unlocked and still has healthy spendable balance.",
+                    disbursementReached
+                        ? "This envelope's disbursement time has reached and it has spendable balance."
+                        : "This envelope is currently unlocked and still has healthy spendable balance.",
                     score
                 );
                 candidate.budgetId = budget.getId();
@@ -254,6 +272,10 @@ public class AiInsightService {
                 candidate.envelopeId = envelope.getId();
                 candidate.envelopeName = envelope.getName();
                 candidate.amountValue = availableAmount != null ? availableAmount.doubleValue() : null;
+                if (disbursementReached) {
+                    candidate.nextAvailableAt = "now";
+                    candidate.countdownText = "right now";
+                }
                 candidates.add(candidate);
             }
         }
@@ -277,30 +299,177 @@ public class AiInsightService {
                 }
 
                 BigDecimal upcomingAmount = resolveUpcomingAmount(envelope);
-                double score = scoreUpcomingEnvelope(budget, envelope, upcomingAmount, now);
+                candidates.add(buildUpcomingEnvelopeCandidate(budget, envelope, upcomingAmount, now, false));
+            }
+        }
+
+        candidates.sort(Comparator.comparingDouble(ActionCandidate::score).reversed());
+        return candidates.size() > 2 ? candidates.subList(0, 2) : candidates;
+    }
+
+    private List<ActionCandidate> buildDueDisbursementCandidates(List<Budget> activeBudgets) {
+        LocalDateTime now = LocalDateTime.now(LAGOS_ZONE);
+        List<ActionCandidate> candidates = new ArrayList<>();
+
+        for (Budget budget : activeBudgets) {
+            if (budget.getEnvelopes() == null) {
+                continue;
+            }
+            for (Envelope envelope : budget.getEnvelopes()) {
+                if (!hasDisbursementReached(envelope, now) || hasHealthyRemaining(envelope) || !hasFutureValue(envelope)) {
+                    continue;
+                }
+
                 ActionCandidate candidate = baseCandidate(
-                    "No envelope is spendable right now",
-                    "Sorry, you don't have any spendable amount now. Your nearest disbursement is from Budget "
-                        + budget.getName() + " in envelope " + envelope.getName() + ".",
-                    "Go to " + envelope.getName(),
+                    envelope.getName() + " is due now",
+                    envelope.getName() + " has reached disbursement time. Give it a moment; your naira is at the door.",
+                    "Open " + envelope.getName(),
                     "review_active_budget",
                     "high",
-                    "This is the nearest upcoming envelope that will unlock usable money next.",
-                    score
+                    "This envelope's scheduled disbursement time has reached, but no spendable balance is visible yet.",
+                    790
                 );
                 candidate.budgetId = budget.getId();
                 candidate.budgetName = budget.getName();
                 candidate.envelopeId = envelope.getId();
                 candidate.envelopeName = envelope.getName();
-                candidate.amountValue = upcomingAmount != null ? upcomingAmount.doubleValue() : null;
-                candidate.nextAvailableAt = formatNextAvailableAt(nextDisbursementAt);
-                candidate.countdownText = formatCountdown(nextDisbursementAt);
+                candidate.amountValue = Optional.ofNullable(resolveUpcomingAmount(envelope))
+                    .map(BigDecimal::doubleValue)
+                    .orElse(null);
+                candidate.nextAvailableAt = "now";
+                candidate.countdownText = "right now";
                 candidates.add(candidate);
             }
         }
 
         candidates.sort(Comparator.comparingDouble(ActionCandidate::score).reversed());
         return candidates.size() > 2 ? candidates.subList(0, 2) : candidates;
+    }
+
+    private List<ActionCandidate> buildNoSpendableEnvelopeCandidates(List<Budget> activeBudgets) {
+        List<ActionCandidate> upcoming = buildUpcomingEnvelopeCandidates(activeBudgets, true);
+        if (!upcoming.isEmpty()) {
+            return List.of(upcoming.get(0));
+        }
+
+        Optional<Budget> firstActiveBudget = activeBudgets.stream().findFirst();
+        if (firstActiveBudget.isEmpty()) {
+            return List.of();
+        }
+
+        Budget budget = firstActiveBudget.get();
+        ActionCandidate candidate = baseCandidate(
+            "No envelope is ready yet",
+            "No disbursement has reached yet. Tiny patience flex: your budget is keeping your naira in line.",
+            "View budget",
+            "review_active_budget",
+            "normal",
+            "No active envelope currently has spendable balance or a scheduled release to surface.",
+            520
+        );
+        candidate.budgetId = budget.getId();
+        candidate.budgetName = budget.getName();
+        return List.of(candidate);
+    }
+
+    private List<ActionCandidate> buildUpcomingEnvelopeCandidates(
+        List<Budget> activeBudgets,
+        boolean noSpendablePrimary
+    ) {
+        LocalDateTime now = LocalDateTime.now(LAGOS_ZONE);
+        List<ActionCandidate> candidates = new ArrayList<>();
+
+        for (Budget budget : activeBudgets) {
+            if (budget.getEnvelopes() == null) {
+                continue;
+            }
+            for (Envelope envelope : budget.getEnvelopes()) {
+                LocalDateTime nextDisbursementAt = envelope.getNextDisbursementAt();
+                if (nextDisbursementAt == null || !nextDisbursementAt.isAfter(now) || !hasFutureValue(envelope)) {
+                    continue;
+                }
+
+                BigDecimal upcomingAmount = resolveUpcomingAmount(envelope);
+                candidates.add(buildUpcomingEnvelopeCandidate(
+                    budget,
+                    envelope,
+                    upcomingAmount,
+                    now,
+                    noSpendablePrimary
+                ));
+            }
+        }
+
+        candidates.sort(Comparator.comparingDouble(ActionCandidate::score).reversed());
+        int limit = noSpendablePrimary ? 1 : 2;
+        return candidates.size() > limit ? candidates.subList(0, limit) : candidates;
+    }
+
+    private ActionCandidate buildUpcomingEnvelopeCandidate(
+        Budget budget,
+        Envelope envelope,
+        BigDecimal upcomingAmount,
+        LocalDateTime now,
+        boolean noSpendablePrimary
+    ) {
+        LocalDateTime nextDisbursementAt = envelope.getNextDisbursementAt();
+        String countdown = formatCountdown(nextDisbursementAt);
+        boolean soon = isCloseToDisbursement(nextDisbursementAt, now);
+        double score = scoreUpcomingEnvelope(budget, envelope, upcomingAmount, now);
+
+        String title;
+        String message;
+        String priority;
+        String reason;
+
+        if (noSpendablePrimary) {
+            if (soon) {
+                title = envelope.getName() + " releases " + countdown;
+                message = "Nothing is spendable yet, but " + envelope.getName()
+                    + " releases " + countdown + ". Hold steady; your naira is warming up.";
+                priority = "high";
+                reason = "No envelope has reached disbursement time yet; this is the closest upcoming release.";
+                score = Math.max(score, 760);
+            } else {
+                title = "No envelope is ready yet";
+                message = "No disbursement has reached yet. Next up: " + envelope.getName()
+                    + " " + countdown + ". Your budget is doing disciplined things.";
+                priority = "normal";
+                reason = "No envelope has reached disbursement time yet; this is the next scheduled release.";
+                score = Math.max(score, 560);
+            }
+        } else if (soon) {
+            title = envelope.getName() + " releases soon";
+            message = envelope.getName() + " unlocks " + countdown
+                + ". Hold steady; your naira is almost ready for duty.";
+            priority = "normal";
+            reason = "This envelope is close to its next scheduled disbursement time.";
+            score += 80;
+        } else {
+            title = envelope.getName() + " unlocks next";
+            message = "Next release: " + envelope.getName() + " " + countdown
+                + ". Your plan is quietly doing the heavy lifting.";
+            priority = "normal";
+            reason = "This is an upcoming envelope that will unlock usable money next.";
+        }
+
+        ActionCandidate candidate = baseCandidate(
+            title,
+            message,
+            "Go to " + envelope.getName(),
+            "review_active_budget",
+            priority,
+            reason,
+            score
+        );
+        candidate.budgetId = budget.getId();
+        candidate.budgetName = budget.getName();
+        candidate.envelopeId = envelope.getId();
+        candidate.envelopeName = envelope.getName();
+        candidate.amountValue = upcomingAmount != null ? upcomingAmount.doubleValue() : null;
+        candidate.nextAvailableAt = formatNextAvailableAt(nextDisbursementAt);
+        candidate.countdownText = countdown;
+        return candidate;
     }
 
     private AiDashboardNextActionResponse sanitizeResponse(
@@ -761,6 +930,40 @@ public class AiInsightService {
             case "normal", "high", "urgent" -> true;
             default -> false;
         };
+    }
+
+    private boolean hasDisbursementReached(Envelope envelope, LocalDateTime now) {
+        return envelope != null
+            && envelope.getNextDisbursementAt() != null
+            && !envelope.getNextDisbursementAt().isAfter(now);
+    }
+
+    private boolean wasRecentlyReleased(Envelope envelope, LocalDateTime now) {
+        if (envelope == null || envelope.getLastDisbursedAt() == null) {
+            return false;
+        }
+
+        if (envelope.getCreatedAt() != null) {
+            long minutesAfterCreation = Math.abs(Duration.between(
+                envelope.getCreatedAt(),
+                envelope.getLastDisbursedAt()
+            ).toMinutes());
+            if (minutesAfterCreation < 2) {
+                return false;
+            }
+        }
+
+        Duration sinceRelease = Duration.between(envelope.getLastDisbursedAt(), now);
+        return !sinceRelease.isNegative() && sinceRelease.compareTo(RECENT_RELEASE_WINDOW) <= 0;
+    }
+
+    private boolean isCloseToDisbursement(LocalDateTime nextDisbursementAt, LocalDateTime now) {
+        if (nextDisbursementAt == null || !nextDisbursementAt.isAfter(now)) {
+            return false;
+        }
+
+        Duration untilRelease = Duration.between(now, nextDisbursementAt);
+        return untilRelease.compareTo(SOON_DISBURSEMENT_WINDOW) <= 0;
     }
 
     private String valueOrDefault(String value, String fallback) {

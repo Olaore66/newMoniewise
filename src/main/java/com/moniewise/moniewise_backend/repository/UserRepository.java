@@ -38,11 +38,26 @@ public interface UserRepository extends JpaRepository<User, Long> {
             "u.profile_data ->> 'lastName' AS lastName, " +
             "u.email AS email, " +
             "u.profile_data ->> 'userTag' AS userTag, " +
-            "u.profile_image_url AS profileImageUrl " +
+            "u.profile_image_url AS profileImageUrl, " +
+            "w.account_number AS walletAccountNumber, " +
+            "w.bank_name AS walletBankName, " +
+            "w.status AS walletStatus " +
             "FROM users u " +
-            "WHERE lower(u.email) LIKE lower(concat('%', :query, '%')) " +
-            "OR lower(u.profile_data ->> 'firstName') LIKE lower(concat('%', :query, '%'))",
-            countQuery = "SELECT count(*) FROM users u WHERE lower(u.email) LIKE lower(concat('%', :query, '%')) OR lower(u.profile_data ->> 'firstName') LIKE lower(concat('%', :query, '%'))",
+            "LEFT JOIN wallets w ON w.user_id = u.id " +
+            "WHERE (" +
+            "   lower(coalesce(u.email, '')) LIKE lower(concat('%', :query, '%')) " +
+            "   OR coalesce(u.phone, '') LIKE concat('%', :query, '%') " +
+            "   OR lower(coalesce(u.profile_data ->> 'firstName', '')) LIKE lower(concat('%', :query, '%')) " +
+            "   OR lower(coalesce(u.profile_data ->> 'lastName', '')) LIKE lower(concat('%', :query, '%')) " +
+            "   OR lower(coalesce(u.profile_data ->> 'userTag', '')) LIKE lower(concat('%', :query, '%'))" +
+            ") AND coalesce(u.is_deleted, false) = false",
+            countQuery = "SELECT count(*) FROM users u WHERE (" +
+                    "   lower(coalesce(u.email, '')) LIKE lower(concat('%', :query, '%')) " +
+                    "   OR coalesce(u.phone, '') LIKE concat('%', :query, '%') " +
+                    "   OR lower(coalesce(u.profile_data ->> 'firstName', '')) LIKE lower(concat('%', :query, '%')) " +
+                    "   OR lower(coalesce(u.profile_data ->> 'lastName', '')) LIKE lower(concat('%', :query, '%')) " +
+                    "   OR lower(coalesce(u.profile_data ->> 'userTag', '')) LIKE lower(concat('%', :query, '%'))" +
+                    ") AND coalesce(u.is_deleted, false) = false",
             nativeQuery = true)
     List<UserSummary> searchUsers(@Param("query") String query, Pageable pageable);
 

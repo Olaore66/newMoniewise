@@ -48,6 +48,7 @@ public class AbuseProtectionService {
     public static final String WALLET_WITHDRAW        = "wallet.withdraw";
     public static final String WALLET_RESOLVE_ACCOUNT = "wallet.resolve_account";
     public static final String WALLET_BANK_INFO       = "wallet.bank_info";
+    public static final String P2P_USER_SEARCH        = "p2p.user_search";
 
     // ── Transaction PIN ───────────────────────────────────────────────────────
     public static final String PIN_VERIFY         = "pin.verify";
@@ -197,6 +198,7 @@ public class AbuseProtectionService {
             case WALLET_WITHDRAW        -> new AttemptPolicy(10, Duration.ofHours(1),   Duration.ofHours(1));
             case WALLET_RESOLVE_ACCOUNT -> new AttemptPolicy(30, Duration.ofMinutes(5), Duration.ofMinutes(10));
             case WALLET_BANK_INFO       -> new AttemptPolicy(10, Duration.ofMinutes(15),Duration.ofMinutes(15));
+            case P2P_USER_SEARCH        -> new AttemptPolicy(120, Duration.ofMinutes(1), Duration.ofMinutes(5));
 
             // PIN — tight limits; a 4-digit PIN is the main brute-force surface
             case PIN_VERIFY         -> new AttemptPolicy(5, Duration.ofMinutes(15), Duration.ofMinutes(30));

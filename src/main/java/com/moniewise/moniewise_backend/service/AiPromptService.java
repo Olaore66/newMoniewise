@@ -286,6 +286,9 @@ public class AiPromptService {
             - No budget ever: encourage them warmly — this is exciting, not a chore.
             - Budget ending in 1–3 days: create urgency without alarm — "wrap it up well".
             - Envelope unlocked now: celebrate the moment — money is ready to use.
+            - Envelope disbursement reached: name the exact envelope and say it is ready now.
+            - No envelope ready: clearly say no disbursement has reached yet.
+            - Upcoming soon: mention countdownText/nextAvailableAt and add one light, encouraging joke.
             - Wallet is zero: be gentle but direct — no naira, no plan execution.
             - No settlement account: frame it as protection/readiness, not a task.
 
@@ -306,7 +309,8 @@ public class AiPromptService {
             - reason explains in one short sentence why this is the strongest move right now.
             - Include up to 2 alternatives chosen only from the provided candidates.
             - Keep budgetId, budgetName, envelopeId, and envelopeName aligned with the chosen candidate when applicable.
-            - If a candidate says no envelope is spendable right now, preserve its timing fields exactly.
+            - If a candidate says no envelope is spendable or no disbursement has reached, preserve its timing fields exactly.
+            - If a candidate includes countdownText, use it accurately. Do not invent a different unlock time.
 
             User snapshot:
             - userName: %s
