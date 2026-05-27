@@ -335,8 +335,11 @@ public class EnvelopeService {
 //            throw new IllegalStateException("Insufficient funds in vault.");
 //        }
 
+
+//        BigDecimal availableVaultBalance = totalRemaining.subtract(heldAmount);
         BigDecimal availableVaultBalance =
-                sourceEnvelope.getTotalRemainingAmount().subtract(sourceEnvelope.getHeldAmount());
+                safeAmount(sourceEnvelope.getTotalRemainingAmount())
+                        .subtract(safeAmount(sourceEnvelope.getHeldAmount()));
 
         if (amount.compareTo(availableVaultBalance) > 0) {
             throw new IllegalStateException("Insufficient funds in vault.");
@@ -554,8 +557,17 @@ public class EnvelopeService {
         remainingLimit = remainingLimit.compareTo(BigDecimal.ZERO) < 0 ? BigDecimal.ZERO : remainingLimit;
 
         // Ã¢Å“â€¦ VAULT CAP FIX
+        BigDecimal totalRemaining = envelope.getTotalRemainingAmount() != null
+                ? envelope.getTotalRemainingAmount()
+                : BigDecimal.ZERO;
+
+        BigDecimal heldAmount = envelope.getHeldAmount() != null
+                ? envelope.getHeldAmount()
+                : BigDecimal.ZERO;
+
+//        BigDecimal availableVaultBalance = totalRemaining.subtract(heldAmount);
         BigDecimal availableVaultBalance =
-                envelope.getTotalRemainingAmount().subtract(envelope.getHeldAmount());
+                safeAmount(envelope.getTotalRemainingAmount()).subtract(safeAmount(envelope.getHeldAmount()));
 
         if (remainingLimit.compareTo(availableVaultBalance) > 0) {
             remainingLimit = availableVaultBalance;
@@ -684,8 +696,12 @@ public class EnvelopeService {
 
         if (amount.compareTo(source.getRemainingAmount()) > 0) throw new IllegalStateException("Exceeds period limit: 🥲" + source.getRemainingAmount());
 //        if (amount.compareTo(source.getTotalRemainingAmount()) > 0) throw new IllegalStateException("Insufficient funds");
+
+
+//        BigDecimal availableVaultBalance = totalRemaining.subtract(heldAmount);
         BigDecimal availableVaultBalance =
-                source.getTotalRemainingAmount().subtract(source.getHeldAmount());
+                safeAmount(source.getTotalRemainingAmount())
+                        .subtract(safeAmount(source.getHeldAmount()));
 
         if (amount.compareTo(availableVaultBalance) > 0) {
             throw new IllegalStateException("Insufficient funds");
@@ -747,7 +763,8 @@ public class EnvelopeService {
 //        envelopeRepository.save(source);
 
         source.setRemainingAmount(source.getRemainingAmount().subtract(amount));
-        source.setHeldAmount(source.getHeldAmount().add(amount));
+//        source.setHeldAmount(source.getHeldAmount().add(amount));
+        source.setHeldAmount(safeAmount(source.getHeldAmount()).add(amount));
         envelopeRepository.save(source);
 
         TransactionLog txn = TransactionLog.builder()
@@ -817,7 +834,8 @@ public class EnvelopeService {
 //            source.setRemainingAmount(source.getRemainingAmount().add(amount));
 //            envelopeRepository.save(source);
 
-            source.setHeldAmount(source.getHeldAmount().subtract(amount));
+//            source.setHeldAmount(source.getHeldAmount().subtract(amount));
+            source.setHeldAmount(safeAmount(source.getHeldAmount()).subtract(amount));
             source.setRemainingAmount(source.getRemainingAmount().add(amount));
             envelopeRepository.save(source);
 
@@ -947,6 +965,7 @@ public class EnvelopeService {
         envelope.setCreatedAt(fetchCurrentDateTimeFromDatabase());
         envelope.setInitialAmount(amount);
         envelope.setTotalRemainingAmount(amount);
+        envelope.setHeldAmount(BigDecimal.ZERO);
         envelopeRepository.save(envelope);
 
         recalculateTargetEnvelopeLimit(envelope, budget);
@@ -1343,6 +1362,10 @@ public class EnvelopeService {
 
     private boolean shouldUseProviderBackedP2p(User sender, User recipient) {
         return false; // keep internal-only for now
+    }
+
+    private BigDecimal safeAmount(BigDecimal value) {
+        return value != null ? value : BigDecimal.ZERO;
     }
 
 }
