@@ -21,14 +21,17 @@ public class WebhookService {
     private final WalletWebhookService walletWebhookService;
     private final PaymentGatewayResolver paymentGatewayResolver;
 
+    private final ExternalTransferSettlementService externalTransferSettlementService;
+
     public WebhookService(
             WebhookEventService webhookEventService,
             WalletWebhookService walletWebhookService,
-            PaymentGatewayResolver paymentGatewayResolver
-    ) {
+            PaymentGatewayResolver paymentGatewayResolver,
+            ExternalTransferSettlementService externalTransferSettlementService) {
         this.webhookEventService = webhookEventService;
         this.walletWebhookService = walletWebhookService;
         this.paymentGatewayResolver = paymentGatewayResolver;
+        this.externalTransferSettlementService = externalTransferSettlementService;
     }
 
     public void processSecureWaveWebhook(String signatureHeader, String rawPayload) {
@@ -63,15 +66,34 @@ public class WebhookService {
         try {
             if (isFundingEvent(eventType)) {
                 walletWebhookService.processFundingWebhook(cleanPayload);
+
+            } else if (isSecureWaveTransferSuccessEvent(eventType)) {
+                externalTransferSettlementService.settleExternalTransfer(
+                        externalReference,
+                        "SUCCESS"
+                );
+
+            } else if (isSecureWaveTransferFailedEvent(eventType)) {
+                externalTransferSettlementService.settleExternalTransfer(
+                        externalReference,
+                        "FAILED"
+                );
+
             } else {
                 logger.info("Ignoring unsupported SecureWave webhook event type {}", eventType);
             }
+
             webhookEventService.markProcessed(event.getId());
         } catch (Exception e) {
             logger.error("Webhook processing failed for event {}", event.getId(), e);
             webhookEventService.markFailed(event.getId(), e.getMessage());
             throw e;
         }
+
+
+
+
+
     }
 
     private String normalizePayload(String rawPayload) {
@@ -214,5 +236,26 @@ public class WebhookService {
     private boolean isFundingEvent(String eventType) {
         return "SUCCESSFUL_TRANSACTION".equalsIgnoreCase(eventType)
                 || "payment_successful".equalsIgnoreCase(eventType);
+    }
+
+    private boolean isSecureWaveTransferSuccessEvent(String eventType) {
+        if (eventType == null) return false;
+
+        String u = eventType.toUpperCase();
+
+        return (u.contains("TRANSFER") && (u.contains("SUCCESS") || u.contains("SUCCESSFUL")))
+                || (u.contains("WITHDRAWAL") && (u.contains("SUCCESS") || u.contains("SUCCESSFUL")))
+                || (u.contains("DEBIT") && (u.contains("SUCCESS") || u.contains("SUCCESSFUL")));
+    }
+    private boolean isSecureWaveTransferFailedEvent(String eventType) {
+        if (eventType == null) return false;
+
+        String u = eventType.toUpperCase();
+
+        return (u.contains("TRANSFER") && (u.contains("FAIL") || u.contains("FAILED")))
+                || (u.contains("WITHDRAWAL") && (u.contains("FAIL") || u.contains("FAILED")))
+                || (u.contains("DEBIT") && (u.contains("FAIL") || u.contains("FAILED")))
+                || u.contains("REVERSED")
+                || u.contains("REVERSAL");
     }
 }

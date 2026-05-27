@@ -469,20 +469,17 @@ public class UserService implements UserDetailsService {
                 PageRequest.of(0, P2P_SEARCH_LIMIT)
         );
         List<UserSummaryResponse> response = results.stream()
-                // 2. Filter self (Lightweight string check)
-                .filter(u -> !u.getEmail().equalsIgnoreCase(currentEmail))
+                .filter(u -> currentEmail == null || !u.getEmail().equalsIgnoreCase(currentEmail))
+                .filter(u -> u.getBvn() != null && !u.getBvn().isBlank())
                 .map(u -> {
-                    // 3. Generate Handle
                     String handle = (u.getUserTag() != null && !u.getUserTag().isEmpty())
                             ? u.getUserTag()
                             : "@" + u.getEmail().split("@")[0];
 
-                    // 4. Generate Display Name
                     String displayName = "Unknown";
                     if (u.getFirstName() != null && !u.getFirstName().isEmpty()) {
                         displayName = (u.getFirstName() + " " + Objects.toString(u.getLastName(), "")).trim();
                     } else {
-                        // Fallback to handle
                         String cleanName = handle.startsWith("@") ? handle.substring(1) : handle;
                         displayName = cleanName.substring(0, 1).toUpperCase() + cleanName.substring(1);
                     }

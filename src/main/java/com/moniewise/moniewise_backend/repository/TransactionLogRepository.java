@@ -1,6 +1,7 @@
 package com.moniewise.moniewise_backend.repository;
 
 import com.moniewise.moniewise_backend.entity.TransactionLog;
+import com.moniewise.moniewise_backend.enums.TransactionStatus;
 import com.moniewise.moniewise_backend.enums.TransactionType;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -71,14 +72,19 @@ public interface TransactionLogRepository extends JpaRepository<TransactionLog, 
 
     // 👇 ADD THIS NUCLEAR METHOD 👇
     // 👇 FIX: Use ABS() to handle both negative and positive log entries correctly
-    @Query("SELECT COALESCE(SUM(ABS(t.amount)), 0) FROM TransactionLog t " +
-            "WHERE t.sourceEnvelopeId = :envelopeId " +
-            "AND t.createdAt >= :startDate " +
-            "AND t.transactionType IN (:types)")
+    @Query("""
+    SELECT COALESCE(SUM(ABS(t.amount)), 0)
+    FROM TransactionLog t
+    WHERE t.sourceEnvelopeId = :envelopeId
+      AND t.createdAt >= :startDate
+      AND t.transactionType IN :types
+      AND t.status IN :statuses
+""")
     BigDecimal calculateTotalSpent(
             @Param("envelopeId") Long envelopeId,
             @Param("startDate") LocalDateTime startDate,
-            @Param("types") List<TransactionType> types
+            @Param("types") List<TransactionType> types,
+            @Param("statuses") List<TransactionStatus> statuses
     );
 
     @Query("""
@@ -108,4 +114,7 @@ public interface TransactionLogRepository extends JpaRepository<TransactionLog, 
             @Param("end") LocalDateTime end,
             @Param("types") Set<TransactionType> types
     );
+
+    Optional<TransactionLog> findByProviderReference(String providerReference);
+
 }

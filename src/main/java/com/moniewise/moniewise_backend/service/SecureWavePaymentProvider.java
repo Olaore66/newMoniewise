@@ -2,18 +2,14 @@ package com.moniewise.moniewise_backend.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.moniewise.moniewise_backend.dto.response.BvnVerificationResultDto;
-import com.moniewise.moniewise_backend.entity.KycProfile;
 import com.moniewise.moniewise_backend.entity.User;
 import com.moniewise.moniewise_backend.externalTransfers.PaymentProvider;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.cache.annotation.Cacheable;
 import org.springframework.context.annotation.Primary;
 import org.springframework.http.*;
 import org.springframework.stereotype.Service;
-import org.springframework.util.LinkedMultiValueMap;
-import org.springframework.util.MultiValueMap;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.web.util.UriComponentsBuilder;
@@ -334,8 +330,8 @@ public class SecureWavePaymentProvider implements PaymentProvider {
             if (response.getStatusCode() == HttpStatus.OK) {
                 Map<String, Object> body = response.getBody();
                 Map<String, Object> data = (Map<String, Object>) body.get("data");
-                
-                return data.get("transaction_reference").toString(); 
+
+                return data.get("transaction_reference").toString();
             }
         } catch (Exception e) {
             log.error("SecureWave Transfer Failed: {}", e.getMessage());
@@ -457,14 +453,21 @@ public class SecureWavePaymentProvider implements PaymentProvider {
     public String initiateWithdrawal(String email, BigDecimal amount, String narration) {
         String url = baseUrl + "/customer_withdrawals/withdraw";
 
-        MultiValueMap<String, String> payload = new LinkedMultiValueMap<>();
-        payload.add("customer_email", email);
-        payload.add("amount", amount.toPlainString());
-        payload.add("narration", narration);
+//        MultiValueMap<String, String> payload = new LinkedMultiValueMap<>();
+//        payload.add("customer_email", email);
+//        payload.add("amount", amount.toPlainString());
+//        payload.add("narration", narration);
+
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("customer_email", email);
+        payload.put("amount", amount);
+        payload.put("narration", narration);
 
         try {
             ResponseEntity<Map> response = restTemplate.postForEntity(
-                    url, new HttpEntity<>(payload, getSecureWaveFormHeaders()), Map.class);
+                    url,
+                    new HttpEntity<>(payload, getSecureWaveFormHeaders()),
+                    Map.class);
 
             if (response.getStatusCode() == HttpStatus.OK && response.getBody() != null) {
                 Map<String, Object> body = response.getBody();

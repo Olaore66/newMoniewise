@@ -179,6 +179,8 @@ public class Envelope {
     @Column(name = "deleted_at")
     private LocalDateTime deletedAt;
 
+    private BigDecimal heldAmount = BigDecimal.ZERO;
+
     // Soft Delete Helper
     public boolean isDeleted() {
         return deletedAt != null;
