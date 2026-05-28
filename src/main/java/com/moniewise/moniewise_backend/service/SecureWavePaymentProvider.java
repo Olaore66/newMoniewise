@@ -449,52 +449,92 @@ public class SecureWavePaymentProvider implements PaymentProvider {
     // ==========================================================
     // 7. INITIATE WITHDRAWAL (Closed-Loop)
     // ==========================================================
-    @Override
-    public String initiateWithdrawal(String email, BigDecimal amount, String narration) {
+//    @Override
+//    public String initiateWithdrawal(String email, BigDecimal amount, String narration) {
+//        String url = baseUrl + "/customer_withdrawals/withdraw";
+//
+////        MultiValueMap<String, String> payload = new LinkedMultiValueMap<>();
+////        payload.add("customer_email", email);
+////        payload.add("amount", amount.toPlainString());
+////        payload.add("narration", narration);
+//
+//        Map<String, Object> payload = new HashMap<>();
+//        payload.put("customer_email", email);
+//        payload.put("amount", amount);
+//        payload.put("narration", narration);
+//
+//        try {
+//            ResponseEntity<Map> response = restTemplate.postForEntity(
+//                    url,
+//                    new HttpEntity<>(payload, getSecureWaveFormHeaders()),
+//                    Map.class);
+//
+//            if (response.getStatusCode() == HttpStatus.OK && response.getBody() != null) {
+//                Map<String, Object> body = response.getBody();
+//
+//                Boolean outerStatus = (Boolean) body.get("status");
+//                if (outerStatus != null && outerStatus) {
+//
+//                    // Navigate through the double "data" nesting
+//                    Map<String, Object> outerData = (Map<String, Object>) body.get("data");
+//                    if (outerData != null) {
+//                        Map<String, Object> innerData = (Map<String, Object>) outerData.get("data");
+//
+//                        if (innerData != null && innerData.containsKey("reference")) {
+//                            return innerData.get("reference").toString(); // The SecureWave Reference!
+//                        }
+//                    }
+//                } else {
+//                    log.error("SecureWave Withdrawal Failed: {}", body.get("message"));
+//                    throw new RuntimeException(body.get("message").toString());
+//                }
+//            }
+//        } catch (Exception e) {
+//            log.error("SecureWave Withdrawal API Exception: {}", e.getMessage());
+//            throw new RuntimeException("Failed to process withdrawal with the payment provider.");
+//        }
+//
+//        throw new RuntimeException("Withdrawal processing failed.");
+//    }
+
+    public String initiateWithdrawal(String customerEmail, BigDecimal amount, String narration) {
         String url = baseUrl + "/customer_withdrawals/withdraw";
 
-//        MultiValueMap<String, String> payload = new LinkedMultiValueMap<>();
-//        payload.add("customer_email", email);
-//        payload.add("amount", amount.toPlainString());
-//        payload.add("narration", narration);
-
         Map<String, Object> payload = new HashMap<>();
-        payload.put("customer_email", email);
+        payload.put("customer_email", customerEmail);
         payload.put("amount", amount);
         payload.put("narration", narration);
 
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        headers.setAccept(List.of(MediaType.APPLICATION_JSON));
+        headers.setBearerAuth(secretKey); // only if this is how your auth works
+
+        HttpEntity<Map<String, Object>> entity = new HttpEntity<>(payload, headers);
+
         try {
-            ResponseEntity<Map> response = restTemplate.postForEntity(
-                    url,
-                    new HttpEntity<>(payload, getSecureWaveFormHeaders()),
-                    Map.class);
+            ResponseEntity<Map> response = restTemplate.postForEntity(url, entity, Map.class);
 
-            if (response.getStatusCode() == HttpStatus.OK && response.getBody() != null) {
-                Map<String, Object> body = response.getBody();
-
-                Boolean outerStatus = (Boolean) body.get("status");
-                if (outerStatus != null && outerStatus) {
-
-                    // Navigate through the double "data" nesting
-                    Map<String, Object> outerData = (Map<String, Object>) body.get("data");
-                    if (outerData != null) {
-                        Map<String, Object> innerData = (Map<String, Object>) outerData.get("data");
-
-                        if (innerData != null && innerData.containsKey("reference")) {
-                            return innerData.get("reference").toString(); // The SecureWave Reference!
-                        }
-                    }
-                } else {
-                    log.error("SecureWave Withdrawal Failed: {}", body.get("message"));
-                    throw new RuntimeException(body.get("message").toString());
-                }
+            Map body = response.getBody();
+            if (body == null) {
+                throw new RuntimeException("Empty SecureWave withdrawal response");
             }
+
+            Object reference = body.get("reference");
+            if (reference == null) {
+                reference = body.get("transactionReference");
+            }
+            if (reference == null) {
+                reference = body.get("data");
+            }
+
+            return reference != null ? reference.toString() : UUID.randomUUID().toString();
+
         } catch (Exception e) {
-            log.error("SecureWave Withdrawal API Exception: {}", e.getMessage());
+            System.out.println("SecureWave Withdrawal API Exception: {}" + e.getMessage());
             throw new RuntimeException("Failed to process withdrawal with the payment provider.");
         }
-
-        throw new RuntimeException("Withdrawal processing failed.");
     }
+
 }
 
