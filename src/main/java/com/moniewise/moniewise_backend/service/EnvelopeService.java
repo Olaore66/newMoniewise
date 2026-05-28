@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.moniewise.moniewise_backend.config.BudgetLifeCycleManager;
 import com.moniewise.moniewise_backend.config.GenericNotificationEvent;
 import com.moniewise.moniewise_backend.controller.BudgetController;
+import com.moniewise.moniewise_backend.dto.ExternalTransferQuoteResponse;
+import com.moniewise.moniewise_backend.dto.TransferFeeQuote;
 import com.moniewise.moniewise_backend.dto.request.EnvelopeRequest;
 import com.moniewise.moniewise_backend.dto.request.P2PTransferRequest;
 import com.moniewise.moniewise_backend.dto.response.EnvelopeResponse;
@@ -30,7 +32,10 @@ import java.math.RoundingMode;
 import java.time.*;
 import java.time.format.DateTimeParseException;
 import java.time.temporal.ChronoUnit;
-import java.util.*;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 @Service
@@ -48,15 +53,14 @@ public class EnvelopeService {
     private final WalletService walletService;
     private final ScheduledTaskRepository scheduledTaskRepository;
     private final BudgetLifeCycleManager budgetLifeCycleManager;
-
     private final BudgetService budgetService;
     private final PendingDisbursementRepository pendingDisbursementRepository;
     private final JdbcTemplate jdbcTemplate;
-
     private final BeneficiaryService beneficiaryService;
-
     private final PaymentProvider paymentProvider;
     private final ProvidusExpressGateway providusExpressGateway;
+
+    private final TransferFeeService transferFeeService;
 
     @Value("${moniewise.revenue.wallet.user-id}")
     private Long revenueWalletUserId;
@@ -73,7 +77,7 @@ public class EnvelopeService {
             @Lazy BudgetLifeCycleManager budgetLifeCycleManager,
             BudgetService budgetService, PendingDisbursementRepository pendingDisbursementRepository,
             JdbcTemplate jdbcTemplate, BeneficiaryService beneficiaryService, PaymentProvider paymentProvider,
-            ProvidusExpressGateway providusExpressGateway) {
+            ProvidusExpressGateway providusExpressGateway, TransferFeeService transferFeeService) {
         this.envelopeRepository = envelopeRepository;
         this.budgetRepository = budgetRepository;
         this.revenueLogRepository = revenueLogRepository;
@@ -90,6 +94,7 @@ public class EnvelopeService {
         this.beneficiaryService = beneficiaryService;
         this.paymentProvider = paymentProvider;
         this.providusExpressGateway = providusExpressGateway;
+        this.transferFeeService = transferFeeService;
     }
 
     @PostConstruct
@@ -549,7 +554,11 @@ public class EnvelopeService {
                 envelopeId,
                 periodStart,
                 spendingTypes,
-                List.of(TransactionStatus.COMPLETED)
+                List.of(
+                        TransactionStatus.COMPLETED,
+                        TransactionStatus.PROCESSING,
+                        TransactionStatus.PENDING
+                )
         );
 
         BigDecimal remainingLimit = limit.subtract(spentAmount);
@@ -694,8 +703,25 @@ public class EnvelopeService {
         LocalDateTime now = fetchCurrentDateTimeFromDatabase();
         validateTransferRules(source, source.getBudget(), now);
 
-        if (amount.compareTo(source.getRemainingAmount()) > 0) throw new IllegalStateException("Exceeds period limit: 🥲" + source.getRemainingAmount());
-//        if (amount.compareTo(source.getTotalRemainingAmount()) > 0) throw new IllegalStateException("Insufficient funds");
+        String providerName = providusExpressGateway.isEnabled()
+                ? ProvidusExpressGateway.PROVIDER_NAME
+                : SecureWaveGateway.PROVIDER_NAME;
+
+        TransferFeeQuote feeQuote = transferFeeService.quoteFee(
+                providerName,
+                TransferFeeTransferType.ENVELOPE_TO_EXTERNAL,
+                amount
+        );
+
+        BigDecimal fee = feeQuote.getFee();
+        BigDecimal totalDebit = feeQuote.getTotalDebit();
+
+        if (totalDebit.compareTo(source.getRemainingAmount()) > 0) {
+            throw new IllegalStateException("Amount plus transfer fee exceeds period limit. Available: ₦" + source.getRemainingAmount());
+        }
+        //        if (amount.compareTo(source.getTotalRemainingAmount()) > 0) throw new IllegalStateException("Insufficient funds");
+
+
 
 
 //        BigDecimal availableVaultBalance = totalRemaining.subtract(heldAmount);
@@ -703,8 +729,8 @@ public class EnvelopeService {
                 safeAmount(source.getTotalRemainingAmount())
                         .subtract(safeAmount(source.getHeldAmount()));
 
-        if (amount.compareTo(availableVaultBalance) > 0) {
-            throw new IllegalStateException("Insufficient funds");
+        if (totalDebit.compareTo(availableVaultBalance) > 0) {
+            throw new IllegalStateException("Insufficient funds including transfer fee");
         }
 //        String resolvedName = resolveExternalRecipientName(externalAccount, linkedWallet);
 //        if (resolvedName == null) {
@@ -758,14 +784,38 @@ public class EnvelopeService {
 
         }
 
-//        source.setTotalRemainingAmount(source.getTotalRemainingAmount().subtract(amount));
-//        source.setRemainingAmount(source.getRemainingAmount().subtract(amount));
-//        envelopeRepository.save(source);
+//      source.setTotalRemainingAmount(source.getTotalRemainingAmount().subtract(amount));
+//      source.setRemainingAmount(source.getRemainingAmount().subtract(amount));
+//      envelopeRepository.save(source);
 
-        source.setRemainingAmount(source.getRemainingAmount().subtract(amount));
-//        source.setHeldAmount(source.getHeldAmount().add(amount));
-        source.setHeldAmount(safeAmount(source.getHeldAmount()).add(amount));
+        source.setRemainingAmount(source.getRemainingAmount().subtract(totalDebit));
+        source.setHeldAmount(safeAmount(source.getHeldAmount()).add(totalDebit));
+
+//      source.setRemainingAmount(source.getRemainingAmount().subtract(totalDebit));
+//      source.setHeldAmount(safeAmount(source.getHeldAmount()).add(totalDebit));
+
         envelopeRepository.save(source);
+
+        TransactionLog feeTxn = null;
+
+        if (fee.compareTo(BigDecimal.ZERO) > 0) {
+            feeTxn = TransactionLog.builder()
+                    .userId(user.getId())
+                    .budgetId(source.getBudget().getId())
+                    .sourceEnvelopeId(sourceId)
+                    .externalAccountId(accountNumber)
+                    .amount(fee.negate())
+                    .fee(BigDecimal.ZERO)
+                    .transactionType(TransactionType.ENVELOPE_EXTERNAL_TRANSFER_FEE)
+                    .status(TransactionStatus.PENDING)
+                    .reference(myReference + "-FEE")
+                    .providerName(providerName)
+                    .description("External transfer fee for " + myReference)
+                    .createdAt(LocalDateTime.now())
+                    .build();
+
+            transactionLogRepository.save(feeTxn);
+        }
 
         TransactionLog txn = TransactionLog.builder()
                 .userId(user.getId())
@@ -774,7 +824,8 @@ public class EnvelopeService {
 //                .externalAccountId(externalAccount.getAccountNumber())
                 .externalAccountId(accountNumber)
                 .amount(amount.negate())
-                .fee(BigDecimal.ZERO)
+                .fee(fee)
+//                .fee(BigDecimal.ZERO)
                 .transactionType(TransactionType.ENVELOPE_TO_EXTERNAL)
                 .status(TransactionStatus.PENDING)
                 .reference(myReference)
@@ -806,13 +857,16 @@ public class EnvelopeService {
                 );
             }
             txn.setStatus(TransactionStatus.PROCESSING);
-            if (providusExpressGateway.isEnabled()) {
-                txn.setProviderName(ProvidusExpressGateway.PROVIDER_NAME);
-            } else {
-                txn.setProviderName(SecureWaveGateway.PROVIDER_NAME);
-            }
+            txn.setProviderName(providerName);
             txn.setProviderReference(providerRef);
             transactionLogRepository.save(txn);
+
+            if (feeTxn != null) {
+                feeTxn.setStatus(TransactionStatus.PROCESSING);
+                feeTxn.setProviderReference(providerRef);
+                transactionLogRepository.save(feeTxn);
+            }
+
             // Ã¢Å“â€¦ ADD NEW EVENT
             Map<String, Object> params = Map.of(
                     "amount", String.format("%,.2f", amount),
@@ -835,13 +889,20 @@ public class EnvelopeService {
 //            envelopeRepository.save(source);
 
 //            source.setHeldAmount(source.getHeldAmount().subtract(amount));
-            source.setHeldAmount(safeAmount(source.getHeldAmount()).subtract(amount));
-            source.setRemainingAmount(source.getRemainingAmount().add(amount));
+            source.setHeldAmount(safeAmount(source.getHeldAmount()).subtract(totalDebit));
+            source.setRemainingAmount(source.getRemainingAmount().add(totalDebit));
+
             envelopeRepository.save(source);
 
             txn.setStatus(TransactionStatus.FAILED);
             txn.setDescription(description + " | Failed: " + e.getMessage());
             transactionLogRepository.save(txn);
+
+            if (feeTxn != null) {
+                feeTxn.setStatus(TransactionStatus.FAILED);
+                feeTxn.setDescription("External transfer fee failed/reversed for " + myReference);
+                transactionLogRepository.save(feeTxn);
+            }
             throw new RuntimeException("Transfer failed: " + e.getMessage());
         }
 
@@ -1368,5 +1429,89 @@ public class EnvelopeService {
         return value != null ? value : BigDecimal.ZERO;
     }
 
+    @Transactional
+    public ExternalTransferQuoteResponse quoteExternalTransfer(
+            Long envelopeId,
+            BigDecimal amount,
+            String note,
+            String email
+    ) {
+        if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new IllegalArgumentException("Amount must be greater than zero");
+        }
+
+        User user = userService.findByEmail(email);
+
+        Envelope source = envelopeRepository.findById(envelopeId)
+                .orElseThrow(() -> new EntityNotFoundException("Envelope not found"));
+
+        if (!source.getBudget().getUser().getId().equals(user.getId())) {
+            throw new SecurityException("You are not allowed to transfer from this envelope");
+        }
+
+        BigDecimal availableLimit = getRemainingLimit(envelopeId, email);
+
+        source = envelopeRepository.findById(envelopeId)
+                .orElseThrow(() -> new EntityNotFoundException("Envelope not found during refresh"));
+
+        String providerName = providusExpressGateway.isEnabled()
+                ? ProvidusExpressGateway.PROVIDER_NAME
+                : SecureWaveGateway.PROVIDER_NAME;
+
+        TransferFeeQuote feeQuote = transferFeeService.quoteFee(
+                providerName,
+                TransferFeeTransferType.ENVELOPE_TO_EXTERNAL,
+                amount
+        );
+
+        BigDecimal fee = feeQuote.getFee();
+        BigDecimal totalDebit = feeQuote.getTotalDebit();
+
+        if (totalDebit.compareTo(availableLimit) > 0) {
+            throw new IllegalStateException("Amount plus transfer fee exceeds available envelope balance");
+        }
+
+        BigDecimal availableVaultBalance =
+                safeAmount(source.getTotalRemainingAmount())
+                        .subtract(safeAmount(source.getHeldAmount()));
+
+        if (totalDebit.compareTo(availableVaultBalance) > 0) {
+            throw new IllegalStateException("Insufficient funds including transfer fee");
+        }
+
+        Wallet wallet = walletService.getWalletByUserId(user.getId());
+
+        if (wallet.getSettlementAccountNumber() == null || wallet.getSettlementAccountNumber().isBlank()) {
+            throw new IllegalStateException("Please link a withdrawal bank account before transferring.");
+        }
+
+        return new ExternalTransferQuoteResponse(
+                envelopeId,
+                amount,
+                fee,
+                totalDebit,
+                feeQuote.getRecipientReceives(),
+                providerName,
+                feeQuote.getFeeType().name(),
+                feeQuote.getFeeSource().name(),
+                buildEnvelopeTransferFeeMessage(amount, fee, totalDebit),
+                wallet.getSettlementBankName(),
+                wallet.getSettlementAccountNumber(),
+                wallet.getSettlementAccountName()
+        );
+    }
+
+    private String buildEnvelopeTransferFeeMessage(BigDecimal amount, BigDecimal fee, BigDecimal totalDebit) {
+        if (fee.compareTo(BigDecimal.ZERO) <= 0) {
+            return "No transfer fee applies. ₦" + formatMoney(amount) + " will be sent.";
+        }
+
+        return "A ₦" + formatMoney(fee) + " transfer fee applies. ₦"
+                + formatMoney(totalDebit) + " will be deducted from this envelope.";
+    }
+
+    private String formatMoney(BigDecimal amount) {
+        return amount.setScale(2, RoundingMode.HALF_UP).stripTrailingZeros().toPlainString();
+    }
 }
 

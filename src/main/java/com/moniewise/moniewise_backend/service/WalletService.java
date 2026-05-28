@@ -2,6 +2,7 @@ package com.moniewise.moniewise_backend.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.moniewise.moniewise_backend.dto.TransferFeeQuote;
 import com.moniewise.moniewise_backend.dto.request.UpdateBankDetailsRequest;
 import com.moniewise.moniewise_backend.dto.request.WithdrawalRequest;
 import com.moniewise.moniewise_backend.dto.response.WithdrawalQuoteResponse;
@@ -9,12 +10,8 @@ import com.moniewise.moniewise_backend.entity.TransactionLog;
 import com.moniewise.moniewise_backend.entity.User;
 import com.moniewise.moniewise_backend.entity.Wallet;
 import com.moniewise.moniewise_backend.entity.Withdrawal;
-import com.moniewise.moniewise_backend.enums.NotificationType;
-import com.moniewise.moniewise_backend.enums.TransactionStatus;
+import com.moniewise.moniewise_backend.enums.*;
 import com.moniewise.moniewise_backend.exception.InsufficientFundsException;
-import com.moniewise.moniewise_backend.enums.TransactionType;
-import com.moniewise.moniewise_backend.enums.WalletStatus;
-import com.moniewise.moniewise_backend.enums.WithdrawalStatus;
 import com.moniewise.moniewise_backend.psp.PaymentGateway;
 import com.moniewise.moniewise_backend.psp.PaymentGatewayResolver;
 import com.moniewise.moniewise_backend.psp.ProvidusExpressGateway;
@@ -34,13 +31,7 @@ import javax.annotation.PostConstruct;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Locale;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.CompletableFuture;
 
 import static com.moniewise.moniewise_backend.enums.TransactionType.WALLET_DEDUCTION;
@@ -64,6 +55,8 @@ public class WalletService {
     private final UserService userService;
     private final WithdrawalFeeService withdrawalFeeService;
 
+    private final TransferFeeService transferFeeService;
+
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Autowired
@@ -79,8 +72,8 @@ public class WalletService {
             ProvidusExpressGateway providusExpressGateway,
             WithdrawalRepository withdrawalRepository,
             @Lazy UserService userService,
-            WithdrawalFeeService withdrawalFeeService
-    ) {
+            WithdrawalFeeService withdrawalFeeService,
+            TransferFeeService transferFeeService) {
         this.walletRepository = walletRepository;
         this.transactionLogRepository = transactionLogRepository;
         this.notificationService = notificationService;
@@ -90,6 +83,7 @@ public class WalletService {
         this.withdrawalRepository = withdrawalRepository;
         this.userService = userService;
         this.withdrawalFeeService = withdrawalFeeService;
+        this.transferFeeService = transferFeeService;
     }
 
     public Wallet getWalletByUserId(Long userId) {
@@ -323,16 +317,26 @@ public class WalletService {
             if ("SUCCESSFUL_TRANSACTION".equalsIgnoreCase(eventType)) {
                 JsonNode data = root.path("eventData");
                 String email = data.path("customer").path("email").asText();
-                BigDecimal amountPaid = data.path("amountPaid").decimalValue();
+                BigDecimal grossAmount = data.path("amountPaid").decimalValue();
+
+                TransferFeeQuote feeQuote = transferFeeService.quoteIncomingFee(
+                        "SECUREWAVE",
+                        TransferFeeTransferType.WALLET_DEPOSIT,
+                        grossAmount
+                );
+
+                BigDecimal fee = feeQuote.getFee();
+                BigDecimal netAmount = feeQuote.getRecipientReceives();
+
                 String transactionReference = data.path("transactionReference").asText();
                 String paymentDescription = data.path("paymentDescription").asText();
                 LocalDateTime transactionTime = parseTransactionDate(data.path("paidOn").asText());
 
                 this.processSuccessfulFunding(
                         email,
-                        amountPaid,
-                        amountPaid,
-                        BigDecimal.ZERO,
+                        netAmount,
+                        grossAmount,
+                        fee,
                         transactionReference,
                         paymentDescription,
                         transactionTime
@@ -343,10 +347,16 @@ public class WalletService {
             if ("payment_successful".equalsIgnoreCase(notificationStatus)) {
                 String email = root.path("customer").path("email").asText();
                 BigDecimal grossAmount = decimalFromNode(root.path("amount"));
-                BigDecimal fee = decimalFromNode(root.path("fees"));
-                BigDecimal netAmount = root.hasNonNull("settlement_amount")
-                        ? decimalFromNode(root.path("settlement_amount"))
-                        : grossAmount.subtract(fee);
+
+                TransferFeeQuote feeQuote = transferFeeService.quoteIncomingFee(
+                        "SECUREWAVE",
+                        TransferFeeTransferType.WALLET_DEPOSIT,
+                        grossAmount
+                );
+
+                BigDecimal fee = feeQuote.getFee();
+                BigDecimal netAmount = feeQuote.getRecipientReceives();
+
                 String transactionReference = root.path("transaction_id").asText();
                 String paymentDescription = String.format("Deposit of NGN %s", grossAmount);
 
@@ -519,13 +529,26 @@ public class WalletService {
         TransactionLog log = new TransactionLog();
         log.setUserId(user.getId());
         log.setAmount(netAmount);
-        log.setFee(fee);
+        log.setFee(fee != null ? fee : BigDecimal.ZERO);
         log.setTransactionType(WALLET_DEPOSIT);
         log.setReference(ref);
         log.setDescription(desc + " | Gross: ₦" + grossAmount);
         log.setStatus(TransactionStatus.COMPLETED);
         log.setCreatedAt(time);
         transactionLogRepository.save(log);
+
+        if (fee != null && fee.compareTo(BigDecimal.ZERO) > 0) {
+            TransactionLog feeLog = new TransactionLog();
+            feeLog.setUserId(user.getId());
+            feeLog.setAmount(fee.negate());
+            feeLog.setFee(BigDecimal.ZERO);
+            feeLog.setTransactionType(TransactionType.WALLET_DEPOSIT_FEE);
+            feeLog.setReference(ref + "-FEE");
+            feeLog.setDescription("Deposit fee for " + ref);
+            feeLog.setStatus(TransactionStatus.COMPLETED);
+            feeLog.setCreatedAt(time);
+            transactionLogRepository.save(feeLog);
+        }
 
         CompletableFuture.runAsync(() -> {
             try {

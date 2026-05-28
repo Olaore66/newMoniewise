@@ -1,5 +1,7 @@
 package com.moniewise.moniewise_backend.controller;
 
+import com.moniewise.moniewise_backend.dto.ExternalTransferQuoteRequest;
+import com.moniewise.moniewise_backend.dto.ExternalTransferQuoteResponse;
 import com.moniewise.moniewise_backend.dto.request.EnvelopeRequest;
 import com.moniewise.moniewise_backend.dto.request.ExternalTransferRequest;
 import com.moniewise.moniewise_backend.dto.request.P2PTransferRequest;
@@ -14,8 +16,10 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.web.bind.annotation.*;
 
+import javax.validation.Valid;
 import java.util.Map;
 
 @RestController
@@ -265,6 +269,27 @@ public class EnvelopeController {
         return ResponseEntity.ok(Map.of(
                 "status", "success",
                 "message", "Funds unlocked! You can now spend."
+        ));
+    }
+
+    @PostMapping("/{envelopeId}/transfer-external/quote")
+    public ResponseEntity<?> quoteExternalTransfer(
+            @PathVariable Long envelopeId,
+            @Valid @RequestBody ExternalTransferQuoteRequest request,
+            @AuthenticationPrincipal UserDetails userDetails
+    ) {
+        ExternalTransferQuoteResponse quote =
+                envelopeService.quoteExternalTransfer(
+                        envelopeId,
+                        request.getAmount(),
+                        request.getNote(),
+                        userDetails.getUsername()
+                );
+
+        return ResponseEntity.ok(Map.of(
+                "status", true,
+                "message", "External transfer quote generated successfully",
+                "data", quote
         ));
     }
 
