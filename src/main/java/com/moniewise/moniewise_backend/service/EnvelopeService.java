@@ -679,7 +679,7 @@ public class EnvelopeService {
         if (providusExpressGateway.isEnabled()) {
             linkedWallet = hydrateExternalAccountFromLinkedBank(externalAccount, user);
         } else {
-            secureWaveBankInfo = paymentProvider.getWithdrawalBankInfo(user.getEmail());
+            secureWaveBankInfo = walletService.getLinkedBankInfo(user.getId(), user.getEmail());
 
             if (secureWaveBankInfo == null || secureWaveBankInfo.isEmpty()) {
                 throw new IllegalStateException("No withdrawal bank account found. Please set your withdrawal bank first.");
