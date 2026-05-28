@@ -765,7 +765,10 @@ public class WalletService {
         if (transactionLogRepository.findByReference(withdrawal.getClientReference()).isEmpty()) {
             TransactionLog logEntry = TransactionLog.builder()
                     .userId(withdrawal.getUserId())
-                    .externalAccountId(withdrawal.getAccountNumber())
+                    .externalAccountId(null)
+                    .externalBankName(withdrawal.getBankName())
+                    .externalAccountNumber(withdrawal.getAccountNumber())
+                    .externalAccountName(withdrawal.getAccountName())
                     .amount(withdrawal.getAmount())
                     .fee(fee)
                     .reference(withdrawal.getClientReference())
@@ -781,7 +784,10 @@ public class WalletService {
         if (fee.compareTo(BigDecimal.ZERO) > 0 && transactionLogRepository.findByReference(feeReference).isEmpty()) {
             TransactionLog feeLogEntry = TransactionLog.builder()
                     .userId(withdrawal.getUserId())
-                    .externalAccountId(withdrawal.getAccountNumber())
+                    .externalAccountId(null)
+                    .externalBankName(withdrawal.getBankName())
+                    .externalAccountNumber(withdrawal.getAccountNumber())
+                    .externalAccountName(withdrawal.getAccountName())
                     .amount(fee)
                     .fee(BigDecimal.ZERO)
                     .reference(feeReference)
