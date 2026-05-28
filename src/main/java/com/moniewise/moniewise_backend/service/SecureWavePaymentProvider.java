@@ -497,6 +497,7 @@ public class SecureWavePaymentProvider implements PaymentProvider {
 //        throw new RuntimeException("Withdrawal processing failed.");
 //    }
 
+    @Override
     public String initiateWithdrawal(String customerEmail, BigDecimal amount, String narration) {
         String url = baseUrl + "/customer_withdrawals/withdraw";
 
@@ -505,36 +506,63 @@ public class SecureWavePaymentProvider implements PaymentProvider {
         payload.put("amount", amount);
         payload.put("narration", narration);
 
-        HttpHeaders headers = new HttpHeaders();
+        HttpHeaders headers = getSecureWaveHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
         headers.setAccept(List.of(MediaType.APPLICATION_JSON));
-        headers.setBearerAuth(secretKey); // only if this is how your auth works
 
         HttpEntity<Map<String, Object>> entity = new HttpEntity<>(payload, headers);
 
         try {
             ResponseEntity<Map> response = restTemplate.postForEntity(url, entity, Map.class);
 
-            Map body = response.getBody();
-            if (body == null) {
-                throw new RuntimeException("Empty SecureWave withdrawal response");
+            if (!response.getStatusCode().is2xxSuccessful() || response.getBody() == null) {
+                throw new RuntimeException("SecureWave withdrawal failed with status: " + response.getStatusCode());
+            }
+
+            Map<String, Object> body = response.getBody();
+
+            Boolean outerStatus = (Boolean) body.get("status");
+            if (Boolean.FALSE.equals(outerStatus)) {
+                throw new RuntimeException(String.valueOf(body.getOrDefault("message", "Withdrawal failed")));
+            }
+
+            Object dataObj = body.get("data");
+
+            if (dataObj instanceof Map) {
+                Map<String, Object> outerData = (Map<String, Object>) dataObj;
+
+                Object innerDataObj = outerData.get("data");
+                if (innerDataObj instanceof Map) {
+                    Map<String, Object> innerData = (Map<String, Object>) innerDataObj;
+                    Object reference = innerData.get("reference");
+                    if (reference != null) {
+                        return reference.toString();
+                    }
+                }
+
+                Object reference = outerData.get("reference");
+                if (reference != null) {
+                    return reference.toString();
+                }
             }
 
             Object reference = body.get("reference");
-            if (reference == null) {
-                reference = body.get("transactionReference");
-            }
-            if (reference == null) {
-                reference = body.get("data");
+            if (reference != null) {
+                return reference.toString();
             }
 
-            return reference != null ? reference.toString() : UUID.randomUUID().toString();
+            throw new RuntimeException("SecureWave withdrawal response did not contain reference: " + body);
 
+        } catch (HttpClientErrorException e) {
+            log.error("SecureWave Withdrawal HTTP Error: status={}, body={}",
+                    e.getStatusCode(),
+                    e.getResponseBodyAsString()
+            );
+            throw new RuntimeException("Failed to process withdrawal with the payment provider.");
         } catch (Exception e) {
-            System.out.println("SecureWave Withdrawal API Exception: {}" + e.getMessage());
+            log.error("SecureWave Withdrawal API Exception: {}", e.getMessage(), e);
             throw new RuntimeException("Failed to process withdrawal with the payment provider.");
         }
     }
-
 }
 
