@@ -1,5 +1,6 @@
 package com.moniewise.moniewise_backend.dto.request;
 
+import com.moniewise.moniewise_backend.enums.Gender;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -19,10 +20,12 @@ public class ProfileRequest {
     private String lastName;  // Split this
     private String phone;
     private String bvn;       // 👈 CRITICAL ADDITION
+    private Gender gender;
     private BigDecimal monthlyIncome;
     private String mainExpense;
     private String savingsGoal;
     private String occupation;
+
     @Past
     private LocalDate dob;
 

@@ -9,17 +9,13 @@ import com.google.firebase.cloud.StorageClient;
 import com.moniewise.moniewise_backend.dto.PendingRegistrationData;
 import com.moniewise.moniewise_backend.dto.request.ProfileRequest;
 import com.moniewise.moniewise_backend.dto.response.BvnVerificationResultDto;
-import com.moniewise.moniewise_backend.dto.response.SignupResponse;
 import com.moniewise.moniewise_backend.dto.response.UserSummaryResponse;
 import com.moniewise.moniewise_backend.entity.*;
 import com.moniewise.moniewise_backend.enums.BudgetStatus;
+import com.moniewise.moniewise_backend.enums.Gender;
 import com.moniewise.moniewise_backend.enums.Role;
 import com.moniewise.moniewise_backend.psp.ProvidusExpressGateway;
-import com.moniewise.moniewise_backend.repository.BudgetRepository;
-import com.moniewise.moniewise_backend.repository.KycProfileRepository;
-import com.moniewise.moniewise_backend.repository.PasswordResetTokenRepository;
-import com.moniewise.moniewise_backend.repository.UserRepository;
-import com.moniewise.moniewise_backend.repository.WalletRepository;
+import com.moniewise.moniewise_backend.repository.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.PageRequest;
@@ -654,6 +650,15 @@ public class UserService implements UserDetailsService {
         } else if (incomingBvn != null && !incomingBvn.isEmpty() && !user.getBvn().equals(incomingBvn)) {
             // If they try to send a different BVN later, reject it.
             throw new IllegalArgumentException("BVN cannot be modified after initial setup. Contact support.");
+        }
+
+        // For later profile edits, Gender update".
+        Gender incomingGender = request.getGender() != null ? request.getGender() : null;
+        if (user.getGender() == null) {
+            if (incomingGender == null) {
+                throw new IllegalArgumentException("Gender is required to complete your profile.");
+            }
+            user.setGender(incomingGender);
         }
 
         Map<String, Object> profileData = user.getProfileData();

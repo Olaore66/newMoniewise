@@ -757,38 +757,55 @@ public class BudgetService {
                 .collect(Collectors.toList());
     }
 
+//    public List<EnvelopeResponse> getEnvelopesByBudget(Long budgetId, String email) {
+//        System.out.println("Fetching envelopes for budgetId: " + budgetId + ", email: " + email);
+//        User user = userService.findByEmail(email);
+//
+//        Budget budget = budgetRepository.findById(budgetId)
+//                .orElseThrow(() -> new IllegalArgumentException("Budget not found with ID: " + budgetId));
+//        System.out.println("Found budget: " + budget.getId() + ", userId: " + budget.getUser().getId());
+//        if (!budget.getUser().getId().equals(user.getId())) {
+//            throw new SecurityException("You do not have permission to view this budget");
+//        }
+//        List<Envelope> envelopes = envelopeRepository.findByBudgetId(budgetId);
+//        System.out.println("Found " + envelopes.size() + " envelopes");
+//        return envelopes.stream()
+//                .map(envelope -> new EnvelopeResponse(
+//                        envelope.getId(),
+//                        envelope.getBudget().getId(),
+//                        envelope.getName(),
+//                        envelope.getAmount(),
+//                        // New fields
+//                        envelope.getAmount(),                    // ← initialAmount
+//                        envelope.getTotalRemainingAmount(),      // ← totalRemaining
+//                        envelope.getRemainingAmount(),           // ← periodRemaining
+////                        getPeriodLimit(envelope),                // ← periodLimit
+//                        calculatePeriodLimit(envelope, budget),
+//                        getUsedThisPeriod(envelope),
+//
+//                        envelope.getRemainingAmount(),
+//                        envelope.getConditions(),
+//                        envelope.getCreatedAt(),
+//                        envelope.getLastDisbursedAt(),
+//                        envelope.getNextDisbursementAt()
+//                ))
+//                .collect(Collectors.toList());
+//    }
+
     public List<EnvelopeResponse> getEnvelopesByBudget(Long budgetId, String email) {
-        System.out.println("Fetching envelopes for budgetId: " + budgetId + ", email: " + email);
         User user = userService.findByEmail(email);
 
         Budget budget = budgetRepository.findById(budgetId)
                 .orElseThrow(() -> new IllegalArgumentException("Budget not found with ID: " + budgetId));
-        System.out.println("Found budget: " + budget.getId() + ", userId: " + budget.getUser().getId());
+
         if (!budget.getUser().getId().equals(user.getId())) {
             throw new SecurityException("You do not have permission to view this budget");
         }
-        List<Envelope> envelopes = envelopeRepository.findByBudgetId(budgetId);
-        System.out.println("Found " + envelopes.size() + " envelopes");
-        return envelopes.stream()
-                .map(envelope -> new EnvelopeResponse(
-                        envelope.getId(),
-                        envelope.getBudget().getId(),
-                        envelope.getName(),
-                        envelope.getAmount(),
-                        // New fields
-                        envelope.getAmount(),                    // ← initialAmount
-                        envelope.getTotalRemainingAmount(),      // ← totalRemaining
-                        envelope.getRemainingAmount(),           // ← periodRemaining
-//                        getPeriodLimit(envelope),                // ← periodLimit
-                        calculatePeriodLimit(envelope, budget),
-                        getUsedThisPeriod(envelope),
 
-                        envelope.getRemainingAmount(),
-                        envelope.getConditions(),
-                        envelope.getCreatedAt(),
-                        envelope.getLastDisbursedAt(),
-                        envelope.getNextDisbursementAt()
-                ))
+        List<Envelope> envelopes = envelopeRepository.findByBudgetId(budgetId);
+
+        return envelopes.stream()
+                .map(envelope -> mapEnvelopeToResponse(envelope, budget, email))
                 .collect(Collectors.toList());
     }
 
@@ -972,6 +989,50 @@ public class BudgetService {
         );
     }
 
+//    private BudgetResponse mapToResponse(Budget budget) {
+//        BudgetResponse response = new BudgetResponse(
+//                budget.getId(),
+//                budget.getName(),
+//                budget.getTotalAmount(),
+//                budget.getAllocatedAmount(),
+//                budget.getDurationDays(),
+//                budget.getStartDate(),
+//                budget.getEndDate(),
+//                budget.getStatus(),
+//                budget.getCreatedAt(),
+//                budget.getUser().getId(),
+//                budget.getLastTopupTime()
+//        );
+//
+//        // Map Envelopes to EnvelopeResponse
+//        List<EnvelopeResponse> envelopeResponses = (budget.getEnvelopes() != null)
+//                ? budget.getEnvelopes().stream()
+//                .map(envelope -> new EnvelopeResponse(
+//                        envelope.getId(),
+//                        budget.getId(),
+////                        envelope.getBudget().getId(),
+//                        envelope.getName(),
+//                        envelope.getAmount(),
+//                        envelope.getRemainingAmount(),
+//
+//                        // New fields
+//                        envelope.getAmount(),                    // ← initialAmount
+//                        envelope.getTotalRemainingAmount(),      // ← totalRemaining
+//                        envelope.getRemainingAmount(),           // ← periodRemaining
+////                        getPeriodLimit(envelope),                // ← periodLimit
+//                        calculatePeriodLimit(envelope, budget),
+//                        getUsedThisPeriod(envelope),             // ← usedThisPeriod
+//
+//                        envelope.getConditions(),
+//                        envelope.getCreatedAt(),
+//                        envelope.getLastDisbursedAt(),
+//                        envelope.getNextDisbursementAt()
+//                ))
+//                .collect(Collectors.toList()): new ArrayList<>();
+//        response.setEnvelopes(envelopeResponses);
+//        return response;
+//    }
+
     private BudgetResponse mapToResponse(Budget budget) {
         BudgetResponse response = new BudgetResponse(
                 budget.getId(),
@@ -987,32 +1048,19 @@ public class BudgetService {
                 budget.getLastTopupTime()
         );
 
-        // Map Envelopes to EnvelopeResponse
-        List<EnvelopeResponse> envelopeResponses = (budget.getEnvelopes() != null)
-                ? budget.getEnvelopes().stream()
-                .map(envelope -> new EnvelopeResponse(
-                        envelope.getId(),
-                        budget.getId(),
-//                        envelope.getBudget().getId(),
-                        envelope.getName(),
-                        envelope.getAmount(),
-                        envelope.getRemainingAmount(),
+        String email = budget.getUser().getEmail();
 
-                        // New fields
-                        envelope.getAmount(),                    // ← initialAmount
-                        envelope.getTotalRemainingAmount(),      // ← totalRemaining
-                        envelope.getRemainingAmount(),           // ← periodRemaining
-//                        getPeriodLimit(envelope),                // ← periodLimit
-                        calculatePeriodLimit(envelope, budget),
-                        getUsedThisPeriod(envelope),             // ← usedThisPeriod
+        List<EnvelopeResponse> envelopeResponses = budget.getEnvelopes() != null
+                ? budget.getEnvelopes()
+                .stream()
+                .map(envelope -> mapEnvelopeToResponse(envelope, budget, email))
+                .collect(Collectors.toList())
+                : new ArrayList<>();
 
-                        envelope.getConditions(),
-                        envelope.getCreatedAt(),
-                        envelope.getLastDisbursedAt(),
-                        envelope.getNextDisbursementAt()
-                ))
-                .collect(Collectors.toList()): new ArrayList<>();
         response.setEnvelopes(envelopeResponses);
+        response.setOriginalAmount(budget.getOriginalAmount());
+        response.setFeeAmount(budget.getFeeAmount());
+
         return response;
     }
 
@@ -1223,6 +1271,42 @@ public class BudgetService {
         walletService.deductBalance(userId, feeAmount);
 
         logger.info("Budget creation fee of ₦{} deducted from user {}", feeAmount, userId);
+    }
+
+    private EnvelopeResponse mapEnvelopeToResponse(Envelope envelope, Budget budget, String email) {
+        envelopeService.getRemainingLimit(envelope.getId(), email);
+
+        Envelope freshEnvelope = envelopeRepository.findById(envelope.getId())
+                .orElseThrow(() -> new IllegalStateException("Envelope not found after refresh"));
+
+        BigDecimal periodLimit = getLimitFromConditions(freshEnvelope);
+        BigDecimal periodRemaining = freshEnvelope.getRemainingAmount() != null
+                ? freshEnvelope.getRemainingAmount()
+                : BigDecimal.ZERO;
+
+        BigDecimal usedThisPeriod = periodLimit
+                .subtract(periodRemaining)
+                .max(BigDecimal.ZERO);
+
+        return new EnvelopeResponse(
+                freshEnvelope.getId(),
+                budget.getId(),
+                freshEnvelope.getName(),
+
+                freshEnvelope.getAmount(),
+                periodRemaining,
+
+                freshEnvelope.getInitialAmount(),
+                freshEnvelope.getTotalRemainingAmount(),
+                periodRemaining,
+                periodLimit,
+                usedThisPeriod,
+
+                freshEnvelope.getConditions(),
+                freshEnvelope.getCreatedAt(),
+                freshEnvelope.getLastDisbursedAt(),
+                freshEnvelope.getNextDisbursementAt()
+        );
     }
 
 }

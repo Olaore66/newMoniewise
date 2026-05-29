@@ -1071,6 +1071,10 @@ public class EnvelopeService {
     }
 
     public EnvelopeResponse getEnvelopeById(Long envelopeId, String email) {
+        // This forces the backend to recalculate the current spendable pocket
+        // before the frontend receives the response.
+        getRemainingLimit(envelopeId, email);
+
         Envelope envelope = envelopeRepository.findByIdAndBudget_UserEmail(envelopeId, email)
                 .orElseThrow(() -> new EntityNotFoundException("Envelope not found or not accessible"));
         return toResponse(envelope);

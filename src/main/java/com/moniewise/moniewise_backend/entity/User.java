@@ -1,6 +1,7 @@
 package com.moniewise.moniewise_backend.entity;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.moniewise.moniewise_backend.enums.Gender;
 import com.moniewise.moniewise_backend.enums.Role;
 import com.vladmihalcea.hibernate.type.json.JsonBinaryType;
 import lombok.AllArgsConstructor;
@@ -48,6 +49,10 @@ public class User {
 
     @Column(unique = true)
     private String phone;
+
+    @Column(name = "gender")
+    @Enumerated(EnumType.STRING)
+    private Gender gender;
 
     @Column(name = "fcm_token")
     private String fcmToken; // Added for FCM push notifications
