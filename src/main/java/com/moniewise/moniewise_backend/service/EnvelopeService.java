@@ -546,6 +546,7 @@ public class EnvelopeService {
         List<TransactionType> spendingTypes = List.of(
                 TransactionType.ENVELOPE_TO_ENVELOPE, // Moving money out
                 TransactionType.ENVELOPE_TO_EXTERNAL, // Sending to Bank
+                TransactionType.ENVELOPE_EXTERNAL_TRANSFER_FEE,
                 TransactionType.ENVELOPE_TO_USER      // P2P Transfer
         );
 
