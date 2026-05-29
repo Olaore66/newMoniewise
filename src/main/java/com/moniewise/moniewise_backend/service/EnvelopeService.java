@@ -1070,6 +1070,7 @@ public class EnvelopeService {
         return toResponse(envelope);
     }
 
+    @Transactional
     public EnvelopeResponse getEnvelopeById(Long envelopeId, String email) {
         // This forces the backend to recalculate the current spendable pocket
         // before the frontend receives the response.
@@ -1175,26 +1176,55 @@ public class EnvelopeService {
         ));
     }
 
+//    private EnvelopeResponse toResponse(Envelope envelope) {
+//        // Optimization: Use the entity's stored value for speed.
+//        // We only recalculate during specific events (transfers, scheduler).
+//        BigDecimal visibleBalance = getSpendableBalance(envelope);
+//
+//        return new EnvelopeResponse(
+//                envelope.getId(),
+//                envelope.getBudget().getId(),
+//                envelope.getName(),
+//                envelope.getAmount(),
+//                visibleBalance,
+//                envelope.getAmount(),
+//                envelope.getTotalRemainingAmount(),
+//                visibleBalance, // Use visible balance for "current pocket"
+//                getPeriodLimit(envelope.getConditions()), // Helper calculation (fast, no DB)
+//
+//                // Ã°Å¸â€ºâ€˜ Optimization: Avoid calling external service inside loop if possible.
+//                // If you MUST calculate usage, do it using entity data:
+//                // Usage = Limit - Pocket (if positive)
+//                getPeriodLimit(envelope.getConditions()).subtract(envelope.getRemainingAmount()).max(BigDecimal.ZERO),
+//
+//                envelope.getConditions(),
+//                envelope.getCreatedAt(),
+//                envelope.getLastDisbursedAt(),
+//                envelope.getNextDisbursementAt()
+//        );
+//    }
+
     private EnvelopeResponse toResponse(Envelope envelope) {
-        // Optimization: Use the entity's stored value for speed.
-        // We only recalculate during specific events (transfers, scheduler).
-        BigDecimal visibleBalance = getSpendableBalance(envelope);
+        BigDecimal periodLimit = getPeriodLimit(envelope.getConditions());
+        BigDecimal periodRemaining = getSpendableBalance(envelope);
+
+        BigDecimal usedThisPeriod = periodLimit
+                .subtract(periodRemaining)
+                .max(BigDecimal.ZERO);
 
         return new EnvelopeResponse(
                 envelope.getId(),
                 envelope.getBudget().getId(),
                 envelope.getName(),
-                envelope.getAmount(),
-                visibleBalance,
-                envelope.getAmount(),
-                envelope.getTotalRemainingAmount(),
-                visibleBalance, // Use visible balance for "current pocket"
-                getPeriodLimit(envelope.getConditions()), // Helper calculation (fast, no DB)
 
-                // Ã°Å¸â€ºâ€˜ Optimization: Avoid calling external service inside loop if possible.
-                // If you MUST calculate usage, do it using entity data:
-                // Usage = Limit - Pocket (if positive)
-                getPeriodLimit(envelope.getConditions()).subtract(envelope.getRemainingAmount()).max(BigDecimal.ZERO),
+                envelope.getAmount(),
+                periodRemaining,
+
+                envelope.getInitialAmount(),
+                envelope.getTotalRemainingAmount(),
+                periodRemaining,
+                periodLimit,
+                usedThisPeriod,
 
                 envelope.getConditions(),
                 envelope.getCreatedAt(),
