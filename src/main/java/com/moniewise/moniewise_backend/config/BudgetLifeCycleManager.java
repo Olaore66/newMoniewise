@@ -537,10 +537,6 @@ public class BudgetLifeCycleManager {
         for (Envelope envelope : envelopes) {
             scheduledTaskRepository.deleteByEnvelopeId(envelope.getId());
 
-            BigDecimal totalRemainingAmount = envelope.getTotalRemainingAmount() != null
-                    ? envelope.getTotalRemainingAmount()
-                    : BigDecimal.ZERO;
-
             BigDecimal heldAmount = envelope.getHeldAmount() != null
                     ? envelope.getHeldAmount()
                     : BigDecimal.ZERO;
@@ -548,26 +544,14 @@ public class BudgetLifeCycleManager {
             if (heldAmount.compareTo(BigDecimal.ZERO) > 0) {
                 logger.warn(
                         "Budget {} is completing while envelope {} has heldAmount ₦{}. " +
-                                "Simple completion will not refund held funds as available balance. " +
-                                "Settlement-aware completion should be implemented before production scale.",
+                                "Held funds will not be refunded as freely available balance.",
                         budget.getId(),
                         envelope.getId(),
                         heldAmount
                 );
             }
 
-            BigDecimal refundableAmount = totalRemainingAmount.subtract(heldAmount);
-
-            if (refundableAmount.compareTo(BigDecimal.ZERO) < 0) {
-                logger.warn(
-                        "Envelope {} has invalid balance state during budget completion. totalRemainingAmount={}, heldAmount={}. " +
-                                "Refundable amount forced to zero.",
-                        envelope.getId(),
-                        totalRemainingAmount,
-                        heldAmount
-                );
-                refundableAmount = BigDecimal.ZERO;
-            }
+            BigDecimal refundableAmount = calculateSafeRefundableAmount(envelope);
 
             if (refundableAmount.compareTo(BigDecimal.ZERO) > 0) {
                 TransactionLog refundLog = new TransactionLog();
@@ -1309,6 +1293,79 @@ public class BudgetLifeCycleManager {
         }
 
         return budget.getEndDate().isBefore(now.toLocalDate());
+    }
+
+
+    private BigDecimal calculateSafeRefundableAmount(Envelope envelope) {
+        BigDecimal storedTotalRemaining = envelope.getTotalRemainingAmount() != null
+                ? envelope.getTotalRemainingAmount()
+                : BigDecimal.ZERO;
+
+        BigDecimal storedHeldAmount = envelope.getHeldAmount() != null
+                ? envelope.getHeldAmount()
+                : BigDecimal.ZERO;
+
+        BigDecimal storedAvailable = storedTotalRemaining.subtract(storedHeldAmount);
+
+        if (storedAvailable.compareTo(BigDecimal.ZERO) < 0) {
+            storedAvailable = BigDecimal.ZERO;
+        }
+
+        BigDecimal baseAllocation = envelope.getAmount() != null
+                ? envelope.getAmount()
+                : BigDecimal.ZERO;
+
+        List<TransactionStatus> activeStatuses = List.of(
+                TransactionStatus.COMPLETED,
+                TransactionStatus.PROCESSING,
+                TransactionStatus.PENDING
+        );
+
+        BigDecimal movedOutToOtherEnvelopes =
+                transactionLogRepository.sumAbsAmountBySourceEnvelopeAndTypesAndStatuses(
+                        envelope.getId(),
+                        List.of(TransactionType.ENVELOPE_TO_ENVELOPE),
+                        activeStatuses
+                );
+
+        BigDecimal movedIntoThisEnvelope =
+                transactionLogRepository.sumAbsAmountByTargetEnvelopeAndTypesAndStatuses(
+                        envelope.getId(),
+                        List.of(TransactionType.ENVELOPE_TO_ENVELOPE),
+                        activeStatuses
+                );
+
+        BigDecimal moneyThatLeftBudget =
+                transactionLogRepository.sumAbsAmountBySourceEnvelopeAndTypesAndStatuses(
+                        envelope.getId(),
+                        List.of(
+                                TransactionType.ENVELOPE_TO_EXTERNAL,
+                                TransactionType.ENVELOPE_EXTERNAL_TRANSFER_FEE,
+                                TransactionType.ENVELOPE_TO_USER
+                        ),
+                        activeStatuses
+                );
+
+        BigDecimal ledgerAvailable = baseAllocation
+                .add(movedIntoThisEnvelope)
+                .subtract(movedOutToOtherEnvelopes)
+                .subtract(moneyThatLeftBudget);
+
+        if (ledgerAvailable.compareTo(BigDecimal.ZERO) < 0) {
+            ledgerAvailable = BigDecimal.ZERO;
+        }
+
+        BigDecimal refundableAmount = storedAvailable.min(ledgerAvailable);
+
+        logger.info(
+                "Budget completion refund calculation for envelope {}: storedAvailable={}, ledgerAvailable={}, finalRefundable={}",
+                envelope.getId(),
+                storedAvailable,
+                ledgerAvailable,
+                refundableAmount
+        );
+
+        return refundableAmount;
     }
 
 }

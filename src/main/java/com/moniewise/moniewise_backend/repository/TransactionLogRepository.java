@@ -117,4 +117,31 @@ public interface TransactionLogRepository extends JpaRepository<TransactionLog, 
 
     Optional<TransactionLog> findByProviderReference(String providerReference);
 
+
+    @Query("""
+       SELECT COALESCE(SUM(ABS(t.amount)), 0)
+       FROM TransactionLog t
+       WHERE t.sourceEnvelopeId = :envelopeId
+       AND t.transactionType IN :types
+       AND t.status IN :statuses
+       """)
+    BigDecimal sumAbsAmountBySourceEnvelopeAndTypesAndStatuses(
+            @Param("envelopeId") Long envelopeId,
+            @Param("types") List<TransactionType> types,
+            @Param("statuses") List<TransactionStatus> statuses
+    );
+
+    @Query("""
+       SELECT COALESCE(SUM(ABS(t.amount)), 0)
+       FROM TransactionLog t
+       WHERE t.targetEnvelopeId = :envelopeId
+       AND t.transactionType IN :types
+       AND t.status IN :statuses
+       """)
+    BigDecimal sumAbsAmountByTargetEnvelopeAndTypesAndStatuses(
+            @Param("envelopeId") Long envelopeId,
+            @Param("types") List<TransactionType> types,
+            @Param("statuses") List<TransactionStatus> statuses
+    );
+
 }

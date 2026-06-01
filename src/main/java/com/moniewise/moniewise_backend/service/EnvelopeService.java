@@ -861,10 +861,18 @@ public class EnvelopeService {
                         providerNarration
                 );
             }
-            txn.setStatus(TransactionStatus.PROCESSING);
-            txn.setProviderName(providerName);
-            txn.setProviderReference(providerRef);
-            transactionLogRepository.save(txn);
+            if (shouldAutoSettleExternalTransfer(providerName)) {
+                finalizeExternalTransferAcceptedWithoutWebhook(
+                        source.getId(),
+                        txn.getReference(),
+                        providerRef,
+                        totalDebit
+                );
+            } else {
+                txn.setProviderReference(providerRef);
+                txn.setStatus(TransactionStatus.PROCESSING);
+                transactionLogRepository.save(txn);
+            }
 
             if (feeTxn != null) {
                 feeTxn.setStatus(TransactionStatus.PROCESSING);
@@ -1551,6 +1559,86 @@ public class EnvelopeService {
 
     private String formatMoney(BigDecimal amount) {
         return amount.setScale(2, RoundingMode.HALF_UP).stripTrailingZeros().toPlainString();
+    }
+
+    private boolean shouldAutoSettleExternalTransfer(String providerName) {
+        return providerName != null && providerName.equalsIgnoreCase("SECUREWAVE");
+    }
+
+    @Transactional
+    public void finalizeExternalTransferAcceptedWithoutWebhook(
+            Long sourceEnvelopeId,
+            String transactionReference,
+            String providerReference,
+            BigDecimal totalDebit
+    ) {
+        Envelope source = envelopeRepository.findById(sourceEnvelopeId)
+                .orElseThrow(() -> new EntityNotFoundException("Source envelope not found"));
+
+        BigDecimal heldAmount = source.getHeldAmount() != null
+                ? source.getHeldAmount()
+                : BigDecimal.ZERO;
+
+        BigDecimal totalRemainingAmount = source.getTotalRemainingAmount() != null
+                ? source.getTotalRemainingAmount()
+                : BigDecimal.ZERO;
+
+        if (heldAmount.compareTo(totalDebit) < 0) {
+            logger.warn(
+                    "Envelope {} heldAmount {} is less than totalDebit {} during SecureWave auto-settlement",
+                    sourceEnvelopeId,
+                    heldAmount,
+                    totalDebit
+            );
+        }
+
+        source.setHeldAmount(
+                heldAmount.subtract(totalDebit).max(BigDecimal.ZERO)
+        );
+
+        source.setTotalRemainingAmount(
+                totalRemainingAmount.subtract(totalDebit).max(BigDecimal.ZERO)
+        );
+
+        if (source.getRemainingAmount() != null && source.getRemainingAmount().compareTo(BigDecimal.ZERO) < 0) {
+            source.setRemainingAmount(BigDecimal.ZERO);
+        }
+
+        envelopeRepository.save(source);
+
+        transactionLogRepository.findByReference(transactionReference).ifPresent(txn -> {
+            txn.setProviderReference(providerReference);
+            txn.setStatus(TransactionStatus.COMPLETED);
+            txn.setDescription(appendDescription(txn.getDescription(), "Confirmed by SecureWave accepted response"));
+            transactionLogRepository.save(txn);
+        });
+
+        transactionLogRepository.findByReference(transactionReference + "-FEE").ifPresent(feeTxn -> {
+            feeTxn.setProviderReference(providerReference);
+            feeTxn.setStatus(TransactionStatus.COMPLETED);
+            feeTxn.setDescription(appendDescription(feeTxn.getDescription(), "Confirmed by SecureWave accepted response"));
+            transactionLogRepository.save(feeTxn);
+        });
+
+        logger.info(
+                "SecureWave external transfer auto-settled. envelopeId={}, reference={}, providerReference={}, totalDebit={}",
+                sourceEnvelopeId,
+                transactionReference,
+                providerReference,
+                totalDebit
+        );
+    }
+
+    private String appendDescription(String oldDescription, String extra) {
+        if (oldDescription == null || oldDescription.isBlank()) {
+            return extra;
+        }
+
+        if (oldDescription.contains(extra)) {
+            return oldDescription;
+        }
+
+        return oldDescription + " | " + extra;
     }
 }
 
