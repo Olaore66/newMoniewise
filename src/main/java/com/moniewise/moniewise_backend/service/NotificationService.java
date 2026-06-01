@@ -668,6 +668,8 @@ public class NotificationService {
             Long envelopeId,
             String redirectUrl
     ) {
+        logger.info("Processing notification type {} for user {}", type, userId);
+
         String message = generateMessage(type, params);
         NotificationPriority priority = getPriority(type);
         boolean shouldSaveToDatabase = shouldPersistToDatabase(type);
@@ -683,10 +685,15 @@ public class NotificationService {
             notification.setRedirectUrl(redirectUrl);
             notification.setRead(false);
             notificationRepository.save(notification);
+
+            logger.info("Saved in-app notification type {} for user {}", type, userId);
         }
 
         if (priority == NotificationPriority.HIGH || priority == NotificationPriority.MEDIUM) {
-            List<String> fcmTokens = authSessionService.getActiveFcmTokens(userId);
+            List<String> fcmTokens = getPushTokensForUser(userId);
+
+            logger.info("Attempting push notification type {} for user {} to {} token(s)",
+                    type, userId, fcmTokens.size());
 
             if (!"stub".equals(activeProfile) && !fcmTokens.isEmpty() && firebaseMessaging != null) {
                 String title = getNotificationTitle(type);
@@ -696,6 +703,33 @@ public class NotificationService {
                 }
             }
         }
+    }
+
+    private List<String> getPushTokensForUser(Long userId) {
+        List<String> tokens = new java.util.ArrayList<>();
+
+        try {
+            List<String> activeTokens = authSessionService.getActiveFcmTokens(userId);
+            if (activeTokens != null) {
+                tokens.addAll(activeTokens);
+            }
+        } catch (Exception e) {
+            logger.warn("Failed to fetch active FCM tokens for user {}", userId, e);
+        }
+
+        try {
+            String fallbackToken = userRepository.findFcmTokenById(userId);
+            if (fallbackToken != null && !fallbackToken.isBlank()) {
+                tokens.add(fallbackToken);
+            }
+        } catch (Exception e) {
+            logger.warn("Failed to fetch fallback FCM token for user {}", userId, e);
+        }
+
+        return tokens.stream()
+                .filter(token -> token != null && !token.isBlank())
+                .distinct()
+                .toList();
     }
 }
 

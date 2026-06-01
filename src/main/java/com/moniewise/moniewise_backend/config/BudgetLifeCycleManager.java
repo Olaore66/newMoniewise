@@ -99,20 +99,34 @@ public class BudgetLifeCycleManager {
     }
 
     public void scheduleDynamicTasks(Envelope envelope) {
-        // 🛑 FIX 1: Clean slate for ALL task types so they don't stack up like pancakes
+        Budget budget = envelope.getBudget();
+        LocalDateTime now = fetchCurrentDateTimeFromDatabase();
+
+        if (budget == null || budget.getStatus() != BudgetStatus.ACTIVE) {
+            logger.info("Not scheduling envelope {} because budget is not active", envelope.getId());
+            return;
+        }
+
+        if (isBudgetPastEndDate(budget, now)) {
+            logger.info(
+                    "Not scheduling envelope {} because budget {} ended on {}",
+                    envelope.getId(),
+                    budget.getId(),
+                    budget.getEndDate()
+            );
+
+            envelope.setNextDisbursementAt(null);
+            envelopeRepository.save(envelope);
+            return;
+        }
+
         scheduledTaskRepository.cancelPendingByEnvelopeIdAndTaskType(envelope.getId(), "DISBURSEMENT");
 
-//        scheduledTaskRepository.deleteByEnvelopeIdAndTaskType(envelope.getId(), "DISBURSEMENT");
-//        scheduledTaskRepository.deleteByEnvelopeIdAndTaskType(envelope.getId(), "PRE_DISBURSEMENT_NOTIFICATION_15MIN");
-//        scheduledTaskRepository.deleteByEnvelopeIdAndTaskType(envelope.getId(), "PRE_DISBURSEMENT_NOTIFICATION_5MIN");
-
-        LocalDateTime now = fetchCurrentDateTimeFromDatabase();
         LocalDateTime nextTriggerTime = calculateNextDisbursementTime(envelope);
 
         if (nextTriggerTime != null) {
             scheduleDisbursementGroup(envelope, nextTriggerTime, now);
 
-            // ✅ ADDED THIS: Save the exact date to the Envelope so the App UI is never left behind!
             envelope.setNextDisbursementAt(nextTriggerTime);
             envelopeRepository.save(envelope);
         }
@@ -326,22 +340,45 @@ public class BudgetLifeCycleManager {
         logger.debug("Batch tasks completed in {}ms", durationMs);
     }
     // FIX: New method to process tasks, including LIMIT_RESET
-    private void processTask(ScheduledTask task, LocalDateTime now, List<Envelope> envelopesToUpdate,
-                             List<TransactionLog> logsToSave, List<Long> taskIdsToComplete,
-                             List<OutboxEvent> outboxEventsToSave) {
+    private void processTask(
+            ScheduledTask task,
+            LocalDateTime now,
+            List<Envelope> envelopesToUpdate,
+            List<TransactionLog> logsToSave,
+            List<Long> taskIdsToComplete,
+            List<OutboxEvent> outboxEventsToSave
+    ) {
         Envelope envelope = envelopeRepository.findById(task.getEnvelopeId()).orElse(null);
+
         if (envelope == null) {
             logger.warn("Envelope {} not found for task {}", task.getEnvelopeId(), task.getId());
             taskIdsToComplete.add(task.getId());
             return;
         }
+
         Budget budget = envelope.getBudget();
+
         if (budget == null || budget.getStatus() != BudgetStatus.ACTIVE) {
             logger.warn("Skipping task {} for envelope {}: budget is not active", task.getId(), task.getEnvelopeId());
             taskIdsToComplete.add(task.getId());
             return;
         }
+
+        if (isBudgetPastEndDate(budget, now)) {
+            logger.warn(
+                    "Skipping task {} for envelope {} because budget {} ended on {}",
+                    task.getId(),
+                    envelope.getId(),
+                    budget.getId(),
+                    budget.getEndDate()
+            );
+
+            taskIdsToComplete.add(task.getId());
+            return;
+        }
+
         String userId = budget.getUser().getId().toString();
+
         switch (task.getTaskType()) {
             case "LIMIT_RESET":
                 envelopeService.resetEnvelopeLimits(envelope);
@@ -480,8 +517,12 @@ public class BudgetLifeCycleManager {
 //        logger.info("Budget {} completed for user {}. Refunded ₦{}", budget.getId(), user.getId(), totalRefunded);
 //    }
 
-    private void processBudgetExpiry(Budget budget, List<Budget> budgetsToUpdate, List<Envelope> envelopesToUpdate,
-                                     List<TransactionLog> logsToSave) {
+    private void processBudgetExpiry(
+            Budget budget,
+            List<Budget> budgetsToUpdate,
+            List<Envelope> envelopesToUpdate,
+            List<TransactionLog> logsToSave
+    ) {
         User user = budget.getUser();
 
         if (user == null || user.getId() == null) {
@@ -489,60 +530,114 @@ public class BudgetLifeCycleManager {
         }
 
         LocalDateTime now = fetchCurrentDateTimeFromDatabase();
-        BigDecimal totalRefunded = BigDecimal.ZERO; // 🧮 Accumulator
+        BigDecimal totalRefunded = BigDecimal.ZERO;
+
         List<Envelope> envelopes = envelopeRepository.findByBudgetId(budget.getId());
 
-        // 1. 🔄 LOOP ONLY FOR CALCULATION AND LOGGING
         for (Envelope envelope : envelopes) {
-            BigDecimal remainingAmount = envelope.getTotalRemainingAmount();
+            scheduledTaskRepository.deleteByEnvelopeId(envelope.getId());
 
-            if (remainingAmount != null && remainingAmount.compareTo(BigDecimal.ZERO) > 0) {
+            BigDecimal totalRemainingAmount = envelope.getTotalRemainingAmount() != null
+                    ? envelope.getTotalRemainingAmount()
+                    : BigDecimal.ZERO;
 
-                // Create the log entry for this specific envelope
+            BigDecimal heldAmount = envelope.getHeldAmount() != null
+                    ? envelope.getHeldAmount()
+                    : BigDecimal.ZERO;
+
+            if (heldAmount.compareTo(BigDecimal.ZERO) > 0) {
+                logger.warn(
+                        "Budget {} is completing while envelope {} has heldAmount ₦{}. " +
+                                "Simple completion will not refund held funds as available balance. " +
+                                "Settlement-aware completion should be implemented before production scale.",
+                        budget.getId(),
+                        envelope.getId(),
+                        heldAmount
+                );
+            }
+
+            BigDecimal refundableAmount = totalRemainingAmount.subtract(heldAmount);
+
+            if (refundableAmount.compareTo(BigDecimal.ZERO) < 0) {
+                logger.warn(
+                        "Envelope {} has invalid balance state during budget completion. totalRemainingAmount={}, heldAmount={}. " +
+                                "Refundable amount forced to zero.",
+                        envelope.getId(),
+                        totalRemainingAmount,
+                        heldAmount
+                );
+                refundableAmount = BigDecimal.ZERO;
+            }
+
+            if (refundableAmount.compareTo(BigDecimal.ZERO) > 0) {
                 TransactionLog refundLog = new TransactionLog();
                 refundLog.setUserId(user.getId());
                 refundLog.setBudgetId(budget.getId());
                 refundLog.setSourceEnvelopeId(envelope.getId());
-                refundLog.setAmount(remainingAmount);
+                refundLog.setAmount(refundableAmount);
                 refundLog.setTransactionType(BUDGET_COMPLETION_REFUND);
                 refundLog.setStatus(COMPLETED);
                 refundLog.setCreatedAt(now);
-                refundLog.setReference("MW-REF-" + UUID.randomUUID().toString());
+                refundLog.setReference("MW-REF-" + UUID.randomUUID());
+                refundLog.setDescription("Unused envelope balance refunded at budget completion");
                 logsToSave.add(refundLog);
 
-                totalRefunded = totalRefunded.add(remainingAmount); // Add to total
+                totalRefunded = totalRefunded.add(refundableAmount);
             }
 
-            // Reset envelope states
             envelope.setRemainingAmount(BigDecimal.ZERO);
             envelope.setTotalRemainingAmount(BigDecimal.ZERO);
+            envelope.setHeldAmount(BigDecimal.ZERO);
+            envelope.setNextDisbursementAt(null);
+            envelope.setHasMatured(true);
+
             envelopesToUpdate.add(envelope);
-            scheduledTaskRepository.deleteByEnvelopeId(envelope.getId());
         }
 
-        // 2. 💰 FUND WALLET ONCE (Outside the loop!)
         if (totalRefunded.compareTo(BigDecimal.ZERO) > 0) {
             try {
-                // This triggers ONLY ONE push notification for the entire budget
-                String summaryMsg = String.format("Total refund of ₦%,.2f from ended budget: %s", totalRefunded, budget.getName());
+                String summaryMsg = String.format(
+                        "Total refund of ₦%,.2f from ended budget: %s",
+                        totalRefunded,
+                        budget.getName()
+                );
 
                 walletService.fundWallet(
                         user.getId(),
                         totalRefunded,
                         summaryMsg,
-                        false // false = send the notification
+                        false
                 );
             } catch (Exception e) {
-                throw new RuntimeException("Wallet funding failed for user " + user.getId() + ": " + e.getMessage(), e);
+                throw new RuntimeException(
+                        "Wallet funding failed for user " + user.getId() + ": " + e.getMessage(),
+                        e
+                );
             }
         }
 
-        // 3. Finalize Budget State
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("budgetName", budget.getName() != null ? budget.getName() : "Budget");
+        payload.put("refunded", String.format("%,.2f", totalRefunded));
+
+        outboxEventRepository.save(buildOutboxEvent(
+                NotificationType.BUDGET_COMPLETED,
+                user.getId(),
+                budget.getId(),
+                null,
+                payload
+        ));
+
         budget.setStatus(BudgetStatus.COMPLETED);
         budget.setRemainingAmount(BigDecimal.ZERO);
         budgetsToUpdate.add(budget);
 
-        logger.info("Budget {} completed. Single refund of ₦{} sent to user {}.", budget.getId(), totalRefunded, user.getId());
+        logger.info(
+                "Budget {} completed. Refundable total ₦{} sent to user {}.",
+                budget.getId(),
+                totalRefunded,
+                user.getId()
+        );
     }
 
     private void processEnvelopeDisbursement(Envelope envelope, LocalDate today, List<Envelope> envelopesToUpdate,
@@ -654,6 +749,24 @@ public class BudgetLifeCycleManager {
 
     private void disburseEnvelope(Envelope envelope, LocalDateTime now, List<Envelope> envelopesToUpdate,
                                   List<TransactionLog> logsToSave, List<OutboxEvent> outboxEventsToSave) {
+
+        Budget budget = envelope.getBudget();
+
+        if (budget == null || budget.getStatus() != BudgetStatus.ACTIVE) {
+            logger.warn("Skipping disbursement for envelope {} because budget is not active", envelope.getId());
+            return;
+        }
+
+        if (isBudgetPastEndDate(budget, now)) {
+            logger.warn(
+                    "Skipping disbursement for envelope {} because budget {} ended on {}",
+                    envelope.getId(),
+                    budget.getId(),
+                    budget.getEndDate()
+            );
+            return;
+        }
+
         Map<String, Object> conditions = envelope.getConditions();
 
         if (conditions == null || !conditions.containsKey("limit")) return;
@@ -948,6 +1061,18 @@ public class BudgetLifeCycleManager {
     }
 
     public LocalDateTime calculateNextDisbursementTime(Envelope envelope) {
+        Budget budget = envelope.getBudget();
+
+        if (budget == null || budget.getStatus() != BudgetStatus.ACTIVE) {
+            return null;
+        }
+
+        LocalDateTime now = fetchCurrentDateTimeFromDatabase();
+
+        if (isBudgetPastEndDate(budget, now)) {
+            return null;
+        }
+
         Map<String, Object> conditions = envelope.getConditions();
         if (conditions == null || !conditions.containsKey("type")) return null;
 
@@ -955,7 +1080,6 @@ public class BudgetLifeCycleManager {
         LocalDateTime last = envelope.getLastDisbursedAt() != null
                 ? envelope.getLastDisbursedAt()
                 : envelope.getCreatedAt();
-        LocalDateTime now = fetchCurrentDateTimeFromDatabase();
         LocalDate budgetStart = envelope.getBudget().getStartDate();
         LocalDate budgetEnd = envelope.getBudget().getEndDate();
 
@@ -1179,6 +1303,13 @@ public class BudgetLifeCycleManager {
         return event;
     }
 
+    private boolean isBudgetPastEndDate(Budget budget, LocalDateTime now) {
+        if (budget == null || budget.getEndDate() == null) {
+            return false;
+        }
+
+        return budget.getEndDate().isBefore(now.toLocalDate());
+    }
 
 }
 

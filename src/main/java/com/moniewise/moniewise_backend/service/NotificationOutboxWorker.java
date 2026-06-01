@@ -1,6 +1,5 @@
 package com.moniewise.moniewise_backend.service;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.moniewise.moniewise_backend.entity.OutboxEvent;
 import com.moniewise.moniewise_backend.enums.NotificationType;
 import com.moniewise.moniewise_backend.repository.OutboxEventRepository;
@@ -21,15 +20,13 @@ public class NotificationOutboxWorker {
 
     private final OutboxEventRepository outboxEventRepository;
     private final NotificationService notificationService;
-    private final ObjectMapper objectMapper;
 
     public NotificationOutboxWorker(
             OutboxEventRepository outboxEventRepository,
-            NotificationService notificationService,
-            ObjectMapper objectMapper) {
+            NotificationService notificationService
+    ) {
         this.outboxEventRepository = outboxEventRepository;
         this.notificationService = notificationService;
-        this.objectMapper = objectMapper;
     }
 
     @Scheduled(fixedDelayString = "${moniewise.outbox.worker.fixed-delay-ms:5000}")
@@ -37,44 +34,74 @@ public class NotificationOutboxWorker {
     public void processOutboxEvents() {
         List<OutboxEvent> events = outboxEventRepository.claimPendingEvents(200);
 
+        if (events.isEmpty()) {
+            return;
+        }
+
+        logger.info("Found {} pending notification outbox event(s)", events.size());
+
         for (OutboxEvent event : events) {
-            try {
-                event.setStatus("PROCESSING");
-                event.setLockedAt(LocalDateTime.now());
-
-                Map<String, Object> payload = event.getPayload();
-                String redirectUrl = event.getEnvelopeId() != null
-                        ? "/envelopes/" + event.getEnvelopeId()
-                        : event.getBudgetId() != null
-                        ? "/budgets/" + event.getBudgetId()
-                        : null;
-
-                notificationService.processOutboxNotification(
-                        event.getUserId(),
-                        NotificationType.valueOf(event.getEventType()),
-                        payload,
-                        event.getBudgetId(),
-                        event.getEnvelopeId(),
-                        redirectUrl
-                );
-
-                event.setStatus("PROCESSED");
-                event.setProcessedAt(LocalDateTime.now());
-
-            } catch (Exception e) {
-                event.setRetryCount(event.getRetryCount() + 1);
-                event.setLastError(e.getMessage());
-
-                if (event.getRetryCount() >= 5) {
-                    event.setStatus("FAILED");
-                } else {
-                    event.setStatus("PENDING");
-                }
-
-                logger.error("Failed to process outbox event {}", event.getId(), e);
-            }
+            processSingleEvent(event);
         }
 
         outboxEventRepository.saveAll(events);
+    }
+
+    private void processSingleEvent(OutboxEvent event) {
+        try {
+            logger.info("Processing outbox event {} type {}", event.getId(), event.getEventType());
+
+            event.setStatus("PROCESSING");
+            event.setLockedAt(LocalDateTime.now());
+
+            Map<String, Object> payload = event.getPayload();
+
+            String redirectUrl = buildRedirectUrl(event);
+
+            NotificationType notificationType = NotificationType.valueOf(event.getEventType());
+
+            notificationService.processOutboxNotification(
+                    event.getUserId(),
+                    notificationType,
+                    payload,
+                    event.getBudgetId(),
+                    event.getEnvelopeId(),
+                    redirectUrl
+            );
+
+            event.setStatus("PROCESSED");
+            event.setProcessedAt(LocalDateTime.now());
+            event.setLastError(null);
+
+            logger.info("Processed outbox event {} type {}", event.getId(), event.getEventType());
+
+        } catch (Exception e) {
+            int retryCount = event.getRetryCount() + 1;
+
+            event.setRetryCount(retryCount);
+            event.setLastError(e.getMessage());
+
+            if (retryCount >= 5) {
+                event.setStatus("FAILED");
+                logger.error("Outbox event {} failed permanently after {} attempts",
+                        event.getId(), retryCount, e);
+            } else {
+                event.setStatus("PENDING");
+                logger.warn("Outbox event {} failed attempt {}. It will be retried. Error: {}",
+                        event.getId(), retryCount, e.getMessage());
+            }
+        }
+    }
+
+    private String buildRedirectUrl(OutboxEvent event) {
+        if (event.getEnvelopeId() != null) {
+            return "/envelopes/" + event.getEnvelopeId();
+        }
+
+        if (event.getBudgetId() != null) {
+            return "/budgets/" + event.getBudgetId();
+        }
+
+        return "/notifications";
     }
 }

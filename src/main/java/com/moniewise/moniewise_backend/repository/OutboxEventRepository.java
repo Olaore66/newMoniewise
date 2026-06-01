@@ -12,12 +12,20 @@ import java.util.List;
 public interface OutboxEventRepository extends JpaRepository<OutboxEvent, Long> {
 
     @Query(value = """
-        SELECT *
-        FROM outbox_events
-        WHERE status = 'PENDING'
-        ORDER BY created_at ASC
-        LIMIT :limit
-        FOR UPDATE SKIP LOCKED
-        """, nativeQuery = true)
+            SELECT *
+            FROM outbox_events
+            WHERE (
+                status = 'PENDING'
+                OR (
+                    status = 'PROCESSING'
+                    AND locked_at IS NOT NULL
+                    AND locked_at < (CURRENT_TIMESTAMP - INTERVAL '10 minutes')
+                )
+            )
+            AND retry_count < 5
+            ORDER BY created_at ASC
+            LIMIT :limit
+            FOR UPDATE SKIP LOCKED
+            """, nativeQuery = true)
     List<OutboxEvent> claimPendingEvents(@Param("limit") int limit);
 }
