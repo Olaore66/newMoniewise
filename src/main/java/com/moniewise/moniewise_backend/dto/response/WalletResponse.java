@@ -13,11 +13,17 @@ import java.time.LocalDateTime;
 @NoArgsConstructor
 @AllArgsConstructor
 public class WalletResponse {
-            BigDecimal balance;
-            String currency;
-            String accountNumber;
-            String bankName;
-            String status;
-            LocalDateTime updatedAt;
-    {}
+    BigDecimal balance;
+    String currency;
+    String accountNumber;
+    String bankName;
+    String status;
+    LocalDateTime updatedAt;
+    /**
+     * The PSP that manages this wallet — e.g. "RUBIES", "PROVIDUS", "SECUREWAVE".
+     * Frontend uses this to branch the UI:
+     *  - RUBIES  → OPay-style transfer form (pick bank, enter account number per transfer)
+     *  - others  → legacy pre-linked settlement account form
+     */
+    String providerName;
 }

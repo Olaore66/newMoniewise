@@ -13,6 +13,7 @@ import com.moniewise.moniewise_backend.enums.NotificationType;
 import com.moniewise.moniewise_backend.enums.TransactionStatus;
 import com.moniewise.moniewise_backend.exception.InsufficientFundsException;
 import com.moniewise.moniewise_backend.repository.*;
+import com.moniewise.moniewise_backend.service.SystemConfigService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -57,6 +58,7 @@ public class BudgetService {
 
     private final SavingsService savingsService;
 
+    private final SystemConfigService systemConfig;
 
     @Value("${moniewise.revenue.wallet.user-id}")
     private Long revenueWalletUserId;
@@ -68,7 +70,10 @@ public class BudgetService {
             WalletRepository walletRepository, UserService userService,
             TransactionLogRepository transactionLogRepository,
             NotificationService notificationService,
-            WalletService walletService, ScheduledTaskRepository scheduledTaskRepository, @Lazy EnvelopeService envelopeService, BudgetLifeCycleManager budgetLifeCycleManager, ApplicationEventPublisher eventPublisher, SavingsService savingsService) {
+            WalletService walletService, ScheduledTaskRepository scheduledTaskRepository,
+            @Lazy EnvelopeService envelopeService, BudgetLifeCycleManager budgetLifeCycleManager,
+            ApplicationEventPublisher eventPublisher, SavingsService savingsService,
+            SystemConfigService systemConfig) {
         this.envelopeRepository = envelopeRepository;
         this.budgetRepository = budgetRepository;
         this.revenueLogRepository = revenueLogRepository;
@@ -76,12 +81,13 @@ public class BudgetService {
         this.userService = userService;
         this.transactionLogRepository = transactionLogRepository;
         this.notificationService = notificationService;
-        this.walletService = walletService; // Assign walletService1 as in original
+        this.walletService = walletService;
         this.scheduledTaskRepository = scheduledTaskRepository;
         this.envelopeService = envelopeService;
         this.budgetLifeCycleManager = budgetLifeCycleManager;
         this.eventPublisher = eventPublisher;
         this.savingsService = savingsService;
+        this.systemConfig = systemConfig;
     }
 
     // Helper method to fetch current date/time from Postgres
@@ -512,9 +518,16 @@ public class BudgetService {
             throw new IllegalArgumentException("Budget duration must be between 1 and 90 days");
         }
 
-        // === CALCULATE FEE (on top of budget) ===
-        int feeIntervals = (int) Math.ceil((double) durationDays / 30);
-        BigDecimal fee = new BigDecimal("200").multiply(BigDecimal.valueOf(feeIntervals));
+        // === CALCULATE FEE (read from system_config — never hardcoded) ===
+        // budget.creation.fee = 0 means no fee charged. Positive value = fee per 30-day interval.
+        BigDecimal baseFee = systemConfig.getBigDecimal(SystemConfigService.BUDGET_CREATION_FEE, BigDecimal.ZERO);
+        BigDecimal fee;
+        if (baseFee.compareTo(BigDecimal.ZERO) > 0) {
+            int feeIntervals = (int) Math.ceil((double) durationDays / 30);
+            fee = baseFee.multiply(BigDecimal.valueOf(feeIntervals));
+        } else {
+            fee = BigDecimal.ZERO;
+        }
         BigDecimal originalAmount = request.getTotalAmount();   // This is what goes to envelopes
 
         // === ENVELOPE PROCESSING & ROUNDING (unchanged logic) ===
@@ -630,17 +643,20 @@ public class BudgetService {
         savedBudget.clearEnvelopes();
         savedBudget.addAllEnvelopes(envelopes);
 
-        // === NOW DEDUCT FEE USING PRIVATE HELPER ===
+        // === NOW DEDUCT FEE USING PRIVATE HELPER (skipped when fee = 0) ===
         deductBudgetCreationFee(user.getId(), fee);
 
         // === DEDUCT ALLOCATION FROM WALLET ===
         walletService.deductBalance(user.getId(), allocationSum);
 
-        // === CREDIT REVENUE WALLET (moved here for clarity) ===
-        Wallet revenueWallet = walletRepository.findByRevenueWalletTrue()
-                .orElseThrow(() -> new RuntimeException("Revenue wallet not found"));
-        revenueWallet.setBalance(revenueWallet.getBalance().add(fee));
-        walletRepository.save(revenueWallet);
+        // === CREDIT REVENUE WALLET (only when fee > 0) ===
+        Wallet revenueWallet = null;
+        if (fee.compareTo(BigDecimal.ZERO) > 0) {
+            revenueWallet = walletRepository.findByRevenueWalletTrue()
+                    .orElseThrow(() -> new RuntimeException("Revenue wallet not found"));
+            revenueWallet.setBalance(revenueWallet.getBalance().add(fee));
+            walletRepository.save(revenueWallet);
+        }
 
         // === TRANSACTION LOGS ===
         // 1. Budget allocation log
@@ -656,27 +672,31 @@ public class BudgetService {
         allocationLog.setCreatedAt(now);
         transactionLogRepository.save(allocationLog);
 
-        // 2. Budget creation fee log
-        TransactionLog feeLog = new TransactionLog();
-        feeLog.setUserId(user.getId());
-        feeLog.setBudgetId(savedBudget.getId());
-        feeLog.setAmount(fee.negate());
-        feeLog.setFee(BigDecimal.ZERO);
-        feeLog.setTransactionType(BUDGET_CREATION_FEE);
-        feeLog.setReference("BUD-FEE-" + savedBudget.getId() + "-" + System.currentTimeMillis());
-        feeLog.setDescription("Budget creation fee");
-        feeLog.setStatus(TransactionStatus.COMPLETED);
-        feeLog.setCreatedAt(now);
-        transactionLogRepository.save(feeLog);
+        // 2. Budget creation fee log (only when a fee was actually charged)
+        if (fee.compareTo(BigDecimal.ZERO) > 0) {
+            TransactionLog feeLog = new TransactionLog();
+            feeLog.setUserId(user.getId());
+            feeLog.setBudgetId(savedBudget.getId());
+            feeLog.setAmount(fee.negate());
+            feeLog.setFee(BigDecimal.ZERO);
+            feeLog.setTransactionType(BUDGET_CREATION_FEE);
+            feeLog.setReference("BUD-FEE-" + savedBudget.getId() + "-" + System.currentTimeMillis());
+            feeLog.setDescription("Budget creation fee");
+            feeLog.setStatus(TransactionStatus.COMPLETED);
+            feeLog.setCreatedAt(now);
+            transactionLogRepository.save(feeLog);
 
-        // === REVENUE LOG ===
-        RevenueLog revenueLog = new RevenueLog();
-        revenueLog.setUserId(revenueWallet.getUser().getId());
-        revenueLog.setType("budget_creation_fee");
-        revenueLog.setAmount(fee);
-        revenueLog.setDescription("Budget fee for " + durationDays + " days");
-        revenueLog.setCreatedAt(now);
-        revenueLogRepository.save(revenueLog);
+            // === REVENUE LOG ===
+            if (revenueWallet != null) {
+                RevenueLog revenueLog = new RevenueLog();
+                revenueLog.setUserId(revenueWallet.getUser().getId());
+                revenueLog.setType("budget_creation_fee");
+                revenueLog.setAmount(fee);
+                revenueLog.setDescription("Budget fee for " + durationDays + " days");
+                revenueLog.setCreatedAt(now);
+                revenueLogRepository.save(revenueLog);
+            }
+        }
 
         // === NOTIFICATION ===
         Map<String, Object> params = new HashMap<>();
@@ -1264,13 +1284,13 @@ public class BudgetService {
 
     private void deductBudgetCreationFee(Long userId, BigDecimal feeAmount) {
         if (feeAmount == null || feeAmount.compareTo(BigDecimal.ZERO) <= 0) {
-            throw new IllegalArgumentException("Invalid budget creation fee amount");
+            // Fee is zero (disabled via system_config) — nothing to deduct
+            logger.debug("[Budget] Budget creation fee is 0 — skipping deduction for user {}", userId);
+            return;
         }
 
-        // Deduct fee from user's wallet using service
         walletService.deductBalance(userId, feeAmount);
-
-        logger.info("Budget creation fee of ₦{} deducted from user {}", feeAmount, userId);
+        logger.info("[Budget] Budget creation fee of ₦{} deducted from user {}", feeAmount, userId);
     }
 
     private EnvelopeResponse mapEnvelopeToResponse(Envelope envelope, Budget budget, String email) {

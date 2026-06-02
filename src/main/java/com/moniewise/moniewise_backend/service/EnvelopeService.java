@@ -6,6 +6,7 @@ import com.moniewise.moniewise_backend.config.GenericNotificationEvent;
 import com.moniewise.moniewise_backend.controller.BudgetController;
 import com.moniewise.moniewise_backend.dto.ExternalTransferQuoteResponse;
 import com.moniewise.moniewise_backend.dto.TransferFeeQuote;
+import com.moniewise.moniewise_backend.dto.response.WithdrawalQuoteResponse;
 import com.moniewise.moniewise_backend.dto.request.EnvelopeRequest;
 import com.moniewise.moniewise_backend.dto.request.P2PTransferRequest;
 import com.moniewise.moniewise_backend.dto.response.EnvelopeResponse;
@@ -14,8 +15,11 @@ import com.moniewise.moniewise_backend.entity.*;
 import com.moniewise.moniewise_backend.enums.*;
 import com.moniewise.moniewise_backend.exception.EntityNotFoundException;
 import com.moniewise.moniewise_backend.externalTransfers.PaymentProvider;
+import com.moniewise.moniewise_backend.psp.PaymentGateway;
+import com.moniewise.moniewise_backend.psp.PaymentGatewayResolver;
 import com.moniewise.moniewise_backend.psp.ProvidusExpressGateway;
 import com.moniewise.moniewise_backend.psp.SecureWaveGateway;
+import com.moniewise.moniewise_backend.psp.rubies.RubiesGateway;
 import com.moniewise.moniewise_backend.repository.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -42,6 +46,11 @@ import java.util.stream.Collectors;
 public class EnvelopeService {
 
     private static final Logger logger = LoggerFactory.getLogger(EnvelopeService.class);
+
+    /** Rubies MFB NIP bank code — used for internal (Rubies-to-Rubies) P2P book transfers. */
+    private static final String RUBIES_BANK_CODE = "090175";
+    private static final String RUBIES_BANK_NAME = "Rubies MFB";
+
     private final EnvelopeRepository envelopeRepository;
     private final BudgetRepository budgetRepository;
     private final RevenueLogRepository revenueLogRepository;
@@ -59,6 +68,7 @@ public class EnvelopeService {
     private final BeneficiaryService beneficiaryService;
     private final PaymentProvider paymentProvider;
     private final ProvidusExpressGateway providusExpressGateway;
+    private final PaymentGatewayResolver paymentGatewayResolver;
 
     private final TransferFeeService transferFeeService;
 
@@ -77,7 +87,8 @@ public class EnvelopeService {
             @Lazy BudgetLifeCycleManager budgetLifeCycleManager,
             BudgetService budgetService, PendingDisbursementRepository pendingDisbursementRepository,
             JdbcTemplate jdbcTemplate, BeneficiaryService beneficiaryService, PaymentProvider paymentProvider,
-            ProvidusExpressGateway providusExpressGateway, TransferFeeService transferFeeService) {
+            ProvidusExpressGateway providusExpressGateway, PaymentGatewayResolver paymentGatewayResolver,
+            TransferFeeService transferFeeService) {
         this.envelopeRepository = envelopeRepository;
         this.budgetRepository = budgetRepository;
         this.revenueLogRepository = revenueLogRepository;
@@ -94,6 +105,7 @@ public class EnvelopeService {
         this.beneficiaryService = beneficiaryService;
         this.paymentProvider = paymentProvider;
         this.providusExpressGateway = providusExpressGateway;
+        this.paymentGatewayResolver = paymentGatewayResolver;
         this.transferFeeService = transferFeeService;
     }
 
@@ -353,22 +365,73 @@ public class EnvelopeService {
         boolean providerBackedP2p = shouldUseProviderBackedP2p(sender, recipient);
         String providerReference = null;
 
-        if (providerBackedP2p) {
-            throw new IllegalStateException("Provider-backed P2P is not enabled yet.");
-        } else {
+        // Names resolved up-front — needed in both the Rubies narration and the logs below
+        String senderName    = getSafeName(sender);
+        String recipientName = getSafeName(recipient);
 
-            // Subtract
+        // Log-reference prefix and provider name are set inside each branch
+        String logRefPrefix    = "P2P-DB-";
+        String logCrRefPrefix  = "P2P-CR-";
+        String logProviderName = null;
+
+        if (providerBackedP2p) {
+            // ── Rubies-to-Rubies internal book transfer ──────────────────────────
+            // Both users have Rubies wallets under the Moniewise BaaS umbrella.
+            // Rubies processes this as an internal transfer (no NIBSS hop) and
+            // typically settles synchronously with response code "00".
+            Wallet senderWallet    = walletService.getWalletByUserId(sender.getId());
+            Wallet recipientWallet = walletService.getWalletByUserId(recipient.getId());
+
+            // Reference with P2P-RB- prefix so the webhook handler can identify it
+            // and skip the Withdrawal lookup gracefully.
+            String p2pReference      = "P2P-RB-" + sender.getId() + "-" + System.currentTimeMillis();
+            String debitAccountName  = walletService.resolveDisplayName(sender);
+            String creditAccountName = walletService.resolveDisplayName(recipient);
+
+            logger.info("[P2P-RUBIES] Initiating internal transfer ref={} from={} to={} amount={}",
+                    p2pReference, senderWallet.getProviderWalletRef(),
+                    recipientWallet.getProviderWalletRef(), amount);
+
+            // Must resolve the Rubies gateway explicitly — resolveDefault() would pick
+            // whichever PSP is currently active in system_config, which may not be Rubies.
+            PaymentGateway gateway = paymentGatewayResolver.resolveByProviderName(RubiesGateway.PROVIDER_NAME);
+            providerReference = gateway.initiateTransferWithContext(
+                    senderWallet.getProviderWalletRef(),
+                    debitAccountName,
+                    RUBIES_BANK_CODE,
+                    RUBIES_BANK_NAME,
+                    recipientWallet.getProviderWalletRef(),
+                    creditAccountName,
+                    amount,
+                    p2pReference,
+                    "Moniewise P2P: " + senderName + " to " + recipientName
+            );
+
+            // Rubies confirmed (or pending) — update sender's internal ledger.
+            // DO NOT credit the recipient here: Rubies sends a CR webhook to the
+            // recipient's account number, which processRubiesDepositWebhook() handles.
+            // Calling fundWallet() here AND letting the CR webhook credit would double-credit.
             sourceEnvelope.setTotalRemainingAmount(sourceEnvelope.getTotalRemainingAmount().subtract(amount));
             sourceEnvelope.setRemainingAmount(sourceEnvelope.getRemainingAmount().subtract(amount));
+            envelopeRepository.save(sourceEnvelope);
 
-            // recalculateTargetEnvelopeLimit(sourceEnvelope, sourceEnvelope.getBudget());
+            logRefPrefix    = "P2P-RB-DB-";
+            logCrRefPrefix  = "P2P-RB-CR-";
+            logProviderName = RubiesGateway.PROVIDER_NAME;
+
+            logger.info("[P2P-RUBIES] Transfer accepted: ref={} sessionId={}", p2pReference, providerReference);
+
+        } else {
+            // ── Internal DB-only path ────────────────────────────────────────────
+            // Legacy (Providus/SecureWave) users or mixed-provider pairs.
+            // No PSP call — just a ledger adjustment.
+            sourceEnvelope.setTotalRemainingAmount(sourceEnvelope.getTotalRemainingAmount().subtract(amount));
+            sourceEnvelope.setRemainingAmount(sourceEnvelope.getRemainingAmount().subtract(amount));
             envelopeRepository.save(sourceEnvelope);
             walletService.fundWallet(recipient.getId(), amount, null, true);
         }
 
         // Credit & Logs
-        String senderName = getSafeName(sender);
-        String recipientName = getSafeName(recipient);
 //        String providerReference = processProvidusP2pIfEnabled(sender, recipient, amount);
 
 //        String baseRef = UUID.randomUUID().toString();
@@ -394,8 +457,8 @@ public class EnvelopeService {
                 .fee(BigDecimal.ZERO)
                 .transactionType(TransactionType.ENVELOPE_TO_USER)
                 .status(TransactionStatus.COMPLETED)
-                .reference((providerReference != null ? "P2P-PROVIDUS-DB-" : "P2P-DB-") + baseRef)
-                .providerName(providerReference != null ? ProvidusExpressGateway.PROVIDER_NAME : null)
+                .reference(logRefPrefix + baseRef)
+                .providerName(logProviderName)
                 .providerReference(providerReference)
                 .description(description)
                 .createdAt(now)
@@ -409,8 +472,8 @@ public class EnvelopeService {
                 .fee(BigDecimal.ZERO)
                 .transactionType(TransactionType.USER_TO_ENVELOPE)
                 .status(TransactionStatus.COMPLETED)
-                .reference((providerReference != null ? "P2P-PROVIDUS-CR-" : "P2P-CR-") + baseRef)
-                .providerName(providerReference != null ? ProvidusExpressGateway.PROVIDER_NAME : null)
+                .reference(logCrRefPrefix + baseRef)
+                .providerName(logProviderName)
                 .providerReference(providerReference)
                 .description("Received from " + senderName)
                 .createdAt(now)
@@ -674,16 +737,25 @@ public class EnvelopeService {
 
         User user = userService.findByEmail(email);
 
+        // ── Detect PSP once so every branching point below can use it ────────
+        Wallet userWallet = walletService.getWalletByUserId(user.getId());
+        boolean isRubies = RubiesGateway.PROVIDER_NAME.equalsIgnoreCase(
+                userWallet != null ? userWallet.getProviderName() : null);
+
         Wallet linkedWallet = null;
         Map<String, Object> secureWaveBankInfo = Map.of();
 
-        if (providusExpressGateway.isEnabled()) {
-            linkedWallet = hydrateExternalAccountFromLinkedBank(externalAccount, user);
-        } else {
-            secureWaveBankInfo = walletService.getLinkedBankInfo(user.getId(), user.getEmail());
+        if (!isRubies) {
+            // Rubies uses OPay-style transfers: destination bank details come in the request,
+            // not from a pre-linked settlement account. Skip settlement account loading.
+            if (providusExpressGateway.isEnabled()) {
+                linkedWallet = hydrateExternalAccountFromLinkedBank(externalAccount, user);
+            } else {
+                secureWaveBankInfo = walletService.getLinkedBankInfo(user.getId(), user.getEmail());
 
-            if (secureWaveBankInfo == null || secureWaveBankInfo.isEmpty()) {
-                throw new IllegalStateException("No withdrawal bank account found. Please set your withdrawal bank first.");
+                if (secureWaveBankInfo == null || secureWaveBankInfo.isEmpty()) {
+                    throw new IllegalStateException("No withdrawal bank account found. Please set your withdrawal bank first.");
+                }
             }
         }
 
@@ -704,34 +776,75 @@ public class EnvelopeService {
         LocalDateTime now = fetchCurrentDateTimeFromDatabase();
         validateTransferRules(source, source.getBudget(), now);
 
-        String providerName = providusExpressGateway.isEnabled()
-                ? ProvidusExpressGateway.PROVIDER_NAME
-                : SecureWaveGateway.PROVIDER_NAME;
+        String providerName = isRubies
+                ? RubiesGateway.PROVIDER_NAME
+                : (providusExpressGateway.isEnabled() ? ProvidusExpressGateway.PROVIDER_NAME : SecureWaveGateway.PROVIDER_NAME);
 
-        TransferFeeQuote feeQuote = transferFeeService.quoteFee(
-                providerName,
-                TransferFeeTransferType.ENVELOPE_TO_EXTERNAL,
-                amount
-        );
-
-        BigDecimal fee = feeQuote.getFee();
-        BigDecimal totalDebit = feeQuote.getTotalDebit();
-
-        if (totalDebit.compareTo(source.getRemainingAmount()) > 0) {
-            throw new IllegalStateException("Amount plus transfer fee exceeds period limit. Available: ₦" + source.getRemainingAmount());
+        // markupFee  = Moniewise revenue (₦50 / ₦75 / ₦120 for Rubies; flat fee for legacy).
+        // bankCharge = NIBSS NIP fee charged by Rubies at BaaS level (₦10.75/₦26.88/₦53.75).
+        //              This goes to Rubies / NIBSS — Moniewise does NOT collect it.
+        // totalDebit = amount + bankCharge + markupFee
+        BigDecimal markupFee;
+        BigDecimal bankCharge;
+        BigDecimal totalDebit;
+        if (isRubies) {
+            // Rubies: markup-tier fee (waived for premium users) + NIP bank charge
+            WithdrawalQuoteResponse rubiesQuote = walletService.quoteWithdrawal(amount, user.getId());
+            markupFee  = rubiesQuote.getFee();
+            bankCharge = rubiesQuote.getBankCharge();
+            totalDebit = rubiesQuote.getTotalDebit();
+        } else {
+            TransferFeeQuote feeQuote = transferFeeService.quoteFee(
+                    providerName,
+                    TransferFeeTransferType.ENVELOPE_TO_EXTERNAL,
+                    amount
+            );
+            markupFee  = feeQuote.getFee();
+            bankCharge = BigDecimal.ZERO;   // legacy providers handle their fees differently
+            totalDebit = feeQuote.getTotalDebit();
         }
-        //        if (amount.compareTo(source.getTotalRemainingAmount()) > 0) throw new IllegalStateException("Insufficient funds");
+        // totalFee is what goes into error messages; markupFee is what goes on txn.setFee()
+        final BigDecimal fee      = markupFee;  // alias kept for downstream uses (txn log, FEE log)
+        final BigDecimal totalFee = bankCharge.add(markupFee);
 
+        // Period-limit check — the disbursement rule for this period (e.g. daily/monthly cap).
+        BigDecimal periodRemaining = source.getRemainingAmount();
+        if (totalDebit.compareTo(periodRemaining) > 0) {
+            BigDecimal maxSendable = periodRemaining.subtract(totalFee).max(BigDecimal.ZERO);
+            if (isRubies) {
+                throw new IllegalStateException(String.format(
+                        "Insufficient balance. Your envelope allows ₦%,.2f for this period. " +
+                        "Bank charge ₦%,.2f + Moniewise fee ₦%,.2f = ₦%,.2f total charges. " +
+                        "The most you can send right now is ₦%,.2f. Please enter a lower amount.",
+                        periodRemaining, bankCharge, markupFee, totalFee, maxSendable));
+            } else {
+                throw new IllegalStateException(String.format(
+                        "Insufficient balance. Your envelope allows ₦%,.2f for this period. " +
+                        "The ₦%,.2f transfer fee means the most you can send right now is ₦%,.2f. " +
+                        "Please reduce your transfer amount.",
+                        periodRemaining, fee, maxSendable));
+            }
+        }
 
-
-
-//        BigDecimal availableVaultBalance = totalRemaining.subtract(heldAmount);
+        // Vault balance check — physical funds in the envelope minus what's already held.
         BigDecimal availableVaultBalance =
                 safeAmount(source.getTotalRemainingAmount())
                         .subtract(safeAmount(source.getHeldAmount()));
 
         if (totalDebit.compareTo(availableVaultBalance) > 0) {
-            throw new IllegalStateException("Insufficient funds including transfer fee");
+            BigDecimal maxSendable = availableVaultBalance.subtract(totalFee).max(BigDecimal.ZERO);
+            if (isRubies) {
+                throw new IllegalStateException(String.format(
+                        "Insufficient funds. Your envelope has ₦%,.2f available (after pending transfers). " +
+                        "Bank charge ₦%,.2f + Moniewise fee ₦%,.2f = ₦%,.2f total charges. " +
+                        "The most you can send is ₦%,.2f. Please enter a lower amount.",
+                        availableVaultBalance, bankCharge, markupFee, totalFee, maxSendable));
+            } else {
+                throw new IllegalStateException(String.format(
+                        "Insufficient funds. Your envelope has ₦%,.2f available (after pending transfers). " +
+                        "With the ₦%,.2f transfer fee, the most you can send is ₦%,.2f.",
+                        availableVaultBalance, fee, maxSendable));
+            }
         }
 //        String resolvedName = resolveExternalRecipientName(externalAccount, linkedWallet);
 //        if (resolvedName == null) {
@@ -742,7 +855,25 @@ public class EnvelopeService {
         String bankName;
         String accountNumber;
 
-        if (providusExpressGateway.isEnabled()) {
+        if (isRubies) {
+            // OPay-style: bankCode and accountNumber are supplied in every transfer request.
+            if (isBlank(externalAccount.getBankCode())) {
+                throw new IllegalArgumentException("Bank code is required for Rubies transfers");
+            }
+            if (isBlank(externalAccount.getAccountNumber())) {
+                throw new IllegalArgumentException("Account number is required for Rubies transfers");
+            }
+            accountNumber = externalAccount.getAccountNumber().trim();
+            bankName      = isBlank(externalAccount.getBankName())
+                            ? externalAccount.getBankCode()
+                            : externalAccount.getBankName().trim();
+            // Name-enquiry against the destination bank via the Rubies gateway
+            resolvedName = walletService.resolveBankAccount(user.getId(), externalAccount.getBankCode(), accountNumber);
+            if (isBlank(resolvedName)) {
+                throw new IllegalArgumentException("Could not resolve account name — please verify the bank code and account number.");
+            }
+
+        } else if (providusExpressGateway.isEnabled()) {
             resolvedName = resolveExternalRecipientName(externalAccount, linkedWallet);
             bankName = externalAccount.getBankName();
             accountNumber = externalAccount.getAccountNumber();
@@ -845,7 +976,27 @@ public class EnvelopeService {
                     ? narration.trim()
                     : "Transfer from " + source.getName();
 
-            if (providusExpressGateway.isEnabled()) {
+            if (isRubies) {
+                // OPay-style: supply destination bank details inline with every Rubies transfer.
+                // The envelope reference (EXT-UUID) is echoed back as paymentReference in the
+                // DR webhook, which settleExternalTransferIfExists() picks up to settle the envelope.
+                PaymentGateway rubiesGateway =
+                        paymentGatewayResolver.resolveByProviderName(RubiesGateway.PROVIDER_NAME);
+                providerRef = rubiesGateway.initiateTransferWithContext(
+                        userWallet.getProviderWalletRef(),
+                        walletService.resolveDisplayName(user),
+                        externalAccount.getBankCode(),
+                        bankName,
+                        accountNumber,
+                        resolvedName,
+                        amount,
+                        myReference,
+                        providerNarration
+                );
+                // NOTE: the markup fee is transferred to the Moniewise Rubies revenue wallet
+                // only after the SUCCESS webhook confirms delivery — handled in
+                // ExternalTransferSettlementService.settleExternalTransfer().
+            } else if (providusExpressGateway.isEnabled()) {
                 providerRef = initiateProvidusExternalTransfer(
                         user,
                         externalAccount,
@@ -1468,8 +1619,27 @@ public class EnvelopeService {
         return envelope.getRemainingAmount();
     }
 
+    /**
+     * Returns true when both sender and recipient have Rubies wallets,
+     * meaning the transfer can be routed as an internal Rubies book transfer
+     * (bank code 090175, no NIBSS hop, near-instant settlement).
+     *
+     * <p>Falls back to the internal DB-only path for any other combination
+     * (legacy Providus/SecureWave wallets or mixed providers).
+     */
     private boolean shouldUseProviderBackedP2p(User sender, User recipient) {
-        return false; // keep internal-only for now
+        try {
+            Wallet senderWallet    = walletService.getWalletByUserId(sender.getId());
+            Wallet recipientWallet = walletService.getWalletByUserId(recipient.getId());
+            return senderWallet    != null
+                && recipientWallet != null
+                && RubiesGateway.PROVIDER_NAME.equalsIgnoreCase(senderWallet.getProviderName())
+                && RubiesGateway.PROVIDER_NAME.equalsIgnoreCase(recipientWallet.getProviderName());
+        } catch (Exception e) {
+            logger.warn("[P2P] Could not determine provider-backed P2P eligibility — falling back to internal path: {}",
+                    e.getMessage());
+            return false;
+        }
     }
 
     private BigDecimal safeAmount(BigDecimal value) {
@@ -1501,6 +1671,65 @@ public class EnvelopeService {
         source = envelopeRepository.findById(envelopeId)
                 .orElseThrow(() -> new EntityNotFoundException("Envelope not found during refresh"));
 
+        // ── Load the user's wallet once to detect which PSP they are on ─────────
+        Wallet wallet = walletService.getWalletByUserId(user.getId());
+        boolean isRubies = RubiesGateway.PROVIDER_NAME.equalsIgnoreCase(
+                wallet != null ? wallet.getProviderName() : null);
+
+        if (isRubies) {
+            // Rubies uses markup-tier fees, not the flat TransferFeeService fee table.
+            // Settlement bank details are NOT pre-linked for Rubies users — they are
+            // supplied at transfer time (OPay-style), so we return null for bank fields here.
+            WithdrawalQuoteResponse quote = walletService.quoteWithdrawal(amount, user.getId());
+
+            // markupFee  = Moniewise revenue (₦50 / ₦75 / ₦120)
+            // bankCharge = NIBSS NIP fee charged by Rubies (₦10.75 / ₦26.88 / ₦53.75)
+            // totalDebit = amount + bankCharge + markupFee
+            BigDecimal markupFee   = quote.getFee();
+            BigDecimal bankCharge  = quote.getBankCharge();
+            BigDecimal totalFee    = bankCharge.add(markupFee);
+            BigDecimal totalDebit  = quote.getTotalDebit();
+
+            if (totalDebit.compareTo(availableLimit) > 0) {
+                BigDecimal maxSendable = availableLimit.subtract(totalFee).max(BigDecimal.ZERO);
+                throw new IllegalStateException(String.format(
+                        "Insufficient balance. Your envelope allows ₦%,.2f for this period. " +
+                        "Bank charge ₦%,.2f + Moniewise fee ₦%,.2f = ₦%,.2f total charges. " +
+                        "The most you can send right now is ₦%,.2f. Please enter a lower amount.",
+                        availableLimit, bankCharge, markupFee, totalFee, maxSendable));
+            }
+
+            BigDecimal availableVaultBalance =
+                    safeAmount(source.getTotalRemainingAmount())
+                            .subtract(safeAmount(source.getHeldAmount()));
+
+            if (totalDebit.compareTo(availableVaultBalance) > 0) {
+                BigDecimal maxSendable = availableVaultBalance.subtract(totalFee).max(BigDecimal.ZERO);
+                throw new IllegalStateException(String.format(
+                        "Insufficient funds. Your envelope has ₦%,.2f available (after pending transfers). " +
+                        "Bank charge ₦%,.2f + Moniewise fee ₦%,.2f = ₦%,.2f total charges. " +
+                        "The most you can send is ₦%,.2f. Please enter a lower amount.",
+                        availableVaultBalance, bankCharge, markupFee, totalFee, maxSendable));
+            }
+
+            return new ExternalTransferQuoteResponse(
+                    envelopeId,
+                    amount,
+                    markupFee,
+                    bankCharge,
+                    totalDebit,
+                    quote.getRecipientReceives(),
+                    RubiesGateway.PROVIDER_NAME,
+                    quote.getFeePolicy(),
+                    quote.getFeeSource(),
+                    quote.getMessage(),
+                    null,   // destination bank is supplied in the transfer request, not pre-linked
+                    null,
+                    null
+            );
+        }
+
+        // ── Legacy path (Providus / SecureWave) ──────────────────────────────
         String providerName = providusExpressGateway.isEnabled()
                 ? ProvidusExpressGateway.PROVIDER_NAME
                 : SecureWaveGateway.PROVIDER_NAME;
@@ -1515,7 +1744,12 @@ public class EnvelopeService {
         BigDecimal totalDebit = feeQuote.getTotalDebit();
 
         if (totalDebit.compareTo(availableLimit) > 0) {
-            throw new IllegalStateException("Amount plus transfer fee exceeds available envelope balance");
+            BigDecimal maxSendable = availableLimit.subtract(fee).max(BigDecimal.ZERO);
+            throw new IllegalStateException(String.format(
+                    "Insufficient balance. Your envelope allows ₦%,.2f for this period. " +
+                    "The ₦%,.2f transfer fee means the most you can send right now is ₦%,.2f. " +
+                    "Please reduce your transfer amount.",
+                    availableLimit, fee, maxSendable));
         }
 
         BigDecimal availableVaultBalance =
@@ -1523,10 +1757,12 @@ public class EnvelopeService {
                         .subtract(safeAmount(source.getHeldAmount()));
 
         if (totalDebit.compareTo(availableVaultBalance) > 0) {
-            throw new IllegalStateException("Insufficient funds including transfer fee");
+            BigDecimal maxSendable = availableVaultBalance.subtract(fee).max(BigDecimal.ZERO);
+            throw new IllegalStateException(String.format(
+                    "Insufficient funds. Your envelope has ₦%,.2f available (after pending transfers). " +
+                    "With the ₦%,.2f transfer fee, the most you can send is ₦%,.2f.",
+                    availableVaultBalance, fee, maxSendable));
         }
-
-        Wallet wallet = walletService.getWalletByUserId(user.getId());
 
         if (wallet.getSettlementAccountNumber() == null || wallet.getSettlementAccountNumber().isBlank()) {
             throw new IllegalStateException("Please link a withdrawal bank account before transferring.");
@@ -1536,6 +1772,7 @@ public class EnvelopeService {
                 envelopeId,
                 amount,
                 fee,
+                BigDecimal.ZERO,    // non-Rubies: no separate NIP bank charge to expose
                 totalDebit,
                 feeQuote.getRecipientReceives(),
                 providerName,

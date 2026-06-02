@@ -13,6 +13,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.client.HttpStatusCodeException;
 import org.springframework.web.client.RestTemplate;
 
+import javax.annotation.PostConstruct;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import java.math.BigDecimal;
@@ -56,6 +57,25 @@ public class ProvidusExpressGateway implements PaymentGateway {
      */
     @Value("${providus.webhook-secret:}")
     private String webhookSecret;
+
+    // ── Startup validation ────────────────────────────────────────────────────
+
+    @PostConstruct
+    public void validateConfiguration() {
+        if (providusIntegrationEnabled) {
+            boolean hasAccessToken  = accessToken  != null && !accessToken.isBlank();
+            boolean hasMerchantKey  = merchantApiKey != null && !merchantApiKey.isBlank();
+            if (!hasAccessToken && !hasMerchantKey) {
+                logger.error("[Providus] Integration is ENABLED but neither PROVIDUS_ACCESS_TOKEN " +
+                        "(providus.access-token) nor PROVIDUS_MERCHANT_API_KEY " +
+                        "(providus.merchant-api-key) is set — all Providus API calls will fail with 401.");
+            }
+            if (webhookSecret == null || webhookSecret.isBlank()) {
+                logger.warn("[Providus][SECURITY] PROVIDUS_WEBHOOK_SECRET (providus.webhook-secret) is not set — " +
+                        "webhook signature verification is DISABLED (catch-all mode). Set before production.");
+            }
+        }
+    }
 
     public boolean isEnabled() {
         return providusIntegrationEnabled;

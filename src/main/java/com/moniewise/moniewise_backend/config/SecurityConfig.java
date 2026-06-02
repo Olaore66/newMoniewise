@@ -13,6 +13,7 @@ import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
+import org.springframework.security.config.annotation.method.configuration.EnableGlobalMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
@@ -34,6 +35,7 @@ import java.util.stream.Collectors;
 
 @Configuration
 @EnableWebSecurity
+@EnableGlobalMethodSecurity(prePostEnabled = true)   // activates @PreAuthorize / @PostAuthorize on all beans
 public class SecurityConfig {
 
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
@@ -73,7 +75,9 @@ public class SecurityConfig {
                 .and()
                 .authorizeRequests()
                 .antMatchers("/auth/signup", "/auth/verify-signup-otp", "/auth/resend-signup-otp", "/auth/bvn/pre-verify", "/auth/login", "/auth/oauth2/**", "/tnc/**", "/users/otp/generate", "/users/otp/verify", "/auth/forgot-password", "/auth/verify-reset-otp", "/auth/reset-password", "/auth/google").permitAll()
-                .antMatchers("/api/webhooks/monnify", "/api/webhooks/securewave", "/api/webhooks/providus").permitAll()
+                .antMatchers("/api/webhooks/monnify", "/api/webhooks/securewave",
+                             "/api/webhooks/providus", "/api/webhooks/rubies").permitAll()   // Rubies webhook must be open — no JWT
+                .antMatchers("/admin/**").hasRole("ADMIN")   // URL-level guard (defence-in-depth alongside @PreAuthorize)
                 .antMatchers("/auth/logout", "/auth/refresh", "/auth/delete").authenticated()
                 .antMatchers("/users/**", "/notifications/**", "/disbursements/**", "/transactions/**", "/legal/**", "/ai/**", "/budgets/**", "/envelopes/**", "/wallets/**", "/transactions/pin/**", "/beneficiaries/**", "/savings/**").authenticated()
                 .antMatchers(HttpMethod.PATCH, "/users/tnc").authenticated()

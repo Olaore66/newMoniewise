@@ -182,13 +182,36 @@ public class EnvelopeController {
     }
 
     // ================== PERSON TO EXTERNAL TRANSFER =====================
+    // NOTE: This is a convenience alias for POST /envelopes/{id}/transfer-external.
+    // It accepts a sourceEnvelopeId in the body instead of the path.
     @PostMapping("/transfer/external")
     public ResponseEntity<?> transferToExternalBank(
             @RequestBody ExternalTransferRequest request,
-            @AuthenticationPrincipal String email
+            Authentication authentication
     ) {
+        // Validate the same rules as the path-variable endpoint —
+        // PIN, account number format, recipient name are all required here too.
+        if (request.getAmount() == null || request.getAmount().doubleValue() <= 0) {
+            return ResponseEntity.badRequest().body(Map.of("message", "Amount must be positive"));
+        }
+        if (request.getTransactionPin() == null || request.getTransactionPin().isBlank()) {
+            return ResponseEntity.badRequest().body(Map.of("message", "Transaction PIN is required"));
+        }
+        if (request.getAccountNumber() == null || request.getAccountNumber().isBlank()) {
+            return ResponseEntity.badRequest().body(Map.of("message", "Account number is required"));
+        }
+        if (!request.getAccountNumber().matches("\\d{10}")) {
+            return ResponseEntity.badRequest().body(Map.of("message", "Account number must be a 10-digit NUBAN"));
+        }
+        if (request.getRecipientName() == null || request.getRecipientName().isBlank()) {
+            return ResponseEntity.badRequest().body(Map.of("message", "Recipient name is required"));
+        }
+        if (request.getSourceEnvelopeId() == null) {
+            return ResponseEntity.badRequest().body(Map.of("message", "sourceEnvelopeId is required"));
+        }
+
+        String email = authentication.getName();
         // 1. Map the DTO to the Inner Class your Service expects
-        // (Assuming your Service still uses BudgetController.ExternalAccount)
         BudgetController.ExternalAccount beneficiary = new BudgetController.ExternalAccount();
         beneficiary.setAccountNumber(request.getAccountNumber());
         beneficiary.setBankCode(request.getBankCode());

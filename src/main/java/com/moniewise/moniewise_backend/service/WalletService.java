@@ -6,6 +6,7 @@ import com.moniewise.moniewise_backend.dto.TransferFeeQuote;
 import com.moniewise.moniewise_backend.dto.request.UpdateBankDetailsRequest;
 import com.moniewise.moniewise_backend.dto.request.WithdrawalRequest;
 import com.moniewise.moniewise_backend.dto.response.WithdrawalQuoteResponse;
+import com.moniewise.moniewise_backend.psp.rubies.RubiesGateway;
 import com.moniewise.moniewise_backend.entity.TransactionLog;
 import com.moniewise.moniewise_backend.entity.User;
 import com.moniewise.moniewise_backend.entity.Wallet;
@@ -15,6 +16,8 @@ import com.moniewise.moniewise_backend.exception.InsufficientFundsException;
 import com.moniewise.moniewise_backend.psp.PaymentGateway;
 import com.moniewise.moniewise_backend.psp.PaymentGatewayResolver;
 import com.moniewise.moniewise_backend.psp.ProvidusExpressGateway;
+import com.moniewise.moniewise_backend.entity.RevenueLog;
+import com.moniewise.moniewise_backend.repository.RevenueLogRepository;
 import com.moniewise.moniewise_backend.repository.TransactionLogRepository;
 import com.moniewise.moniewise_backend.repository.UserRepository;
 import com.moniewise.moniewise_backend.repository.WalletRepository;
@@ -57,6 +60,12 @@ public class WalletService {
 
     private final TransferFeeService transferFeeService;
 
+    private final MarkupCalculatorService markupCalculatorService;
+
+    private final RevenueLogRepository revenueLogRepository;
+
+    private final SystemConfigService systemConfigService;
+
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Autowired
@@ -73,7 +82,10 @@ public class WalletService {
             WithdrawalRepository withdrawalRepository,
             @Lazy UserService userService,
             WithdrawalFeeService withdrawalFeeService,
-            TransferFeeService transferFeeService) {
+            TransferFeeService transferFeeService,
+            MarkupCalculatorService markupCalculatorService,
+            RevenueLogRepository revenueLogRepository,
+            SystemConfigService systemConfigService) {
         this.walletRepository = walletRepository;
         this.transactionLogRepository = transactionLogRepository;
         this.notificationService = notificationService;
@@ -84,6 +96,9 @@ public class WalletService {
         this.userService = userService;
         this.withdrawalFeeService = withdrawalFeeService;
         this.transferFeeService = transferFeeService;
+        this.markupCalculatorService = markupCalculatorService;
+        this.revenueLogRepository = revenueLogRepository;
+        this.systemConfigService = systemConfigService;
     }
 
     public Wallet getWalletByUserId(Long userId) {
@@ -624,37 +639,167 @@ public class WalletService {
             throw new IllegalArgumentException("Invalid transaction PIN");
         }
 
-        if (wallet.getSettlementAccountNumber() == null || wallet.getSettlementBankCode() == null) {
-            throw new IllegalStateException("Please link a withdrawal bank account before withdrawing funds.");
+        PaymentGateway gateway = paymentGatewayResolver.resolveForWallet(wallet);
+
+        // ── Resolve destination bank details ──────────────────────────────────────
+        // Rubies: user enters destination per-transfer (like OPay).
+        //         Frontend must call POST /wallets/resolve-account first to verify the name.
+        // Legacy: pre-linked settlement account stored on the wallet.
+        final String destBankCode;
+        final String destBankName;
+        final String destAccountNumber;
+        final String destAccountName;
+
+        if (RubiesGateway.PROVIDER_NAME.equalsIgnoreCase(wallet.getProviderName())) {
+            if (request.getBankCode() == null || request.getBankCode().isBlank()) {
+                throw new IllegalArgumentException("Destination bank code is required.");
+            }
+            if (request.getAccountNumber() == null || request.getAccountNumber().isBlank()) {
+                throw new IllegalArgumentException("Destination account number is required.");
+            }
+            if (request.getAccountName() == null || request.getAccountName().isBlank()) {
+                throw new IllegalArgumentException(
+                        "Please verify the destination account name before proceeding. " +
+                        "Use POST /wallets/resolve-account to look it up.");
+            }
+            destBankCode      = request.getBankCode().trim();
+            destBankName      = request.getBankName() != null ? request.getBankName().trim() : destBankCode;
+            destAccountNumber = request.getAccountNumber().trim();
+            destAccountName   = request.getAccountName().trim();
+        } else {
+            // Legacy Providus / SecureWave — must have a pre-linked settlement account
+            if (wallet.getSettlementAccountNumber() == null || wallet.getSettlementBankCode() == null) {
+                throw new IllegalStateException("Please link a withdrawal bank account before withdrawing funds.");
+            }
+            destBankCode      = wallet.getSettlementBankCode();
+            destBankName      = wallet.getSettlementBankName();
+            destAccountNumber = wallet.getSettlementAccountNumber();
+            destAccountName   = wallet.getSettlementAccountName();
         }
 
-        BigDecimal withdrawalFee = withdrawalFeeService.calculateWithdrawalFee(request.getAmount());
-        BigDecimal totalDebit = withdrawalFeeService.calculateTotalDebit(request.getAmount());
+        // ── Fee calculation: Rubies uses markup tiers, legacy providers use WithdrawalFeeService ──
+        // transferFee  = Moniewise markup only (this is what enters the revenue wallet)
+        // nipFee       = NIBSS NIP bank charge (auto-deducted by Rubies; does NOT go to revenue)
+        // totalDebit   = amount + nipFee + transferFee  (what actually leaves the user's Rubies wallet)
+        BigDecimal transferFee;
+        BigDecimal nipFee;
+        if (RubiesGateway.PROVIDER_NAME.equalsIgnoreCase(wallet.getProviderName())) {
+            transferFee = markupCalculatorService.calculateMarkup(request.getAmount(), userId);
+            nipFee      = markupCalculatorService.calculateNipFee(request.getAmount());
+            logger.info("[Transfer] Rubies fees for user={} amount={}: markup=₦{} NIP=₦{}",
+                    userId, request.getAmount(), transferFee, nipFee);
+        } else {
+            transferFee = withdrawalFeeService.calculateWithdrawalFee(request.getAmount());
+            nipFee      = BigDecimal.ZERO;
+        }
+
+        BigDecimal totalDebit = request.getAmount().add(nipFee).add(transferFee);
 
         if (wallet.getBalance().compareTo(totalDebit) < 0) {
-            throw new IllegalArgumentException(insufficientWithdrawalBalanceMessage(totalDebit, withdrawalFee));
+            if (nipFee.compareTo(BigDecimal.ZERO) > 0) {
+                BigDecimal maxSendable = wallet.getBalance().subtract(nipFee).subtract(transferFee)
+                        .max(BigDecimal.ZERO);
+                BigDecimal totalFee = nipFee.add(transferFee);
+                throw new IllegalArgumentException(String.format(
+                        "Insufficient balance. You have ₦%,.2f available. " +
+                        "Bank charge ₦%,.2f + Moniewise fee ₦%,.2f = ₦%,.2f total charges. " +
+                        "The most you can send is ₦%,.2f. Please enter a lower amount.",
+                        wallet.getBalance(), nipFee, transferFee, totalFee, maxSendable));
+            }
+            throw new IllegalArgumentException(insufficientWithdrawalBalanceMessage(totalDebit, transferFee));
         }
 
-        PaymentGateway gateway = paymentGatewayResolver.resolveForWallet(wallet);
-        String narration = buildWithdrawalNarration(wallet, request);
-        Withdrawal withdrawal = createWithdrawalRecord(user, wallet, request, narration, withdrawalFee, totalDebit);
+        String narration = buildWithdrawalNarration(destBankName, request);
+        Withdrawal withdrawal = createWithdrawalRecord(
+                user, wallet, request, narration, transferFee, totalDebit,
+                destBankCode, destBankName, destAccountNumber, destAccountName);
         self.reserveWithdrawalForProvider(withdrawal.getId());
 
         String providerReference;
         try {
-            providerReference = gateway.initiateWithdrawal(
-                    user.getEmail(),
-                    request.getAmount(),
-                    narration
-            );
+            if (RubiesGateway.PROVIDER_NAME.equalsIgnoreCase(wallet.getProviderName())) {
+                // Rubies: pass explicit debit + credit account details
+                providerReference = gateway.initiateTransferWithContext(
+                        wallet.getProviderWalletRef(),
+                        resolveDisplayName(user),
+                        destBankCode,
+                        destBankName,
+                        destAccountNumber,
+                        destAccountName,
+                        request.getAmount(),
+                        withdrawal.getClientReference(),
+                        narration
+                );
+            } else {
+                // Providus / SecureWave: legacy path
+                providerReference = gateway.initiateWithdrawal(
+                        user.getEmail(),
+                        request.getAmount(),
+                        narration
+                );
+            }
         } catch (RuntimeException e) {
             self.markWithdrawalFailed(withdrawal.getId(), e.getMessage());
             throw e;
         }
 
+        // NOTE: the markup fee is NOT transferred to the revenue wallet here.
+        // It moves only after the SUCCESS webhook confirms the transfer landed —
+        // see processRubiesWithdrawalConfirmation(). Doing it here would mean the
+        // revenue wallet gets the fee even when Rubies later rejects the transfer.
+
         return self.finalizeAcceptedWithdrawal(withdrawal.getId(), providerReference);
     }
 
+    /**
+     * Returns the fee breakdown for a transfer, respecting the user's wallet provider
+     * and premium status.
+     *
+     * <p>Rubies wallets use the markup-fee tiers. Legacy wallets use the flat withdrawal fee.
+     * Frontend should call this before showing the confirmation screen.
+     */
+    public WithdrawalQuoteResponse quoteWithdrawal(BigDecimal amount, Long userId) {
+        Wallet wallet = walletRepository.findByUserId(userId).orElse(null);
+
+        if (wallet != null && RubiesGateway.PROVIDER_NAME.equalsIgnoreCase(wallet.getProviderName())) {
+            MarkupCalculatorService.FeeBreakdown breakdown =
+                    markupCalculatorService.buildBreakdown(amount, userId);
+
+            // fee        = Moniewise markup only (revenue)
+            // bankCharge = NIBSS NIP fee (goes to Rubies/banking system — NOT revenue)
+            // totalDebit = amount + bankCharge + fee
+            return new WithdrawalQuoteResponse(
+                    breakdown.transferAmount(),
+                    breakdown.markupFee(),
+                    breakdown.bankCharge(),
+                    breakdown.totalFromEnvelope(),
+                    amount,
+                    breakdown.markupFee().compareTo(BigDecimal.ZERO) == 0 ? "WAIVED" : "MARKUP_TIER",
+                    "USER_BALANCE",
+                    breakdown.displayText()
+            );
+        }
+
+        // Legacy: flat fee
+        BigDecimal fee = withdrawalFeeService.calculateWithdrawalFee(amount);
+        BigDecimal totalDebit = withdrawalFeeService.calculateTotalDebit(amount);
+        return new WithdrawalQuoteResponse(
+                amount,
+                fee,
+                totalDebit,
+                amount,
+                "FLAT_WITHDRAWAL_FEE",
+                "USER_BALANCE",
+                String.format("A ₦%s withdrawal fee applies. ₦%s will be deducted from your available balance.",
+                        formatMoney(fee),
+                        formatMoney(totalDebit))
+        );
+    }
+
+    /**
+     * Backward-compatible overload — called by existing code that doesn't pass userId.
+     * Falls back to the flat withdrawal fee (no markup/premium logic).
+     */
     public WithdrawalQuoteResponse quoteWithdrawal(BigDecimal amount) {
         BigDecimal fee = withdrawalFeeService.calculateWithdrawalFee(amount);
         BigDecimal totalDebit = withdrawalFeeService.calculateTotalDebit(amount);
@@ -669,6 +814,26 @@ public class WalletService {
                         formatMoney(fee),
                         formatMoney(totalDebit))
         );
+    }
+
+    /** Resolves the user's display name from BVN profile fields, falling back to email prefix. */
+    public String resolveDisplayName(User user) {
+        Map<String, Object> profile = user.getProfileData() != null ? user.getProfileData() : Map.of();
+        String first  = strFromProfile(profile, "bvnFirstName",  "bvnFirst",  "firstName");
+        String last   = strFromProfile(profile, "bvnLastName",   "bvnLast",   "lastName");
+        if (first != null && last != null) return (first + " " + last).toUpperCase();
+        if (last  != null) return last.toUpperCase();
+        // Last resort: use the part of the email before @
+        String email = user.getEmail();
+        return email != null ? email.split("@")[0].toUpperCase() : "ACCOUNT HOLDER";
+    }
+
+    private String strFromProfile(Map<String, Object> profile, String... keys) {
+        for (String key : keys) {
+            Object v = profile.get(key);
+            if (v != null && !v.toString().isBlank()) return v.toString().trim();
+        }
+        return null;
     }
 
     @Transactional
@@ -805,7 +970,11 @@ public class WalletService {
                                               WithdrawalRequest request,
                                               String narration,
                                               BigDecimal fee,
-                                              BigDecimal totalDebit) {
+                                              BigDecimal totalDebit,
+                                              String destBankCode,
+                                              String destBankName,
+                                              String destAccountNumber,
+                                              String destAccountName) {
         Withdrawal withdrawal = new Withdrawal();
         withdrawal.setUserId(user.getId());
         withdrawal.setWalletId(wallet.getId());
@@ -815,21 +984,21 @@ public class WalletService {
         withdrawal.setRecipientReceives(request.getAmount());
         withdrawal.setCurrency(wallet.getCurrency());
         withdrawal.setNarration(narration);
-        withdrawal.setBankName(wallet.getSettlementBankName());
-        withdrawal.setBankCode(wallet.getSettlementBankCode());
-        withdrawal.setAccountNumber(wallet.getSettlementAccountNumber());
-        withdrawal.setAccountName(wallet.getSettlementAccountName());
+        withdrawal.setBankName(destBankName);
+        withdrawal.setBankCode(destBankCode);
+        withdrawal.setAccountNumber(destAccountNumber);
+        withdrawal.setAccountName(destAccountName);
         withdrawal.setClientReference(buildClientReference(user.getId()));
         withdrawal.setStatus(WithdrawalStatus.INITIATED);
         withdrawal.setCreatedAt(LocalDateTime.now());
         return withdrawalRepository.save(withdrawal);
     }
 
-    private String buildWithdrawalNarration(Wallet wallet, WithdrawalRequest request) {
+    private String buildWithdrawalNarration(String destBankName, WithdrawalRequest request) {
         if (request.getNarration() != null && !request.getNarration().isBlank()) {
             return request.getNarration().trim();
         }
-        return "Wisemonie Withdrawal to " + wallet.getSettlementBankName();
+        return "Wisemonie Withdrawal to " + (destBankName != null ? destBankName : "Bank");
     }
 
     private String buildWithdrawalFeeReference(Withdrawal withdrawal) {
@@ -848,6 +1017,83 @@ public class WalletService {
 
     private String buildClientReference(Long userId) {
         return "WD-" + userId + "-" + System.currentTimeMillis();
+    }
+
+    /**
+     * Fires a best-effort Rubies transfer of the markup fee from the user's Rubies
+     * wallet into Moniewise's own Rubies revenue wallet.
+     *
+     * <p>This call is asynchronous and non-blocking — if it fails, the internal
+     * revenue wallet DB record (written by the webhook handler) remains the source
+     * of truth for accounting. The Rubies-wallet balance reconciliation can catch any
+     * missed fee transfers during periodic audits.
+     *
+     * <p>Set {@code rubies.revenue.account.number} in system_config via:
+     * {@code PUT /admin/config/rubies.revenue.account.number} with
+     * {@code {"value":"7012345678","description":"Moniewise Rubies revenue wallet"}}.
+     *
+     * @param feeAmount      the markup fee to transfer (must be > 0)
+     * @param fromWalletRef  the user's Rubies wallet account number (debit side)
+     * @param fromWalletName the user's display name (debit narration)
+     * @param originalRef    the original WD- or EXT- reference (used to build REV- reference)
+     */
+    public void collectRubiesMarkupFeeAsync(
+            BigDecimal feeAmount,
+            String fromWalletRef,
+            String fromWalletName,
+            String originalRef) {
+
+        if (feeAmount == null || feeAmount.compareTo(BigDecimal.ZERO) <= 0) return;
+        if (fromWalletRef == null || fromWalletRef.isBlank()) return;
+
+        String revenueAccountNumber = null;
+        String revenueAccountName   = "Moniewise Revenue";
+        try {
+            revenueAccountNumber = systemConfigService.getString(
+                    SystemConfigService.RUBIES_REVENUE_ACCOUNT_NUMBER);
+            String configuredName = systemConfigService.getString(
+                    SystemConfigService.RUBIES_REVENUE_ACCOUNT_NAME);
+            if (configuredName != null && !configuredName.isBlank()) {
+                revenueAccountName = configuredName;
+            }
+        } catch (Exception e) {
+            logger.warn("[Rubies-Fee] Could not read revenue account config: {}", e.getMessage());
+        }
+
+        if (revenueAccountNumber == null || revenueAccountNumber.isBlank()) {
+            logger.warn("[Rubies-Fee] rubies.revenue.account.number not configured — " +
+                    "markup fee ₦{} for ref={} tracked internally only. " +
+                    "Set via PUT /admin/config/rubies.revenue.account.number",
+                    feeAmount, originalRef);
+            return;
+        }
+
+        final String revRef     = "REV-" + originalRef;
+        final String revAccount = revenueAccountNumber;
+        final String revName    = revenueAccountName;
+
+        CompletableFuture.runAsync(() -> {
+            try {
+                PaymentGateway rubies = paymentGatewayResolver
+                        .resolveByProviderName(RubiesGateway.PROVIDER_NAME);
+                rubies.initiateTransferWithContext(
+                        fromWalletRef,
+                        fromWalletName,
+                        "090175",          // Rubies MFB bank code
+                        "Rubies MFB",
+                        revAccount,
+                        revName,
+                        feeAmount,
+                        revRef,
+                        "Markup fee for " + originalRef
+                );
+                logger.info("[Rubies-Fee] Markup fee ₦{} transferred to revenue wallet for ref={}",
+                        feeAmount, originalRef);
+            } catch (Exception e) {
+                logger.error("[Rubies-Fee] Failed to transfer markup fee ₦{} to revenue wallet for ref={}: {}",
+                        feeAmount, originalRef, e.getMessage());
+            }
+        });
     }
 
     @Transactional
@@ -1095,6 +1341,265 @@ public class WalletService {
         } catch (Exception e) {
             logger.error("[PROVIDUS-WEBHOOK] Withdrawal confirmation processing crashed", e);
             throw new RuntimeException("Providus withdrawal webhook processing failed", e);
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────
+    // Rubies webhook processors
+    // ─────────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Handles a Rubies transfer-success or transfer-failed webhook.
+     *
+     * <p>Looks up the {@link Withdrawal} record by the {@code transactionReference}
+     * in the webhook payload (= the {@code clientReference} we sent to Rubies).
+     * Updates its status, updates the corresponding transaction logs, and sends a
+     * push notification to the user.
+     *
+     * <p>On failure the user's balance is reversed automatically via
+     * {@link #markWithdrawalFailed}.
+     *
+     * @param payloadJson the raw (already normalised) Rubies webhook JSON
+     * @param isSuccess   {@code true} = transfer settled, {@code false} = transfer failed
+     */
+    @Transactional
+    public void processRubiesWithdrawalConfirmation(String payloadJson, boolean isSuccess) {
+        try {
+            JsonNode root = objectMapper.readTree(payloadJson);
+
+            // Rubies webhook is FLAT — paymentReference at root level echoes our transactionReference
+            String reference = root.path("paymentReference").asText(null);
+            if (reference == null || reference.isBlank()) {
+                // secondary fallback for any variant field names
+                reference = root.path("transactionReference").asText(null);
+            }
+
+            if (reference == null || reference.isBlank()) {
+                logger.warn("[RUBIES-WEBHOOK] Withdrawal confirmation has no transactionReference — cannot match record");
+                return;
+            }
+
+            // Match by our clientReference (which we passed as transactionReference to Rubies)
+            // or by the sessionId Rubies returned as providerReference
+            Withdrawal withdrawal = withdrawalRepository.findByClientReference(reference)
+                    .or(() -> withdrawalRepository.findByProviderReference(reference))
+                    .orElse(null);
+
+            if (withdrawal == null) {
+                if (reference.startsWith("P2P-RB-")) {
+                    // P2P-RB references are settled synchronously in EnvelopeService — no Withdrawal entity exists.
+                    logger.info("[RUBIES-WEBHOOK] P2P reference={} already settled in-app — skipping", reference);
+                } else if (reference.startsWith("EXT-")) {
+                    // EXT- references belong to envelope external transfers, settled by
+                    // ExternalTransferSettlementService.settleExternalTransferIfExists() — not here.
+                    logger.info("[RUBIES-WEBHOOK] Envelope external transfer reference={} — settlement handled by ExternalTransferSettlementService", reference);
+                } else if (reference.startsWith("REV-")) {
+                    // REV- references are the markup fee transfers to Moniewise's own Rubies revenue
+                    // wallet. Internal accounting was already done at initiation time — nothing to do here.
+                    logger.info("[RUBIES-WEBHOOK] Revenue fee collection reference={} — no further action needed", reference);
+                } else {
+                    logger.warn("[RUBIES-WEBHOOK] No withdrawal found for reference={} — unexpected", reference);
+                }
+                return;
+            }
+
+            // Guard: don't double-process a terminal state
+            if (withdrawal.getStatus() == WithdrawalStatus.COMPLETED
+                    || withdrawal.getStatus() == WithdrawalStatus.FAILED
+                    || withdrawal.getStatus() == WithdrawalStatus.REVERSED) {
+                logger.info("[RUBIES-WEBHOOK] Withdrawal {} already in terminal state {} — skipping",
+                        reference, withdrawal.getStatus());
+                return;
+            }
+
+            if (isSuccess) {
+                withdrawal.setStatus(WithdrawalStatus.COMPLETED);
+                withdrawal.setCompletedAt(LocalDateTime.now());
+                withdrawalRepository.save(withdrawal);
+
+                // Mark transaction logs as completed
+                transactionLogRepository.findByReference(withdrawal.getClientReference()).ifPresent(log -> {
+                    log.setStatus(TransactionStatus.COMPLETED);
+                    log.setDescription(log.getDescription() + " | Confirmed by Rubies");
+                    transactionLogRepository.save(log);
+                });
+                transactionLogRepository.findByReference(buildWithdrawalFeeReference(withdrawal)).ifPresent(log -> {
+                    log.setStatus(TransactionStatus.COMPLETED);
+                    log.setDescription(log.getDescription() + " | Confirmed by Rubies");
+                    transactionLogRepository.save(log);
+                });
+
+                // ── Credit markup fee to revenue wallet ───────────────────────
+                // The fee was already deducted from the user at reservation time.
+                // Now that the transfer is confirmed, move it to the revenue wallet.
+                BigDecimal markupFee = withdrawal.getFeeAmount() != null
+                        ? withdrawal.getFeeAmount() : BigDecimal.ZERO;
+
+                if (markupFee.compareTo(BigDecimal.ZERO) > 0) {
+                    // 1. Credit the internal revenue wallet (accounting ledger).
+                    walletRepository.findByRevenueWalletTrue().ifPresent(revenueWallet -> {
+                        revenueWallet.setBalance(revenueWallet.getBalance().add(markupFee));
+                        revenueWallet.setUpdatedAt(LocalDateTime.now());
+                        walletRepository.save(revenueWallet);
+
+                        RevenueLog revenueLog = new RevenueLog();
+                        revenueLog.setUserId(withdrawal.getUserId());
+                        revenueLog.setType("transfer_markup_fee");
+                        revenueLog.setAmount(markupFee);
+                        revenueLog.setDescription("Markup fee for transfer " + withdrawal.getClientReference()
+                                + " — user " + withdrawal.getUserId());
+                        revenueLog.setCreatedAt(LocalDateTime.now());
+                        revenueLogRepository.save(revenueLog);
+
+                        logger.info("[RUBIES] Markup fee ₦{} credited to revenue wallet for ref={}",
+                                markupFee, withdrawal.getClientReference());
+                    });
+
+                    // 2. Fire-and-forget: actually move the markup fee from the user's
+                    //    Rubies wallet into Moniewise's own Rubies revenue wallet.
+                    //    Done HERE (on confirmed success) — NOT at initiation time —
+                    //    so we never collect a fee for a transfer that Rubies rejected.
+                    walletRepository.findByUserId(withdrawal.getUserId()).ifPresent(userWallet -> {
+                        if (userWallet.getProviderWalletRef() != null) {
+                            User transferUser = userRepository.findById(withdrawal.getUserId()).orElse(null);
+                            String fromName = transferUser != null
+                                    ? resolveDisplayName(transferUser) : "Moniewise User";
+                            collectRubiesMarkupFeeAsync(
+                                    markupFee,
+                                    userWallet.getProviderWalletRef(),
+                                    fromName,
+                                    withdrawal.getClientReference()
+                            );
+                        }
+                    });
+                }
+
+                // Push notification
+                final String msg = String.format("Your transfer of ₦%.2f to %s (%s) was successful.",
+                        withdrawal.getAmount(), withdrawal.getAccountName(), withdrawal.getBankName());
+                CompletableFuture.runAsync(() -> {
+                    try {
+                        notificationService.sendNotification(
+                                withdrawal.getUserId().toString(), msg,
+                                NotificationType.WITHDRAWAL, null, null, "VIEW_WALLET", "/wallet"
+                        );
+                    } catch (Exception e) {
+                        logger.error("[RUBIES-WEBHOOK] Failed to send transfer success notification", e);
+                    }
+                });
+
+                logger.info("[RUBIES-WEBHOOK] Withdrawal {} marked COMPLETED", reference);
+
+            } else {
+                // Failure: reverse balance automatically
+                // narration is at root level in the flat Rubies webhook payload
+                String failureReason = root.path("narration").asText("Transfer failed");
+                markWithdrawalFailed(withdrawal.getId(), "Rubies: " + failureReason);
+                logger.info("[RUBIES-WEBHOOK] Withdrawal {} marked FAILED — reason: {}", reference, failureReason);
+            }
+
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Exception e) {
+            logger.error("[RUBIES-WEBHOOK] Withdrawal confirmation processing crashed", e);
+            throw new RuntimeException("Rubies withdrawal webhook processing failed", e);
+        }
+    }
+
+    /**
+     * Handles an inbound credit to a Rubies wallet (someone sent money to the user).
+     *
+     * <p>Rubies sends the credit to the user's account number. We look up the wallet
+     * by {@code creditAccountNumber}, credit the internal balance, and notify the user.
+     *
+     * @param payloadJson the raw Rubies webhook JSON for a credit/deposit event
+     */
+    @Transactional
+    public void processRubiesDepositWebhook(String payloadJson) {
+        try {
+            // Rubies webhook is FLAT — no nested "data" wrapper.
+            // Fields: paymentReference, creditAccount, drCr, amount, narration, responseCode, sessionId
+            JsonNode root = objectMapper.readTree(payloadJson);
+
+            // Only process genuine inbound credits
+            String drCr         = root.path("drCr").asText(null);
+            String responseCode = root.path("responseCode").asText(null);
+            if (!"CR".equalsIgnoreCase(drCr) || !"00".equals(responseCode)) {
+                logger.warn("[RUBIES-WEBHOOK] Deposit webhook drCr={} responseCode={} — not a successful credit, skipping",
+                        drCr, responseCode);
+                return;
+            }
+
+            String creditAccountNumber = root.path("creditAccount").asText(null);
+            String reference           = root.path("paymentReference").asText(null);
+            String amountStr           = root.path("amount").asText(null);
+            String narration           = root.path("narration").asText("Inbound transfer");
+
+            if (creditAccountNumber == null || creditAccountNumber.isBlank()) {
+                logger.error("[RUBIES-WEBHOOK] Deposit webhook missing creditAccount — raw: {}", payloadJson);
+                return;
+            }
+            if (reference == null || reference.isBlank()) {
+                reference = "RUB-DEP-" + System.currentTimeMillis();
+                logger.warn("[RUBIES-WEBHOOK] Deposit webhook missing transactionReference — using fallback {}", reference);
+            }
+
+            BigDecimal amount;
+            try {
+                amount = new BigDecimal(amountStr != null ? amountStr.trim() : "0");
+            } catch (NumberFormatException e) {
+                logger.error("[RUBIES-WEBHOOK] Cannot parse deposit amount '{}' for acct={}", amountStr, creditAccountNumber);
+                return;
+            }
+
+            if (amount.compareTo(BigDecimal.ZERO) <= 0) {
+                logger.warn("[RUBIES-WEBHOOK] Deposit amount is zero/negative for acct={}", creditAccountNumber);
+                return;
+            }
+
+            // Skip credits arriving at Moniewise's own Rubies revenue wallet —
+            // those are the REV- markup fee transfers we initiated ourselves.
+            // Internal accounting was already done inside processRubiesWithdrawalConfirmation/
+            // ExternalTransferSettlementService when the DR SUCCESS webhook arrived.
+            // No user wallet exists for this account number — silently ignore.
+            String revenueAcct = systemConfigService.getString(
+                    SystemConfigService.RUBIES_REVENUE_ACCOUNT_NUMBER);
+            if (revenueAcct != null && revenueAcct.equalsIgnoreCase(creditAccountNumber)) {
+                logger.debug("[RUBIES-WEBHOOK] Credit to Moniewise revenue wallet acct={} ref={} — already accounted, skipping",
+                        creditAccountNumber, reference);
+                return;
+            }
+
+            // Find the wallet by the Rubies account number
+            Wallet wallet = walletRepository.findByAccountNumber(creditAccountNumber).orElse(null);
+            if (wallet == null) {
+                // Try by providerWalletRef as fallback
+                wallet = walletRepository.findByProviderWalletRef(creditAccountNumber).orElse(null);
+            }
+            if (wallet == null || wallet.getUser() == null) {
+                logger.error("[RUBIES-WEBHOOK] No wallet found for creditAccountNumber={}", creditAccountNumber);
+                return;
+            }
+
+            String description = "Inbound transfer: " + narration;
+            logger.info("[RUBIES-WEBHOOK] Processing deposit: acct={} amount={} ref={}", creditAccountNumber, amount, reference);
+
+            // Credit the internal wallet (idempotent — skips if reference already processed)
+            processSuccessfulFunding(
+                    wallet.getUser().getEmail(),
+                    amount,
+                    amount,
+                    BigDecimal.ZERO,
+                    reference,
+                    description,
+                    LocalDateTime.now()
+            );
+
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Exception e) {
+            logger.error("[RUBIES-WEBHOOK] Deposit processing crashed", e);
+            throw new RuntimeException("Rubies deposit webhook processing failed", e);
         }
     }
 

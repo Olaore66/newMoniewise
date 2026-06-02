@@ -54,7 +54,8 @@ public class WalletController {
                 wallet.getAccountNumber(),
                 wallet.getBankName(),
                 wallet.getStatus().name(),
-                wallet.getUpdatedAt()
+                wallet.getUpdatedAt(),
+                wallet.getProviderName()   // lets frontend detect Rubies vs legacy
         ));
     }
 
@@ -180,17 +181,48 @@ public class WalletController {
      * Rate-limited — 10 withdrawal attempts per hour per user+IP.
      */
     /**
-     * POST: Preview withdrawal fees before confirmation.
+     * POST: Preview transfer fee before the user confirms.
+     *
+     * <p>Rubies wallets get the markup-tier fee (₦50/₦75/₦120, waived for premium).
+     * Legacy wallets get the flat withdrawal fee.
+     *
+     * <p>Frontend must call this and display the result on the pre-confirmation screen
+     * before the user hits "Confirm Transfer".
      */
     @PostMapping("/withdraw/quote")
     public ResponseEntity<?> quoteWithdrawal(@Valid @RequestBody WithdrawalQuoteRequest request,
                                              Principal principal) {
-        userService.findByEmail(principal.getName());
-        WithdrawalQuoteResponse quote = walletService.quoteWithdrawal(request.getAmount());
+        User user = userService.findByEmail(principal.getName());
+        WithdrawalQuoteResponse quote = walletService.quoteWithdrawal(request.getAmount(), user.getId());
         return ResponseEntity.ok(Map.of(
                 "status", true,
                 "message", quote.getMessage(),
                 "data", quote
+        ));
+    }
+
+    /**
+     * GET: Fee preview — lightweight version the frontend can call while the user
+     * is still typing the amount (no request body needed).
+     *
+     * <p>Example: {@code GET /wallets/transfer/fee-preview?amount=10000}
+     */
+    @GetMapping("/transfer/fee-preview")
+    public ResponseEntity<?> transferFeePreview(@RequestParam java.math.BigDecimal amount,
+                                                Principal principal) {
+        User user = userService.findByEmail(principal.getName());
+        WithdrawalQuoteResponse quote = walletService.quoteWithdrawal(amount, user.getId());
+        return ResponseEntity.ok(Map.of(
+                "status", true,
+                "data", Map.of(
+                        "transferAmount",   quote.getWithdrawalAmount(),
+                        "bankCharge",       quote.getBankCharge(),     // NIBSS NIP fee — goes to bank, NOT revenue
+                        "fee",              quote.getFee(),             // Moniewise markup — goes to revenue
+                        "totalDebit",       quote.getTotalDebit(),      // transferAmount + bankCharge + fee
+                        "feePolicy",        quote.getFeePolicy(),
+                        "feeWaived",        quote.getFee().compareTo(java.math.BigDecimal.ZERO) == 0,
+                        "displayText",      quote.getMessage()
+                )
         ));
     }
 
@@ -205,33 +237,26 @@ public class WalletController {
             Withdrawal withdrawal = walletService.processWithdrawal(user.getId(), request);
             abuseProtectionService.recordSuccess(AbuseProtectionService.WALLET_WITHDRAW, throttleKey);
             Map<String, Object> withdrawalData = new LinkedHashMap<>();
-            withdrawalData.put("withdrawalId", withdrawal.getId());
-            withdrawalData.put("clientReference", withdrawal.getClientReference());
-            withdrawalData.put("reference", withdrawal.getProviderReference());
-            withdrawalData.put("amount", withdrawal.getAmount());
-            withdrawalData.put("withdrawalAmount", withdrawal.getAmount());
-            withdrawalData.put("fee", withdrawal.getFeeAmount());
-            withdrawalData.put("totalDebit", withdrawal.getTotalDebit());
+            withdrawalData.put("withdrawalId",     withdrawal.getId());
+            withdrawalData.put("clientReference",  withdrawal.getClientReference());
+            withdrawalData.put("reference",        withdrawal.getProviderReference());
+            withdrawalData.put("amount",           withdrawal.getAmount());
+            withdrawalData.put("fee",              withdrawal.getFeeAmount());
+            withdrawalData.put("totalDebit",       withdrawal.getTotalDebit());
             withdrawalData.put("recipientReceives", withdrawal.getRecipientReceives());
-            withdrawalData.put("feePolicy", "FLAT_WITHDRAWAL_FEE");
-            withdrawalData.put("feeSource", "USER_BALANCE");
-            withdrawalData.put("narration", withdrawal.getNarration());
-            withdrawalData.put("status", withdrawal.getStatus().name());
+            withdrawalData.put("narration",        withdrawal.getNarration());
+            withdrawalData.put("status",           withdrawal.getStatus().name());
             return ResponseEntity.ok(Map.of(
                     "status", true,
-                    "message", "Withdrawal successful",
-                    "data", Map.of(
-                            "status", true,
-                            "message", "Withdrawal request has been received and being processed",
-                            "data", withdrawalData
-                    )
+                    "message", "Transfer initiated. You will be notified once confirmed.",
+                    "data", withdrawalData
             ));
         } catch (IllegalArgumentException | IllegalStateException e) {
             abuseProtectionService.recordFailure(AbuseProtectionService.WALLET_WITHDRAW, throttleKey);
-            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+            return ResponseEntity.badRequest().body(Map.of("status", false, "error", e.getMessage()));
         } catch (RuntimeException e) {
             abuseProtectionService.recordFailure(AbuseProtectionService.WALLET_WITHDRAW, throttleKey);
-            return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
+            return ResponseEntity.internalServerError().body(Map.of("status", false, "error", e.getMessage()));
         }
     }
 }

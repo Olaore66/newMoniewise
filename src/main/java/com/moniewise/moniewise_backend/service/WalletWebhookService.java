@@ -50,4 +50,35 @@ public class WalletWebhookService {
             throw new RuntimeException("Providus withdrawal webhook processing failed", e);
         }
     }
+
+    // ── Rubies ────────────────────────────────────────────────────────────────
+
+    /**
+     * Handles a Rubies inbound credit (someone sent money to the user's Rubies account).
+     */
+    public void processRubiesDepositWebhook(String payloadJson) {
+        try {
+            logger.info("[RUBIES-WEBHOOK] Delegating deposit event to WalletService");
+            walletService.processRubiesDepositWebhook(payloadJson);
+        } catch (Exception e) {
+            logger.error("[RUBIES-WEBHOOK] Deposit processing failed", e);
+            throw new RuntimeException("Rubies deposit webhook processing failed", e);
+        }
+    }
+
+    /**
+     * Handles a Rubies outbound transfer confirmation (success or failure).
+     *
+     * @param isSuccess {@code true} → mark withdrawal COMPLETED,
+     *                  {@code false} → mark withdrawal FAILED and reverse balance
+     */
+    public void processRubiesWithdrawalWebhook(String payloadJson, boolean isSuccess) {
+        try {
+            logger.info("[RUBIES-WEBHOOK] Delegating withdrawal confirmation (success={}) to WalletService", isSuccess);
+            walletService.processRubiesWithdrawalConfirmation(payloadJson, isSuccess);
+        } catch (Exception e) {
+            logger.error("[RUBIES-WEBHOOK] Withdrawal confirmation processing failed", e);
+            throw new RuntimeException("Rubies withdrawal webhook processing failed", e);
+        }
+    }
 }

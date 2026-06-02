@@ -4,9 +4,12 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.moniewise.moniewise_backend.entity.User;
 import com.moniewise.moniewise_backend.service.SecureWavePaymentProvider;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
+import javax.annotation.PostConstruct;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import java.math.BigDecimal;
@@ -19,6 +22,8 @@ public class SecureWaveGateway implements PaymentGateway {
 
     public static final String PROVIDER_NAME = "SECUREWAVE";
 
+    private static final Logger logger = LoggerFactory.getLogger(SecureWaveGateway.class);
+
     private final SecureWavePaymentProvider delegate;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -27,6 +32,24 @@ public class SecureWaveGateway implements PaymentGateway {
 
     public SecureWaveGateway(SecureWavePaymentProvider delegate) {
         this.delegate = delegate;
+    }
+
+    // ── Startup validation ────────────────────────────────────────────────────
+
+    /**
+     * Fails loudly at startup if the SecureWave secret key is missing.
+     *
+     * <p>{@link #validateWebhookSignature} returns {@code false} (rejects ALL webhooks)
+     * when {@code secureWaveSecretKey} is blank — there is no catch-all mode here.
+     * A missing key therefore silently drops every SecureWave webhook, so we surface
+     * the misconfiguration as an ERROR at boot time rather than discovering it in prod.
+     */
+    @PostConstruct
+    public void validateConfiguration() {
+        if (secureWaveSecretKey == null || secureWaveSecretKey.isBlank()) {
+            logger.error("[SecureWave] SECUREWAVE_SECRET_KEY (securewave.secret-key) is not set — " +
+                    "validateWebhookSignature() will reject ALL incoming webhooks until this is configured.");
+        }
     }
 
     @Override

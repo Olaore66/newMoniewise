@@ -88,6 +88,39 @@ public class WebhookController {
         }
     }
 
+    /**
+     * Rubies MFB webhook receiver.
+     *
+     * <p>Rubies signs the payload with HMAC-SHA512 and sends the signature in the
+     * {@code X-Rubies-Signature} header. This endpoint accepts that header (and a
+     * generic {@code X-Signature} fallback) and forwards to the service layer.
+     *
+     * <p><b>Give Rubies this URL:</b>
+     * {@code https://your-render-domain.onrender.com/api/webhooks/rubies}
+     */
+    @PostMapping("/rubies")
+    public ResponseEntity<String> handleRubiesWebhook(
+            @RequestHeader(value = "X-Rubies-Signature", required = false) String rubiesSig,
+            @RequestHeader(value = "X-Signature",        required = false) String xSig,
+            @RequestBody String rawPayload) {
+
+        logger.info("[RUBIES-WEBHOOK] Received webhook call");
+
+        String signature = firstPresent(rubiesSig, xSig);
+
+        try {
+            webhookService.processRubiesWebhook(signature, rawPayload);
+            return ResponseEntity.ok("Webhook received");
+        } catch (SecurityException e) {
+            logger.warn("[RUBIES-WEBHOOK] Rejected — {}", e.getMessage());
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Invalid signature");
+        } catch (Exception e) {
+            logger.error("[RUBIES-WEBHOOK] Processing failed", e);
+            // Return 200 so Rubies does not retry; raw payload is persisted in webhook_events
+            return ResponseEntity.ok("Webhook received (processing error logged)");
+        }
+    }
+
     /** Returns the first non-blank value from the given candidates, or {@code null}. */
     private String firstPresent(String... candidates) {
         for (String c : candidates) {

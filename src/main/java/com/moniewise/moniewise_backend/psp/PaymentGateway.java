@@ -44,4 +44,32 @@ public interface PaymentGateway {
     default Optional<String> fetchTransactionStatus(String providerReference) {
         return Optional.empty();
     }
+
+    /**
+     * Initiates an outbound NIP transfer with full sender + recipient context.
+     *
+     * <p>Rubies requires the sender's account number ({@code debitAccountNumber})
+     * explicitly, which the original {@link #initiateTransfer} signature omits.
+     * Existing gateways (Providus, SecureWave) delegate to the old signature by default.
+     *
+     * @param debitAccountNumber  sender's account number at the PSP
+     * @param debitAccountName    sender's account name
+     * @param creditBankCode      recipient's bank NIP code
+     * @param creditBankName      recipient's bank name
+     * @param creditAccountNumber recipient's account number
+     * @param creditAccountName   recipient's account name (from name-enquiry)
+     * @param amount              transfer amount in NGN
+     * @param reference           unique transaction reference
+     * @param narration           transfer narration
+     * @return provider transaction reference / session ID
+     */
+    default String initiateTransferWithContext(
+            String debitAccountNumber, String debitAccountName,
+            String creditBankCode, String creditBankName,
+            String creditAccountNumber, String creditAccountName,
+            BigDecimal amount, String reference, String narration) {
+        // Default: delegate to old signature (Providus, SecureWave)
+        return initiateTransfer(creditBankCode, creditAccountNumber, creditAccountName,
+                amount, reference, narration);
+    }
 }

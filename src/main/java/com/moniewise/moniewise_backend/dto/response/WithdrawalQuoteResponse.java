@@ -5,7 +5,18 @@ import java.math.BigDecimal;
 public class WithdrawalQuoteResponse {
 
     private BigDecimal withdrawalAmount;
+    /**
+     * Moniewise markup fee only. This is what enters the revenue wallet.
+     * Does NOT include the NIP bank charge.
+     */
     private BigDecimal fee;
+    /**
+     * NIBSS NIP interbank fee charged by Rubies at the BaaS level.
+     * Goes to Rubies / the banking system — Moniewise does NOT collect this.
+     * Zero for non-Rubies providers (they handle fees differently).
+     */
+    private BigDecimal bankCharge;
+    /** = withdrawalAmount + bankCharge + fee */
     private BigDecimal totalDebit;
     private BigDecimal recipientReceives;
     private String feePolicy;
@@ -15,8 +26,10 @@ public class WithdrawalQuoteResponse {
     public WithdrawalQuoteResponse() {
     }
 
+    /** Full constructor including the NIP bank charge split. */
     public WithdrawalQuoteResponse(BigDecimal withdrawalAmount,
                                    BigDecimal fee,
+                                   BigDecimal bankCharge,
                                    BigDecimal totalDebit,
                                    BigDecimal recipientReceives,
                                    String feePolicy,
@@ -24,11 +37,24 @@ public class WithdrawalQuoteResponse {
                                    String message) {
         this.withdrawalAmount = withdrawalAmount;
         this.fee = fee;
+        this.bankCharge = bankCharge;
         this.totalDebit = totalDebit;
         this.recipientReceives = recipientReceives;
         this.feePolicy = feePolicy;
         this.feeSource = feeSource;
         this.message = message;
+    }
+
+    /** Backward-compatible constructor (bankCharge defaults to ZERO — for legacy paths). */
+    public WithdrawalQuoteResponse(BigDecimal withdrawalAmount,
+                                   BigDecimal fee,
+                                   BigDecimal totalDebit,
+                                   BigDecimal recipientReceives,
+                                   String feePolicy,
+                                   String feeSource,
+                                   String message) {
+        this(withdrawalAmount, fee, BigDecimal.ZERO, totalDebit,
+                recipientReceives, feePolicy, feeSource, message);
     }
 
     public BigDecimal getWithdrawalAmount() {
@@ -45,6 +71,14 @@ public class WithdrawalQuoteResponse {
 
     public void setFee(BigDecimal fee) {
         this.fee = fee;
+    }
+
+    public BigDecimal getBankCharge() {
+        return bankCharge != null ? bankCharge : BigDecimal.ZERO;
+    }
+
+    public void setBankCharge(BigDecimal bankCharge) {
+        this.bankCharge = bankCharge;
     }
 
     public BigDecimal getTotalDebit() {

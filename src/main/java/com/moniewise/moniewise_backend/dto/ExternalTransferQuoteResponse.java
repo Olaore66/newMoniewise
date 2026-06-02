@@ -14,7 +14,19 @@ public class ExternalTransferQuoteResponse {
 
     private Long envelopeId;
     private BigDecimal amount;
+    /**
+     * Moniewise markup fee — the portion that enters Moniewise revenue.
+     * Does NOT include the NIP bank charge.
+     */
     private BigDecimal fee;
+    /**
+     * NIBSS NIP interbank bank charge (e.g. ₦10.75 / ₦26.88 / ₦53.75).
+     * Charged by Rubies at BaaS level and goes to the banking system.
+     * Moniewise does NOT collect this — it is shown here for user transparency.
+     * Zero for non-Rubies providers.
+     */
+    private BigDecimal bankCharge;
+    /** = amount + bankCharge + fee */
     private BigDecimal totalDebit;
     private BigDecimal recipientReceives;
     private String providerName;
@@ -24,6 +36,4 @@ public class ExternalTransferQuoteResponse {
     private String bankName;
     private String accountNumber;
     private String accountName;
-
-    // getters/setters
 }

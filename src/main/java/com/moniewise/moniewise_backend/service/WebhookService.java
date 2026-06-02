@@ -5,6 +5,7 @@ import com.moniewise.moniewise_backend.psp.PaymentGateway;
 import com.moniewise.moniewise_backend.psp.PaymentGatewayResolver;
 import com.moniewise.moniewise_backend.psp.ProvidusExpressGateway;
 import com.moniewise.moniewise_backend.psp.SecureWaveGateway;
+import com.moniewise.moniewise_backend.psp.rubies.RubiesGateway;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -257,5 +258,114 @@ public class WebhookService {
                 || (u.contains("DEBIT") && (u.contains("FAIL") || u.contains("FAILED")))
                 || u.contains("REVERSED")
                 || u.contains("REVERSAL");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Rubies webhook processing
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Entry point for all Rubies MFB webhook events.
+     *
+     * <p>Flow:
+     * <ol>
+     *   <li>Log raw payload immediately for auditability</li>
+     *   <li>Validate signature via {@code X-Rubies-Signature} header</li>
+     *   <li>Extract event type + reference, generate idempotency key</li>
+     *   <li>Persist to {@code webhook_events}, route to settlement handler</li>
+     * </ol>
+     *
+     * @param signatureHeader value of the {@code X-Rubies-Signature} header
+     * @param rawPayload      the raw request body from Rubies
+     */
+    public void processRubiesWebhook(String signatureHeader, String rawPayload) {
+        String cleanPayload = normalizePayload(rawPayload);
+
+        logger.info("[RUBIES-WEBHOOK] ===== Incoming payload =====\n{}", cleanPayload);
+
+        PaymentGateway gateway = paymentGatewayResolver.resolveByProviderName(RubiesGateway.PROVIDER_NAME);
+
+        if (!gateway.validateWebhookSignature(signatureHeader, cleanPayload)) {
+            logger.warn("[RUBIES-WEBHOOK] Rejected — invalid signature");
+            throw new SecurityException("Invalid Rubies webhook signature");
+        }
+
+        String providerName   = gateway.getProviderName();
+        String eventType      = gateway.extractWebhookEventType(cleanPayload);
+        String externalRef    = gateway.extractWebhookReference(cleanPayload);
+        String idempotencyKey = generateIdempotencyKey(providerName, externalRef, cleanPayload);
+
+        logger.info("[RUBIES-WEBHOOK] eventType={} reference={} idempotencyKey={}",
+                eventType, externalRef, idempotencyKey);
+
+        if (webhookEventService.alreadyProcessed(providerName, idempotencyKey)) {
+            logger.info("[RUBIES-WEBHOOK] Duplicate detected (key={}) — skipping", idempotencyKey);
+            return;
+        }
+
+        String headersJson = signatureHeader != null
+                ? "{\"X-Rubies-Signature\":\"" + signatureHeader + "\"}"
+                : null;
+
+        WebhookEvent event = webhookEventService.saveIfNew(
+                providerName, eventType, externalRef,
+                idempotencyKey, signatureHeader, cleanPayload, headersJson);
+
+        try {
+            if (isRubiesTransferSuccessEvent(eventType)) {
+                // Outbound transfer confirmed — settle wallet withdrawal (WD- reference)
+                walletWebhookService.processRubiesWithdrawalWebhook(cleanPayload, true);
+                // Also settle envelope external transfer if this reference belongs to one (EXT- prefix).
+                // settleExternalTransferIfExists() returns false silently if the reference is not an
+                // envelope transfer — both handlers coexist without interfering.
+                externalTransferSettlementService.settleExternalTransferIfExists(externalRef, "SUCCESS");
+
+            } else if (isRubiesTransferFailedEvent(eventType)) {
+                // Outbound transfer failed — settle wallet withdrawal (WD- reference)
+                walletWebhookService.processRubiesWithdrawalWebhook(cleanPayload, false);
+                // Also settle (mark failed) envelope external transfer if applicable (EXT- prefix)
+                externalTransferSettlementService.settleExternalTransferIfExists(externalRef, "FAILED");
+
+            } else if (isRubiesDepositEvent(eventType)) {
+                // Inbound NIP credit to a Rubies wallet — credit internal balance, notify user
+                walletWebhookService.processRubiesDepositWebhook(cleanPayload);
+
+            } else {
+                logger.info("[RUBIES-WEBHOOK] Unhandled event type '{}' — stored for review", eventType);
+            }
+
+            webhookEventService.markProcessed(event.getId());
+
+        } catch (Exception e) {
+            logger.error("[RUBIES-WEBHOOK] Processing failed for WebhookEvent id={}", event.getId(), e);
+            webhookEventService.markFailed(event.getId(), e.getMessage());
+            throw e;
+        }
+    }
+
+    // ── Rubies event-type classifiers ─────────────────────────────────────────
+
+    private boolean isRubiesTransferSuccessEvent(String eventType) {
+        if (eventType == null) return false;
+        String u = eventType.toUpperCase();
+        return u.contains("TRANSFER.SUCCESS")
+            || (u.contains("TRANSFER") && u.contains("SUCCESS"))
+            || (u.contains("DEBIT")    && u.contains("SUCCESS"));
+    }
+
+    private boolean isRubiesTransferFailedEvent(String eventType) {
+        if (eventType == null) return false;
+        String u = eventType.toUpperCase();
+        return u.contains("TRANSFER.FAILED")
+            || u.contains("TRANSFER.FAIL")
+            || (u.contains("TRANSFER") && (u.contains("FAIL") || u.contains("FAILED")))
+            || (u.contains("DEBIT")    && (u.contains("FAIL") || u.contains("FAILED")));
+    }
+
+    private boolean isRubiesDepositEvent(String eventType) {
+        if (eventType == null) return false;
+        String u = eventType.toUpperCase();
+        return u.contains("CREDIT") || u.contains("DEPOSIT")
+            || u.contains("FUND")   || u.contains("INCOMING");
     }
 }
