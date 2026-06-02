@@ -1381,9 +1381,12 @@ public class WalletService {
 
             // Match by our clientReference (which we passed as transactionReference to Rubies)
             // or by the sessionId Rubies returned as providerReference
-            Withdrawal withdrawal = withdrawalRepository.findByClientReference(reference)
-                    .or(() -> withdrawalRepository.findByProviderReference(reference))
+            final String lookupReference = reference;
+
+            Withdrawal withdrawal = withdrawalRepository.findByClientReference(lookupReference)
+                    .or(() -> withdrawalRepository.findByProviderReference(lookupReference))
                     .orElse(null);
+
 
             if (withdrawal == null) {
                 if (reference.startsWith("P2P-RB-")) {
