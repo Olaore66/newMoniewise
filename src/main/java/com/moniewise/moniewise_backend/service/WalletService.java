@@ -916,6 +916,27 @@ public class WalletService {
             withdrawal.setFailureReason(reason);
             withdrawal.setProcessedAt(LocalDateTime.now());
             withdrawalRepository.save(withdrawal);
+
+            // Notify user — fire-and-forget so a notification failure never rolls back the reversal
+            String failMsg = String.format(
+                    "Your transfer of ₦%.2f to %s (%s) could not be completed. Your balance has been reversed.",
+                    withdrawal.getAmount(),
+                    withdrawal.getAccountName() != null ? withdrawal.getAccountName() : withdrawal.getAccountNumber(),
+                    withdrawal.getBankName() != null ? withdrawal.getBankName() : "Unknown Bank"
+            );
+            final Long userId = withdrawal.getUserId();
+            CompletableFuture.runAsync(() -> {
+                try {
+                    notificationService.sendNotification(
+                            userId.toString(),
+                            failMsg,
+                            NotificationType.WITHDRAWAL,
+                            null, null, "VIEW_WALLET", "/wallet"
+                    );
+                } catch (Exception e) {
+                    logger.error("[Wallet] Failed to send withdrawal failure notification for userId={}", userId, e);
+                }
+            });
         });
     }
 
