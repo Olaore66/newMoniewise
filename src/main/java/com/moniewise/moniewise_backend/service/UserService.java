@@ -444,30 +444,49 @@ public class UserService implements UserDetailsService {
     // ==============================================================
     // âœ… SAFE SEARCH (Fixes Memory Crash)
 //     ==============================================================
+    /** Called by controller without a provider filter (backward-compatible). */
     public List<UserSummaryResponse> searchUsers(String query, String currentEmail) {
+        return searchUsers(query, currentEmail, null);
+    }
+
+    /**
+     * Search users, optionally filtered to a specific PSP provider.
+     * When {@code provider} is non-blank (e.g. "RUBIES"), only users whose wallet
+     * is on that provider are returned — ensuring P2P transfers stay within the
+     * same rails.
+     */
+    public List<UserSummaryResponse> searchUsers(String query, String currentEmail, String provider) {
         String normalizedQuery = normalizeSearchQuery(query);
         if (normalizedQuery.length() < P2P_SEARCH_MIN_LENGTH) {
             return Collections.emptyList();
         }
 
-        String cacheKey = p2pSearchCacheKey(normalizedQuery, currentEmail);
+        // Include provider in cache key so filtered + unfiltered results are stored separately
+        String cacheKey = p2pSearchCacheKey(normalizedQuery, currentEmail)
+                + (provider != null && !provider.isBlank() ? ":" + provider.toUpperCase() : "");
         List<UserSummaryResponse> cached = readCachedP2pSearch(cacheKey);
         if (cached != null) {
             return cached;
         }
 
-        // 1. Define excluded emails (Self + Revenue)
-//        List<String> excludedEmails = Arrays.asList(currentEmail, "revenue@wisemonie.app");
-
-        // 1. Use the NEW Repository Method (Fetches only name/email/tag)
-        // We limit to 15 results at the DB level, saving massive RAM.
+        // Fetch up to the search limit at the DB level to save RAM.
         List<UserSummary> results = userRepository.searchUsers(
                 normalizedQuery,
                 PageRequest.of(0, P2P_SEARCH_LIMIT)
         );
+
+        final String filterProvider = (provider != null && !provider.isBlank())
+                ? provider.toUpperCase() : null;
+
         List<UserSummaryResponse> response = results.stream()
                 .filter(u -> currentEmail == null || !u.getEmail().equalsIgnoreCase(currentEmail))
                 .filter(u -> u.getBvn() != null && !u.getBvn().isBlank())
+                // PSP filter: skip users whose wallet is on a different provider
+                .filter(u -> {
+                    if (filterProvider == null) return true;
+                    String wp = u.getWalletProviderName();
+                    return wp != null && filterProvider.equalsIgnoreCase(wp.trim());
+                })
                 .map(u -> {
                     String handle = (u.getUserTag() != null && !u.getUserTag().isEmpty())
                             ? u.getUserTag()
@@ -489,7 +508,8 @@ public class UserService implements UserDetailsService {
                             UserSummaryResponse.WalletMetadata.of(
                                     u.getWalletAccountNumber(),
                                     u.getWalletBankName(),
-                                    u.getWalletStatus()
+                                    u.getWalletStatus(),
+                                    u.getWalletProviderName()
                             )
                     );
                 })

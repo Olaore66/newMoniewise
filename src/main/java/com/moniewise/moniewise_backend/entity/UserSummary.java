@@ -10,6 +10,7 @@ public interface UserSummary {
     String getWalletAccountNumber();
     String getWalletBankName();
     String getWalletStatus();
+    String getWalletProviderName();
 
     String getBvn();
 }

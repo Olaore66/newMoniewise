@@ -26,19 +26,21 @@ public class UserSummaryResponse {
         private String accountNumber;
         private String bankName;
         private String status;
+        private String providerName;   // e.g. "RUBIES", "KUDA" — used by frontend to match PSP
 
-        public static WalletMetadata of(String accountNumber, String bankName, String status) {
+        public static WalletMetadata of(String accountNumber, String bankName, String status, String providerName) {
             boolean hasWallet = accountNumber != null && !accountNumber.isBlank();
             return new WalletMetadata(
                     hasWallet,
                     hasWallet ? accountNumber : "PENDING_SETUP",
                     bankName != null && !bankName.isBlank() ? bankName : "PENDING_SETUP",
-                    status != null && !status.isBlank() ? status : "PENDING_SETUP"
+                    status != null && !status.isBlank() ? status : "PENDING_SETUP",
+                    providerName != null && !providerName.isBlank() ? providerName.toUpperCase() : "UNKNOWN"
             );
         }
 
         public static WalletMetadata pending() {
-            return new WalletMetadata(false, "PENDING_SETUP", "PENDING_SETUP", "PENDING_SETUP");
+            return new WalletMetadata(false, "PENDING_SETUP", "PENDING_SETUP", "PENDING_SETUP", "UNKNOWN");
         }
     }
 }

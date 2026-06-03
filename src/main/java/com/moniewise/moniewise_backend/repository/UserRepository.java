@@ -42,6 +42,7 @@ public interface UserRepository extends JpaRepository<User, Long> {
         "w.account_number AS walletAccountNumber, " +
         "w.bank_name AS walletBankName, " +
         "w.status AS walletStatus, " +
+        "w.provider_name AS walletProviderName, " +
         "u.bvn AS bvn " +
         "FROM users u " +
         "LEFT JOIN wallets w ON w.user_id = u.id " +

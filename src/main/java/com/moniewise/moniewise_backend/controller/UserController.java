@@ -125,15 +125,17 @@ public class UserController {
     }
 
     @GetMapping("/search")
-    public ResponseEntity<List<UserSummaryResponse>> searchUsers(@RequestParam String query,
-                                                                 @AuthenticationPrincipal String email,
-                                                                 HttpServletRequest httpRequest) {
+    public ResponseEntity<List<UserSummaryResponse>> searchUsers(
+            @RequestParam String query,
+            @RequestParam(required = false) String provider,
+            @AuthenticationPrincipal String email,
+            HttpServletRequest httpRequest) {
         if (email == null) {
             email = SecurityContextHolder.getContext().getAuthentication().getName();
         }
         String throttleKey = abuseProtectionService.buildKey(email, httpRequest.getRemoteAddr());
         abuseProtectionService.checkAllowed(AbuseProtectionService.P2P_USER_SEARCH, throttleKey);
-        List<UserSummaryResponse> users = userService.searchUsers(query, email);
+        List<UserSummaryResponse> users = userService.searchUsers(query, email, provider);
         abuseProtectionService.recordRequest(AbuseProtectionService.P2P_USER_SEARCH, throttleKey);
         return ResponseEntity.ok(users);
     }
