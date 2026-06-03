@@ -27,6 +27,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Lazy;
+import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -36,6 +37,7 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 import static com.moniewise.moniewise_backend.enums.TransactionType.WALLET_DEDUCTION;
 import static com.moniewise.moniewise_backend.enums.TransactionType.WALLET_DEPOSIT;
@@ -65,8 +67,12 @@ public class WalletService {
     private final RevenueLogRepository revenueLogRepository;
 
     private final SystemConfigService systemConfigService;
+    private final RedisTemplate<String, String> redisTemplate;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
+
+    private static final String BANK_LIST_CACHE_PREFIX = "bank_list:";
+    private static final long   BANK_LIST_TTL_HOURS    = 24;
 
     @Autowired
     @Lazy
@@ -85,7 +91,8 @@ public class WalletService {
             TransferFeeService transferFeeService,
             MarkupCalculatorService markupCalculatorService,
             RevenueLogRepository revenueLogRepository,
-            SystemConfigService systemConfigService) {
+            SystemConfigService systemConfigService,
+            RedisTemplate<String, String> redisTemplate) {
         this.walletRepository = walletRepository;
         this.transactionLogRepository = transactionLogRepository;
         this.notificationService = notificationService;
@@ -99,6 +106,7 @@ public class WalletService {
         this.markupCalculatorService = markupCalculatorService;
         this.revenueLogRepository = revenueLogRepository;
         this.systemConfigService = systemConfigService;
+        this.redisTemplate = redisTemplate;
     }
 
     public Wallet getWalletByUserId(Long userId) {
@@ -458,6 +466,26 @@ public class WalletService {
                 ? paymentGatewayResolver.resolveForWallet(wallet)
                 : paymentGatewayResolver.resolveDefault();
 
+        // Redis cache key is PSP-specific so a provider switch auto-invalidates.
+        String cacheKey = BANK_LIST_CACHE_PREFIX + gateway.getClass().getSimpleName().toLowerCase();
+
+        // Layer 0 (new): Redis — survives restarts, shared across all instances.
+        try {
+            String cached = redisTemplate.opsForValue().get(cacheKey);
+            if (cached != null && !cached.isBlank()) {
+                List<Map<String, Object>> banks = objectMapper.readValue(
+                        cached,
+                        objectMapper.getTypeFactory()
+                                .constructCollectionType(List.class, Map.class));
+                if (banks != null && !banks.isEmpty()) {
+                    logger.debug("[BankList] Redis cache hit for {}", cacheKey);
+                    return banks;
+                }
+            }
+        } catch (Exception e) {
+            logger.warn("[BankList] Redis read failed — will fetch live: {}", e.getMessage());
+        }
+
         // Layer 1: try fresh upstream call (gateway already swallows HTTP errors
         // and returns [], but wrap in try-catch for any unexpected runtime exceptions).
         List<Map<String, Object>> fresh;
@@ -469,7 +497,18 @@ public class WalletService {
         }
 
         if (fresh != null && !fresh.isEmpty()) {
-            _lastKnownBanks = fresh;   // refresh the stale-on-error cache
+            _lastKnownBanks = fresh;   // refresh JVM stale-on-error cache
+            // Write to Redis — next request returns in < 5ms
+            try {
+                redisTemplate.opsForValue().set(
+                        cacheKey,
+                        objectMapper.writeValueAsString(fresh),
+                        BANK_LIST_TTL_HOURS, TimeUnit.HOURS);
+                logger.info("[BankList] Cached {} banks in Redis (key={}, ttl={}h)",
+                        fresh.size(), cacheKey, BANK_LIST_TTL_HOURS);
+            } catch (Exception e) {
+                logger.warn("[BankList] Redis write failed — result still returned: {}", e.getMessage());
+            }
             return fresh;
         }
 
