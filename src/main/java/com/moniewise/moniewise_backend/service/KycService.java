@@ -126,21 +126,23 @@ public class KycService {
     public BvnVerificationResultDto verifyBvnWithProvider(Long userId, String bvn) {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new IllegalArgumentException("User not found: " + userId));
-
-        // Idempotency guard — avoid redundant API calls if already VERIFIED
-        Optional<KycProfile> existing = kycProfileRepository.findByUserId(userId);
-        if (existing.isPresent() && existing.get().isBvnVerified()
-                && KycProfile.KycStatus.VERIFIED.equals(existing.get().getKycStatus())) {
-            log.info("[KYC] BVN already verified for userId={}, skipping SecureWave call", userId);
-            return buildDtoFromProfile(existing.get());
-        }
+//
+//        // Idempotency guard — avoid redundant API calls if already VERIFIED
+//        Optional<KycProfile> existing = kycProfileRepository.findByUserId(userId);
+//        if (existing.isPresent() && existing.get().isBvnVerified()
+//                && KycProfile.KycStatus.VERIFIED.equals(existing.get().getKycStatus())) {
+//            log.info("[KYC] BVN already verified for userId={}, skipping SecureWave call", userId);
+//            return buildDtoFromProfile(existing.get());
+//        }
 
         // Delegate to SecureWave — email + phone come from the user's record
         BvnVerificationResultDto result = secureWavePaymentProvider.verifyBvn(
                 user.getEmail(), user.getPhone(), bvn);
 
         // Persist to kyc_profiles
-        KycProfile profile = existing.orElse(new KycProfile());
+//        KycProfile profile = existing.orElse(new KycProfile());
+        KycProfile profile = new KycProfile();
+
         profile.setUser(user);
         profile.setBvn(bvn);
         profile.setBvnVerified(true);
