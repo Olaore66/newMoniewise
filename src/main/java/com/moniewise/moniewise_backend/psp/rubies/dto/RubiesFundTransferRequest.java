@@ -16,10 +16,10 @@ public class RubiesFundTransferRequest {
     @JsonProperty("debitAccountName")
     private String debitAccountName;
 
-    @JsonProperty("creditBankCode")
+    @JsonProperty("bankCode")
     private String creditBankCode;
 
-    @JsonProperty("creditBankName")
+    @JsonProperty("bankName")
     private String creditBankName;
 
     @JsonProperty("creditAccountNumber")
