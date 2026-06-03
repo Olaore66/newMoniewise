@@ -395,17 +395,29 @@ public class EnvelopeService {
             // Must resolve the Rubies gateway explicitly — resolveDefault() would pick
             // whichever PSP is currently active in system_config, which may not be Rubies.
             PaymentGateway gateway = paymentGatewayResolver.resolveByProviderName(RubiesGateway.PROVIDER_NAME);
-            providerReference = gateway.initiateTransferWithContext(
-                    senderWallet.getProviderWalletRef(),
-                    debitAccountName,
-                    RUBIES_BANK_CODE,
-                    RUBIES_BANK_NAME,
-                    recipientWallet.getProviderWalletRef(),
-                    creditAccountName,
-                    amount,
-                    p2pReference,
-                    "Moniewise P2P: " + senderName + " to " + recipientName
-            );
+            try {
+                providerReference = gateway.initiateTransferWithContext(
+                        senderWallet.getProviderWalletRef(),
+                        debitAccountName,
+                        RUBIES_BANK_CODE,
+                        RUBIES_BANK_NAME,
+                        recipientWallet.getProviderWalletRef(),
+                        creditAccountName,
+                        amount,
+                        p2pReference,
+                        "Moniewise P2P: " + senderName + " to " + recipientName
+                );
+            } catch (RuntimeException ex) {
+                // Sanitise Rubies float-related errors — don't expose internal float state to users.
+                String rawCause = ex.getMessage() != null ? ex.getMessage().toLowerCase() : "";
+                if (rawCause.contains("insufficient float")
+                        || rawCause.contains("not enough float")
+                        || (rawCause.contains("insufficient balance") && rawCause.contains("rubies"))) {
+                    throw new RuntimeException(
+                            "Transfer temporarily unavailable. Please try again in a few minutes or contact support.");
+                }
+                throw ex;
+            }
 
             // Rubies confirmed (or pending) — update sender's internal ledger.
             // DO NOT credit the recipient here: Rubies sends a CR webhook to the
@@ -1066,6 +1078,14 @@ public class EnvelopeService {
                 feeTxn.setStatus(TransactionStatus.FAILED);
                 feeTxn.setDescription("External transfer fee failed/reversed for " + myReference);
                 transactionLogRepository.save(feeTxn);
+            }
+            // Sanitise provider-level float errors — don't expose internal float state to users.
+            String rawCause = e.getMessage() != null ? e.getMessage().toLowerCase() : "";
+            if (rawCause.contains("insufficient float")
+                    || rawCause.contains("not enough float")
+                    || (rawCause.contains("insufficient balance") && rawCause.contains("rubies"))) {
+                throw new RuntimeException(
+                        "Transfer temporarily unavailable. Please try again in a few minutes or contact support.");
             }
             throw new RuntimeException("Transfer failed: " + e.getMessage());
         }

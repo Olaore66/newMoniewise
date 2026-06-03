@@ -69,7 +69,8 @@ public class User {
     @Column(columnDefinition = "jsonb")
     private Map<String, Object> profileData;
 
-    @Column(unique = true)
+    // please remember to change to true --- NOtE this is testing and we switching to prod soon
+    @Column(unique = false)
     private String bvn;
 
     @Column(nullable = false)

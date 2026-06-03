@@ -740,6 +740,17 @@ public class WalletService {
             }
         } catch (RuntimeException e) {
             self.markWithdrawalFailed(withdrawal.getId(), e.getMessage());
+            // Sanitise provider-level errors before they bubble to the user.
+            // "Insufficient float" means OUR merchant float is low — not the user's fault.
+            // "Insufficient balance" (without our balance-check prefix) is a Rubies internal
+            // error that also maps to a float issue on our side.
+            String rawMsg = e.getMessage() != null ? e.getMessage().toLowerCase() : "";
+            if (rawMsg.contains("insufficient float")
+                    || rawMsg.contains("insufficient balance")
+                    || rawMsg.contains("not enough float")) {
+                throw new RuntimeException(
+                        "Transfer temporarily unavailable. Please try again in a few minutes or contact support.");
+            }
             throw e;
         }
 

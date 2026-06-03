@@ -672,9 +672,41 @@ public class UserService implements UserDetailsService {
         profileData.put("savingsGoal", request.getSavingsGoal());
         profileData.put("occupation", request.getOccupation());
 
-        if(request.getDob() != null){
+        if (request.getDob() != null) {
+            // Keep the raw list for backward-compatibility with the frontend model.
             profileData.put("dob", request.getDob());
+
+            // Also store a YYYY-MM-DD string under "dateOfBirth" so that
+            // RubiesGateway.createVirtualAccount() can read it directly.
+            // Rubies validates DOB against the BVN record and needs this exact format.
+            List<?> dob = request.getDob();
+            if (dob.size() >= 3) {
+                String dateOfBirth = String.format("%04d-%02d-%02d",
+                        ((Number) dob.get(0)).intValue(),
+                        ((Number) dob.get(1)).intValue(),
+                        ((Number) dob.get(2)).intValue());
+                profileData.put("dateOfBirth", dateOfBirth);
+            }
         }
+
+        // Prefer the authoritative DOB from BVN verification (already in YYYY-MM-DD
+        // format as returned by SecureWave).  This overwrites the self-reported DOB
+        // above if the user's KycProfile has been verified, ensuring Rubies gets the
+        // exact same DOB that matched their NIBSS BVN record.
+        kycProfileRepository.findByUserId(user.getId()).ifPresent(kyc -> {
+            if (kyc.getDateOfBirth() != null && !kyc.getDateOfBirth().isBlank()) {
+                profileData.put("dateOfBirth", kyc.getDateOfBirth());
+            }
+            // Also cache BVN-verified name parts for providers (e.g. Rubies) that
+            // require names to match the BVN record within a similarity threshold.
+            if (kyc.getFirstName() != null && !kyc.getFirstName().isBlank()) {
+                profileData.put("bvnFirstName", kyc.getFirstName());
+            }
+            if (kyc.getLastName() != null && !kyc.getLastName().isBlank()) {
+                profileData.put("bvnLastName", kyc.getLastName());
+            }
+        });
+
         user.setProfileData(profileData);
 
         // Save the user entity so it's ready for WalletService
