@@ -1,4 +1,4 @@
-package com.moniewise.moniewise_backend.service;
+﻿package com.moniewise.moniewise_backend.service;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JavaType;
@@ -757,16 +757,31 @@ public class UserService implements UserDetailsService {
 
             // We can keep the EMAIL sending asynchronous, because we don't want the user
             // to wait on an SMTP server to finish loading.
+            // Extract first name from profileData for personalised welcome email
+            String welcomeFirstName = "";
+            try {
+                if (savedUser.getProfileData() != null) {
+                    Object nameObj = savedUser.getProfileData().get("name");
+                    if (nameObj != null) {
+                        String fullName = nameObj.toString().trim();
+                        welcomeFirstName = fullName.contains(" ")
+                                ? fullName.substring(0, fullName.indexOf(" "))
+                                : fullName;
+                    }
+                }
+            } catch (Exception ignored) {}
+            final String finalFirstName = welcomeFirstName;
             CompletableFuture.runAsync(() -> {
                 try {
                     notificationService.sendWelcomeEmail(
                             savedUser.getEmail(),
+                            finalFirstName,
                             newWallet.getAccountNumber(),
                             newWallet.getBankName(),
                             newWallet.getBalance()
                     );
                 } catch (Exception e) {
-                    logger.error("âŒ Failed to send welcome email to {}: {}", savedUser.getEmail(), e.getMessage());
+                    logger.error("Failed to send welcome email to {}: {}", savedUser.getEmail(), e.getMessage());
                 }
             });
         }

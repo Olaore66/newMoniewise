@@ -50,6 +50,11 @@ public class EmailService {
             helper.setSubject("Reset Your Password");
             helper.setText(htmlContent, true); // true = HTML
             helper.setFrom("assist@moniewise.com");
+            try {
+                org.springframework.core.io.ClassPathResource logo =
+                    new org.springframework.core.io.ClassPathResource("images/main logo white background.png");
+                if (logo.exists()) helper.addInline("wisemonie-logo", logo, "image/png");
+            } catch (Exception ignored) {}
 
             // 4. Send
             mailSender.send(message);

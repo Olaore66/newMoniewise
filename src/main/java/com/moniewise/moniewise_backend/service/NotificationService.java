@@ -23,6 +23,7 @@ import org.springframework.transaction.event.TransactionalEventListener;
 import org.thymeleaf.TemplateEngine;
 import org.thymeleaf.context.Context;
 
+import org.springframework.core.io.ClassPathResource;
 import javax.annotation.PostConstruct;
 import javax.mail.MessagingException;
 import javax.mail.internet.MimeMessage;
@@ -57,6 +58,9 @@ public class NotificationService {
 
     @Value("${spring.mail.from:moniewise@example.com}")
     private String fromEmail;
+
+    @Value("${app.base-url:http://localhost:9000}")
+    private String appBaseUrl;
 
     @Autowired
     public NotificationService(
@@ -523,13 +527,31 @@ public class NotificationService {
     // =========================================================================
     // 5. EMAIL & SMS METHODS
     // =========================================================================
+
+    /**
+     * Returns the absolute public URL for the Wisemonie logo.
+     * The logo is served by Spring Boot from {@code static/images/wisemonie-logo.png}.
+     * All email templates reference it via {@code th:src="${logoUrl}"} so the image
+     * renders in every email client (webmail, mobile, desktop) without CID issues.
+     */
+    private String logoUrl() {
+        return appBaseUrl + "/images/wisemonie-logo.png";
+    }
+
+    /** No-op kept for backward compatibility — CID approach replaced by hosted URL. */
+    private void attachLogo(MimeMessageHelper helper) {
+        // intentionally empty — logo is now served via public URL (logoUrl())
+    }
+
     @Async
-    public void sendWelcomeEmail(String email, String accountNumber, String bankName, BigDecimal balance) {
+    public void sendWelcomeEmail(String email, String firstName, String accountNumber, String bankName, BigDecimal balance) {
         if ("stub".equals(activeProfile) || mailSender == null) return;
         try {
             Context context = new Context();
+            context.setVariable("logoUrl", logoUrl());
+            context.setVariable("firstName", firstName != null && !firstName.isBlank() ? firstName : "there");
             context.setVariable("accountNumber", accountNumber);
-            context.setVariable("bankName", bankName != null ? bankName : "Wema Bank");
+            context.setVariable("bankName", bankName != null ? bankName : "Rubies MFB");
 
             String htmlContent = templateEngine.process("welcome-email", context);
 
@@ -540,6 +562,7 @@ public class NotificationService {
             helper.setTo(email);
             helper.setSubject("🎊 Welcome to Wisemonie! Your Account is Ready");
             helper.setText(htmlContent, true);
+            attachLogo(helper);
 
             mailSender.send(mimeMessage);
             logger.info("Sent HTML welcome email to {}", email);
@@ -552,6 +575,7 @@ public class NotificationService {
         if ("stub".equals(activeProfile) || mailSender == null) return;
         try {
             Context context = new Context();
+            context.setVariable("logoUrl", logoUrl());
             context.setVariable("otpCode", otpCode);
 
             String htmlContent = templateEngine.process("otp-email", context);
@@ -563,6 +587,7 @@ public class NotificationService {
             helper.setTo(email);
             helper.setSubject("📩 Wisemonie Verification Code: " + otpCode);
             helper.setText(htmlContent, true);
+            attachLogo(helper);
 
             mailSender.send(mimeMessage);
             logger.info("Sent OTP email to {}", email);
@@ -578,6 +603,7 @@ public class NotificationService {
         }
         try {
             Context context = new Context();
+            context.setVariable("logoUrl", logoUrl());
             context.setVariable("userName", userName);
             context.setVariable("otpCode", otpCode);
 
@@ -590,6 +616,7 @@ public class NotificationService {
             helper.setTo(to);
             helper.setSubject("🔓 Password Reset Code: " + otpCode);
             helper.setText(htmlContent, true);
+            attachLogo(helper);
 
             mailSender.send(mimeMessage);
             logger.info("🔓 Sent Password Reset OTP to {}", to);
@@ -610,6 +637,7 @@ public class NotificationService {
         }
         try {
             Context context = new Context();
+            context.setVariable("logoUrl", logoUrl());
             context.setVariable("userName", userName);
             context.setVariable("email", to);
             context.setVariable("changedAt", changedAt);
@@ -623,6 +651,7 @@ public class NotificationService {
             helper.setTo(to);
             helper.setSubject("🔐 Your Wisemonie transaction PIN was changed");
             helper.setText(htmlContent, true);
+            attachLogo(helper);
 
             mailSender.send(mimeMessage);
             logger.info("Sent transaction PIN changed alert to {}", to);
@@ -639,6 +668,7 @@ public class NotificationService {
         }
         try {
             Context context = new Context();
+            context.setVariable("logoUrl", logoUrl());
             context.setVariable("userName", userName);
             context.setVariable("otpCode", otpCode);
 
@@ -651,6 +681,7 @@ public class NotificationService {
             helper.setTo(to);
             helper.setSubject("Transaction PIN Reset Code: " + otpCode);
             helper.setText(htmlContent, true);
+            attachLogo(helper);
 
             mailSender.send(mimeMessage);
             logger.info("Sent Transaction PIN Reset OTP to {}", to);

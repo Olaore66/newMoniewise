@@ -1,212 +1,194 @@
 <!DOCTYPE html>
-<html xmlns:th="http://www.thymeleaf.org">
+<html xmlns:th="http://www.thymeleaf.org" lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Transaction PIN Changed</title>
   <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
-      font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
-      background-color: #F5FBF7;
-      margin: 0;
-      padding: 24px 12px;
-      color: #5F7575;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+      background-color: #F2F4F7;
+      padding: 40px 16px;
+      -webkit-text-size-adjust: none;
+      color: #344054;
     }
+    .wrapper { max-width: 580px; margin: 0 auto; }
 
-    .container {
-      max-width: 600px;
-      margin: 0 auto;
-      background-color: #FFFFFF;
-      border-radius: 24px;
+    /* ── Logo bar ── */
+    .logo-bar { text-align: center; padding-bottom: 24px; }
+    .logo-bar img { max-width: 160px; }
+
+    /* ── Card ── */
+    .card {
+      background: #FFFFFF;
+      border: 1px solid #E4E7EC;
+      border-radius: 12px;
       overflow: hidden;
-      border: 1px solid #D5E6DE;
-      box-shadow: 0 18px 40px rgba(10, 58, 58, 0.10);
     }
 
-    .header {
-      background: linear-gradient(135deg, #0A3A3A 0%, #0F4C4C 55%, #1F9E89 100%);
-      padding: 34px 30px;
+    /* ── Header stripe ── */
+    .card-header {
+      background-color: #0F4C4C;
+      padding: 32px 40px;
       text-align: center;
     }
-
-    .brand-chip {
+    .card-header .tag {
       display: inline-block;
-      padding: 6px 14px;
-      border-radius: 999px;
-      background-color: rgba(199, 243, 107, 0.16);
+      background-color: rgba(199, 243, 107, 0.15);
       color: #C7F36B;
-      font-size: 12px;
+      font-size: 11px;
       font-weight: 700;
-      letter-spacing: 0.4px;
+      letter-spacing: 1px;
       text-transform: uppercase;
+      padding: 4px 12px;
+      border-radius: 100px;
+      margin-bottom: 14px;
     }
+    .card-header h1 { color: #FFFFFF; font-size: 22px; font-weight: 700; }
+    .card-header p  { color: #A7C8C0; font-size: 14px; margin-top: 6px; }
 
-    .header h1 {
-      color: #FFFFFF;
-      margin: 14px 0 0;
-      font-size: 28px;
-      letter-spacing: -0.4px;
-      font-weight: 700;
-    }
+    /* ── Body ── */
+    .card-body { padding: 36px 40px; }
+    .body-text { font-size: 15px; color: #475467; line-height: 1.7; margin-bottom: 24px; }
+    .body-text strong { color: #101828; }
 
-    .header p {
-      color: #D6F5A0;
-      margin: 10px 0 0;
-      font-size: 14px;
-    }
-
-    .content {
-      padding: 40px 32px;
-      color: #5F7575;
-      line-height: 1.7;
-    }
-
-    .content h2 {
-      color: #0F4C4C;
-      margin: 0 0 12px;
-      font-size: 22px;
-      letter-spacing: -0.3px;
-    }
-
-    .alert-box {
-      background-color: #FFFBEB;
-      border: 1.5px solid #F59E0B;
-      border-radius: 18px;
-      padding: 20px 22px;
-      margin: 24px 0;
-      display: flex;
-      align-items: flex-start;
-      gap: 14px;
-    }
-
-    .alert-icon {
-      font-size: 24px;
-      line-height: 1;
-      flex-shrink: 0;
-      margin-top: 2px;
-    }
-
-    .alert-text {
-      font-size: 14px;
-      color: #92400E;
-      line-height: 1.6;
-    }
-
-    .alert-text strong {
-      display: block;
-      font-size: 15px;
-      color: #78350F;
-      margin-bottom: 4px;
-    }
-
+    /* ── Detail table ── */
     .detail-card {
-      background-color: #F0FAF5;
-      border: 1px solid #D5E6DE;
-      border-radius: 16px;
-      padding: 18px 20px;
-      margin: 20px 0;
-      font-size: 14px;
+      background: #F9FAFB;
+      border: 1px solid #E4E7EC;
+      border-radius: 10px;
+      overflow: hidden;
+      margin: 24px 0;
     }
-
     .detail-row {
       display: flex;
       justify-content: space-between;
-      padding: 6px 0;
-      border-bottom: 1px solid #E2F0E9;
+      align-items: center;
+      padding: 13px 20px;
+      border-bottom: 1px solid #F2F4F7;
+      font-size: 14px;
     }
+    .detail-row:last-child { border-bottom: none; }
+    .detail-label { color: #667085; font-weight: 500; }
+    .detail-value { color: #101828; font-weight: 600; text-align: right; }
 
-    .detail-row:last-child {
-      border-bottom: none;
+    /* ── Warning box ── */
+    .warning-box {
+      background: #FFFAEB;
+      border: 1px solid #FEC84B;
+      border-radius: 8px;
+      padding: 16px 18px;
+      font-size: 14px;
+      color: #92400E;
+      line-height: 1.6;
+      margin-bottom: 20px;
     }
+    .warning-box strong { color: #78350F; display: block; margin-bottom: 4px; }
 
-    .detail-label {
-      color: #7F9696;
-      font-weight: 600;
+    /* ── Support link ── */
+    .support-line {
+      font-size: 14px;
+      color: #475467;
+      margin-top: 4px;
     }
+    .support-line a { color: #1F9E89; font-weight: 600; text-decoration: none; }
 
-    .detail-value {
-      color: #0F4C4C;
-      font-weight: 700;
-    }
-
-    .support-link {
-      display: inline-block;
-      margin-top: 8px;
-      color: #1F9E89;
-      font-weight: 700;
-      text-decoration: none;
-    }
-
-    .footer {
-      background-color: #E9F4EF;
-      padding: 20px;
+    /* ── Footer ── */
+    .card-footer {
+      border-top: 1px solid #F2F4F7;
+      padding: 20px 40px;
       text-align: center;
+    }
+    .footer-brand { font-size: 13px; font-weight: 700; color: #0F4C4C; margin-bottom: 4px; }
+    .footer-text  { font-size: 12px; color: #98A2B3; line-height: 1.6; }
+    .footer-text a { color: #1F9E89; text-decoration: none; }
+
+    .outer-footer {
+      text-align: center;
+      margin-top: 24px;
       font-size: 12px;
-      color: #7F9696;
+      color: #98A2B3;
     }
 
     @media only screen and (max-width: 600px) {
-      body { padding: 12px; }
-      .container { border-radius: 18px; }
-      .content { padding: 28px 20px; }
-      .header { padding: 26px 20px; }
-      .alert-box { flex-direction: column; gap: 8px; }
-      .detail-row { flex-direction: column; gap: 2px; }
+      body { padding: 20px 12px; }
+      .card-header { padding: 24px 24px; }
+      .card-body   { padding: 24px 24px; }
+      .card-footer { padding: 18px 24px; }
+      .detail-row  { flex-direction: column; align-items: flex-start; gap: 2px; }
+      .detail-value { text-align: left; }
     }
   </style>
 </head>
 <body>
-<div class="container">
+<div class="wrapper">
 
-  <div class="header">
-    <span class="brand-chip">Security Alert</span>
-    <h1>Wisemonie</h1>
-    <p>Smart budgeting, secure transfers.</p>
+  <!-- Logo -->
+  <div class="logo-bar">
+    <img th:src="${logoUrl}" src="https://wisemonie.app/images/wisemonie-logo.png" alt="Wisemonie" style="height: 44px; width: auto; display: inline-block;">
   </div>
 
-  <div class="content">
-    <h2>Hi <span th:text="${userName}">there</span>,</h2>
-    <p>
-      Your <strong>transaction PIN</strong> was successfully changed on your Wisemonie account.
-      This PIN protects withdrawals, transfers, and other sensitive actions.
-    </p>
+  <div class="card">
 
-    <div class="alert-box">
-      <div class="alert-icon">⚠️</div>
-      <div class="alert-text">
-        <strong>Wasn't you?</strong>
-        If you did not make this change, your account may be compromised.
+    <!-- Header -->
+    <div class="card-header">
+      <div class="tag">Security Alert</div>
+      <h1>Transaction PIN changed</h1>
+      <p>A security-sensitive change was made to your account.</p>
+    </div>
+
+    <!-- Body -->
+    <div class="card-body">
+
+      <p class="body-text">
+        Hello <strong th:text="${userName}">there</strong>,<br><br>
+        Your <strong>transaction PIN</strong> was successfully changed on your Wisemonie account.
+        This PIN protects all your withdrawals and transfers.
+      </p>
+
+      <!-- Change details -->
+      <div class="detail-card">
+        <div class="detail-row">
+          <span class="detail-label">Action</span>
+          <span class="detail-value">Transaction PIN changed</span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-label">Account</span>
+          <span class="detail-value" th:text="${email}">user@example.com</span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-label">Date &amp; Time</span>
+          <span class="detail-value" th:text="${changedAt}">1 Jan 2026, 12:00 WAT</span>
+        </div>
+      </div>
+
+      <!-- Warning -->
+      <div class="warning-box">
+        <strong>⚠️ Wasn't you?</strong>
+        If you did not make this change, your account may be at risk.
         Please contact our support team immediately so we can secure your account.
       </div>
+
+      <p class="support-line">
+        Need help? <a href="mailto:wisemoniehelpdesk@gmail.com">Contact support</a>
+      </p>
+
     </div>
 
-    <div class="detail-card">
-      <div class="detail-row">
-        <span class="detail-label">Action</span>
-        <span class="detail-value">Transaction PIN changed</span>
-      </div>
-      <div class="detail-row">
-        <span class="detail-label">Account</span>
-        <span class="detail-value" th:text="${email}">user@example.com</span>
-      </div>
-      <div class="detail-row">
-        <span class="detail-label">Time</span>
-        <span class="detail-value" th:text="${changedAt}">22 May 2026, 14:30 WAT</span>
-      </div>
+    <!-- Footer -->
+    <div class="card-footer">
+      <div class="footer-brand">Wisemonie</div>
+      <p class="footer-text">
+        This is an automated security notification &nbsp;·&nbsp;
+        <a href="mailto:wisemoniehelpdesk@gmail.com">wisemoniehelpdesk@gmail.com</a>
+      </p>
     </div>
 
-    <p>
-      If this was you, no action is needed — your new PIN is active immediately.
-    </p>
-    <p>
-      Need help?
-      <a class="support-link" href="mailto:support@wisemonie.com">Contact support</a>
-    </p>
   </div>
 
-  <div class="footer">
-    <p>&copy; 2026 Wisemonie. This is an automated security notification.</p>
-    <p>You received this because a security-sensitive change was made to your account.</p>
+  <div class="outer-footer">
+    &copy; 2026 Wisemonie. All rights reserved. &nbsp;·&nbsp; Ibadan, Nigeria
   </div>
 
 </div>
