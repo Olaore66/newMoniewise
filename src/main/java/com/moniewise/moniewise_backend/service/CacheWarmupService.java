@@ -40,14 +40,11 @@ public class CacheWarmupService implements ApplicationListener<ApplicationReadyE
 
     private final SystemConfigService systemConfigService;
     private final WalletService       walletService;
-    private final AiInsightService    aiInsightService;
 
     public CacheWarmupService(SystemConfigService systemConfigService,
-                               @Lazy WalletService walletService,
-                               @Lazy AiInsightService aiInsightService) {
+                               @Lazy WalletService walletService) {
         this.systemConfigService = systemConfigService;
         this.walletService       = walletService;
-        this.aiInsightService    = aiInsightService;
     }
 
     // ── ApplicationReadyEvent ──────────────────────────────────────────────────
@@ -79,13 +76,10 @@ public class CacheWarmupService implements ApplicationListener<ApplicationReadyE
         logger.info("[CacheWarmup] Warming bank list...");
         walletService.warmBankListCache();
 
-        // ── Step 3: Flush stale MONNIE insight cards ───────────────────────────
-        // When the prompt changes (voice rules, formatting, new context fields),
-        // cached cards from before the deploy would still show old wording.
-        // Flushing here forces every user to get a freshly generated card on
-        // their next dashboard open — no one sees the old "NGN 2916.67" style.
-        logger.info("[CacheWarmup] Flushing stale MONNIE insight caches...");
-        aiInsightService.evictAllMonnieCaches();
+        // Note: MONNIE insight cards are now keyed with a startup-tag
+        // (MONNIE_CACHE_PREFIX + STARTUP_TAG + ":" + email). Every server
+        // restart produces a new tag, making all previous entries permanently
+        // invisible without any explicit deletion step. No flush needed here.
 
         long elapsed = System.currentTimeMillis() - start;
         logger.info("[CacheWarmup] All caches warmed successfully in {}ms", elapsed);

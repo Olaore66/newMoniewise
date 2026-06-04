@@ -53,6 +53,25 @@ public class AiInsightService {
     private static final String MONNIE_CACHE_PREFIX    = "monnie:action:";
     private static final long   MONNIE_CACHE_TTL_MIN   = 15;
 
+    /**
+     * A short tag derived from the JVM startup time, embedded in every cache key.
+     *
+     * <p>Every deploy (server restart) produces a different tag, so all cache
+     * entries written by the previous instance are permanently invisible to the
+     * new instance — they just expire naturally after 15 minutes.
+     *
+     * <p>This replaces the fragile "flush all keys on startup" approach: no Redis
+     * pattern-scan needed, no race conditions, works 100% of the time without any
+     * manual intervention after a deploy.
+     */
+    private static final String STARTUP_TAG =
+            String.valueOf(System.currentTimeMillis() / 1000); // seconds since epoch
+
+    /** Full cache key for a user: prefix + startup-tag + email */
+    private String monnieCacheKey(String email) {
+        return MONNIE_CACHE_PREFIX + STARTUP_TAG + ":" + email;
+    }
+
     // Minimum number of outgoing transfers needed before we trust a pattern
     private static final int TRANSFER_PATTERN_MIN_SAMPLES = 3;
 
@@ -92,9 +111,13 @@ public class AiInsightService {
      * Evict MONNIE's cached card for a user. Call this after any wallet/budget
      * transaction so the next dashboard load reflects the latest state.
      */
+    /**
+     * Evict a single user's MONNIE card — call after a transaction or budget
+     * change so their next dashboard load reflects the latest state.
+     */
     public void evictMonnieCache(String email) {
         try {
-            redisTemplate.delete(MONNIE_CACHE_PREFIX + email);
+            redisTemplate.delete(monnieCacheKey(email));
             logger.debug("[Monnie] Cache evicted for {}", email);
         } catch (Exception e) {
             logger.warn("[Monnie] Cache eviction failed for {}: {}", email, e.getMessage());
@@ -102,16 +125,21 @@ public class AiInsightService {
     }
 
     /**
-     * Flush every MONNIE card cache across ALL users.
-     * Call this after a PSP switch so no user sees a stale action
-     * (e.g. "Link your payout account" after switching to Rubies).
+     * No-op kept for compatibility (PSP switch, admin endpoint).
+     *
+     * <p>With startup-tag versioning, a server restart already makes ALL previous
+     * cache entries permanently invisible — no explicit deletion needed.
+     * This method is retained so callers don't break; on PSP switches within the
+     * same JVM lifetime it still performs a best-effort pattern-based flush.
      */
     public void evictAllMonnieCaches() {
         try {
-            var keys = redisTemplate.keys(MONNIE_CACHE_PREFIX + "*");
+            // Attempt a pattern flush for the current startup tag only —
+            // entries from previous restarts are already unreachable.
+            var keys = redisTemplate.keys(MONNIE_CACHE_PREFIX + STARTUP_TAG + ":*");
             if (keys != null && !keys.isEmpty()) {
                 redisTemplate.delete(keys);
-                logger.info("[Monnie] Flushed {} insight cache(s) after global config change", keys.size());
+                logger.info("[Monnie] Flushed {} insight cache(s) (tag={})", keys.size(), STARTUP_TAG);
             }
         } catch (Exception e) {
             logger.warn("[Monnie] Bulk cache flush failed: {}", e.getMessage());
@@ -120,7 +148,7 @@ public class AiInsightService {
 
     public AiDashboardNextActionResponse getDashboardNextAction(String email) {
         // ── Redis cache check ─────────────────────────────────────────────────
-        String cacheKey = MONNIE_CACHE_PREFIX + email;
+        String cacheKey = monnieCacheKey(email);
         try {
             String cached = redisTemplate.opsForValue().get(cacheKey);
             if (cached != null && !cached.isBlank()) {

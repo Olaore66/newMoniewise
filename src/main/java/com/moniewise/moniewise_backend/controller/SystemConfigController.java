@@ -122,4 +122,22 @@ public class SystemConfigController {
                 "message", "Cache evicted for key: " + key
         ));
     }
+
+    /**
+     * POST /admin/ai/flush-monnie-caches
+     *
+     * <p>Wipes every user's cached MONNIE insight card from Redis immediately.
+     * Call this after any change to the MONNIE prompt so users get fresh
+     * cards on their next dashboard load rather than waiting up to 15 minutes
+     * for the TTL to expire naturally.
+     */
+    @PostMapping("/ai/flush-monnie-caches")
+    public ResponseEntity<?> flushMonnieCaches() {
+        aiInsightService.evictAllMonnieCaches();
+        logger.info("[Admin] All MONNIE insight caches flushed via admin endpoint");
+        return ResponseEntity.ok(Map.of(
+                "status",  true,
+                "message", "All MONNIE insight caches flushed. Users will get fresh cards on next dashboard load."
+        ));
+    }
 }
