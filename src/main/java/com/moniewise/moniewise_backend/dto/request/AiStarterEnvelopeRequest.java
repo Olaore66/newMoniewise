@@ -5,6 +5,12 @@ public class AiStarterEnvelopeRequest {
     private Integer durationDays;
     private String goal;
     private String currency;
+    /**
+     * When true the AI must INTERPRET the user's own plan (written in free text
+     * inside {@code goal}) instead of suggesting a new one.
+     * Set by the "Write it out" flow on the frontend.
+     */
+    private boolean interpretUserPlan = false;
 
     public Double getTotalBudget() {
         return totalBudget;
@@ -36,6 +42,14 @@ public class AiStarterEnvelopeRequest {
 
     public void setCurrency(String currency) {
         this.currency = currency;
+    }
+
+    public boolean isInterpretUserPlan() {
+        return interpretUserPlan;
+    }
+
+    public void setInterpretUserPlan(boolean interpretUserPlan) {
+        this.interpretUserPlan = interpretUserPlan;
     }
 }
 

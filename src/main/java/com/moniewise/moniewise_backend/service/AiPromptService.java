@@ -66,6 +66,12 @@ public class AiPromptService {
     public String buildBudgetAllocationPrompt(AiStarterEnvelopeRequest request) {
         String goal = request.getGoal() == null ? "" : request.getGoal().trim();
 
+        // ── "Write it out" path — interpret the user's own plan exactly ──────
+        if (request.isInterpretUserPlan()) {
+            return buildInterpretUserPlanPrompt(request, goal);
+        }
+
+        // ── "AI Draft" path — freely suggest a plan ──────────────────────────
         return """
             You are a financial planning assistant for a fintech app called Wisemonie.
             You only help with budgeting, envelope planning, and personal finance.
@@ -91,7 +97,7 @@ public class AiPromptService {
             - reasoning should explain the allocation logic in 1 or 2 short sentences
             - title should feel like a personalized plan name, not a boilerplate label
             - Only use condition types from: daily, weekly, dynamic, emergency
-            - Only use categories from: savings, security, food, car, home, education, flight, tools, gift, work, internet, faith, groceries, lunch, more
+            - Only use categories from: savings, security, food, car, home, education, flight, tools|gift|work|internet|faith|groceries|lunch|more
 
             Input:
             - totalBudget: %s
@@ -118,6 +124,77 @@ public class AiPromptService {
                 request.getDurationDays(),
                 goal,
                 request.getCurrency()
+        );
+    }
+
+    private String buildInterpretUserPlanPrompt(AiStarterEnvelopeRequest request, String userPlan) {
+        return """
+            You are a budget structuring assistant for a Nigerian fintech app called Wisemonie.
+
+            Return valid JSON only. No markdown. No commentary outside JSON.
+
+            YOUR ONLY JOB: Convert what the user wrote into structured envelopes.
+            DO NOT suggest a new plan. DO NOT rename their envelopes. DO NOT add
+            envelopes they did not mention (except a Savings remainder — see rule 5).
+
+            ── Budget context ────────────────────────────────────────────────────
+            - Total budget : %s %s
+            - Duration     : %s days
+
+            ── What the user wrote ───────────────────────────────────────────────
+            "%s"
+
+            ── Interpretation rules ──────────────────────────────────────────────
+            1. NAMES: Use the user's exact words, capitalised (food→Food, eoms→Eoms).
+               If a word is clearly a misspelling of a known category, keep the
+               user's spelling — do not silently rename it.
+
+            2. PERCENTAGES vs AMOUNTS:
+               • Numbers ≤ 100   → treat as percentage.
+               • Numbers > 100   → treat as an amount; convert to %% of total budget.
+               • If ambiguous, prefer percentage for small numbers (≤100).
+
+            3. OVER 100%% / OVER BUDGET:
+               • If percentages total > 100%%, normalise all proportionally to 100%%.
+               • If amounts total > total budget, normalise proportionally.
+               • Never silently drop an envelope — reduce all of them proportionally.
+
+            4. NAMES ONLY (no numbers): Split 100%% equally across all named envelopes.
+
+            5. PARTIAL ALLOCATION (totals < 95%%): Add a "Savings" envelope for the
+               remaining percentage so the plan always totals 100%%.
+
+            6. NUMBERS ONLY (no names): Label them Envelope 1, Envelope 2, etc.
+
+            7. SINGLE ITEM: Create exactly that one envelope at 100%%. No extras.
+
+            8. Assign a sensible conditionType (daily/weekly/dynamic/emergency) and
+               category (savings/food/car/home/education/work/more/etc.) based on
+               the envelope name. Default to dynamic / more when uncertain.
+
+            9. COMPLETELY UNREADABLE: If you genuinely cannot extract any envelope
+               at all, create one "General" envelope at 100%% as a last resort.
+
+            ── Output ────────────────────────────────────────────────────────────
+            Return this exact JSON shape (no other fields, no markdown):
+            {
+              "title": "string",
+              "reasoning": "string",
+              "totalAllocatedPercentage": 0,
+              "envelopes": [
+                {
+                  "name": "string",
+                  "percentage": 0,
+                  "conditionType": "daily|weekly|dynamic|emergency",
+                  "category": "savings|security|food|car|home|education|flight|tools|gift|work|internet|faith|groceries|lunch|more"
+                }
+              ]
+            }
+            """.formatted(
+                request.getTotalBudget(),
+                request.getCurrency(),
+                request.getDurationDays(),
+                userPlan
         );
     }
 
