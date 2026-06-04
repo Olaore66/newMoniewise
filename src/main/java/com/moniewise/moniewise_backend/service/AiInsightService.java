@@ -2,6 +2,9 @@ package com.moniewise.moniewise_backend.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.moniewise.moniewise_backend.dto.response.AiDashboardNextActionResponse;
+import com.moniewise.moniewise_backend.entity.TransactionLog;
+import com.moniewise.moniewise_backend.enums.Gender;
+import com.moniewise.moniewise_backend.repository.TransactionLogRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import com.moniewise.moniewise_backend.entity.Budget;
@@ -11,6 +14,7 @@ import com.moniewise.moniewise_backend.entity.Wallet;
 import com.moniewise.moniewise_backend.enums.BudgetStatus;
 import com.moniewise.moniewise_backend.repository.BudgetRepository;
 import com.moniewise.moniewise_backend.repository.WalletRepository;
+import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -20,6 +24,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
+import java.time.format.TextStyle;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -27,9 +32,11 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 
 @Service
 public class AiInsightService {
@@ -41,12 +48,22 @@ public class AiInsightService {
     private static final Duration SOON_DISBURSEMENT_WINDOW = Duration.ofHours(6);
     private static final Duration RECENT_RELEASE_WINDOW = Duration.ofHours(24);
 
+    // ── MONNIE card Redis cache ────────────────────────────────────────────────
+    private static final String MONNIE_CACHE_PREFIX    = "monnie:action:";
+    private static final long   MONNIE_CACHE_TTL_MIN   = 15;
+
+    // Minimum number of outgoing transfers needed before we trust a pattern
+    private static final int TRANSFER_PATTERN_MIN_SAMPLES = 3;
+
     private final UserService userService;
     private final BudgetRepository budgetRepository;
     private final WalletRepository walletRepository;
     private final GeminiService geminiService;
     private final AiPromptService aiPromptService;
     private final ObjectMapper objectMapper;
+    private final SystemConfigService systemConfigService;
+    private final TransactionLogRepository transactionLogRepository;
+    private final RedisTemplate<String, String> redisTemplate;
 
     public AiInsightService(
         UserService userService,
@@ -54,7 +71,10 @@ public class AiInsightService {
         WalletRepository walletRepository,
         GeminiService geminiService,
         AiPromptService aiPromptService,
-        ObjectMapper objectMapper
+        ObjectMapper objectMapper,
+        SystemConfigService systemConfigService,
+        TransactionLogRepository transactionLogRepository,
+        RedisTemplate<String, String> redisTemplate
     ) {
         this.userService = userService;
         this.budgetRepository = budgetRepository;
@@ -62,12 +82,57 @@ public class AiInsightService {
         this.geminiService = geminiService;
         this.aiPromptService = aiPromptService;
         this.objectMapper = objectMapper;
+        this.systemConfigService = systemConfigService;
+        this.transactionLogRepository = transactionLogRepository;
+        this.redisTemplate = redisTemplate;
+    }
+
+    /**
+     * Evict MONNIE's cached card for a user. Call this after any wallet/budget
+     * transaction so the next dashboard load reflects the latest state.
+     */
+    public void evictMonnieCache(String email) {
+        try {
+            redisTemplate.delete(MONNIE_CACHE_PREFIX + email);
+            logger.debug("[Monnie] Cache evicted for {}", email);
+        } catch (Exception e) {
+            logger.warn("[Monnie] Cache eviction failed for {}: {}", email, e.getMessage());
+        }
+    }
+
+    /**
+     * Flush every MONNIE card cache across ALL users.
+     * Call this after a PSP switch so no user sees a stale action
+     * (e.g. "Link your payout account" after switching to Rubies).
+     */
+    public void evictAllMonnieCaches() {
+        try {
+            var keys = redisTemplate.keys(MONNIE_CACHE_PREFIX + "*");
+            if (keys != null && !keys.isEmpty()) {
+                redisTemplate.delete(keys);
+                logger.info("[Monnie] Flushed {} insight cache(s) after global config change", keys.size());
+            }
+        } catch (Exception e) {
+            logger.warn("[Monnie] Bulk cache flush failed: {}", e.getMessage());
+        }
     }
 
     public AiDashboardNextActionResponse getDashboardNextAction(String email) {
-        // Build the context outside the Gemini try/catch — but guard against any
-        // transient DB/wallet error so a single bad query never surfaces as a 500
-        // and silently kills the AI card in the Flutter app.
+        // ── Redis cache check ─────────────────────────────────────────────────
+        String cacheKey = MONNIE_CACHE_PREFIX + email;
+        try {
+            String cached = redisTemplate.opsForValue().get(cacheKey);
+            if (cached != null && !cached.isBlank()) {
+                AiDashboardNextActionResponse hit =
+                    objectMapper.readValue(cached, AiDashboardNextActionResponse.class);
+                logger.debug("[Monnie] Cache hit for {}", email);
+                return hit;
+            }
+        } catch (Exception e) {
+            logger.warn("[Monnie] Redis read failed — will build fresh: {}", e.getMessage());
+        }
+
+        // ── Build context ─────────────────────────────────────────────────────
         DashboardActionContext context;
         try {
             context = buildContext(email);
@@ -81,16 +146,32 @@ public class AiInsightService {
             return deterministic != null ? deterministic : buildFallback(context);
         }
 
+        // ── Call Gemini ───────────────────────────────────────────────────────
+        AiDashboardNextActionResponse result;
         try {
             String candidatesJson = objectMapper.writeValueAsString(buildCandidatePayloads(context.candidates));
             String prompt = aiPromptService.buildDashboardNextActionPrompt(
-                context.userName,
+                context.firstName,
+                context.gender,
+                context.occupation,
+                context.dayOfWeek,
+                context.currentTimeFormatted,
+                context.isUsualTransferTime,
+                context.transferPatternDesc,
+                context.activeBudgetCount,
+                context.envelopesNearLimit,
+                context.hasBudgetDrift,
+                context.driftingEnvelopeName,
                 context.walletBalance.doubleValue(),
                 context.activeBudget != null,
                 context.completedBudget != null,
                 context.hasLinkedSettlementAccount,
+                context.isPspRubies,
                 context.activeBudget != null ? context.activeBudget.getName() : "",
                 context.daysUntilActiveBudgetEnds,
+                context.budgetPctElapsed,
+                context.activeBudgetNames,
+                context.allEnvelopes,
                 candidatesJson
             );
 
@@ -98,12 +179,23 @@ public class AiInsightService {
             String cleanedText = cleanJson(rawText);
             AiDashboardNextActionResponse response =
                 objectMapper.readValue(cleanedText, AiDashboardNextActionResponse.class);
-
-            return sanitizeResponse(response, context, deterministic);
+            result = sanitizeResponse(response, context, deterministic);
         } catch (Exception e) {
-            logger.warn("AiInsightService: Gemini dashboard action failed, using deterministic response: {}", e.getMessage());
-            return deterministic != null ? deterministic : buildFallback(context);
+            logger.warn("AiInsightService: Gemini dashboard action failed, using deterministic: {}", e.getMessage());
+            result = deterministic != null ? deterministic : buildFallback(context);
         }
+
+        // ── Cache result ──────────────────────────────────────────────────────
+        try {
+            redisTemplate.opsForValue().set(
+                cacheKey,
+                objectMapper.writeValueAsString(result),
+                MONNIE_CACHE_TTL_MIN, TimeUnit.MINUTES);
+        } catch (Exception e) {
+            logger.warn("[Monnie] Redis write failed — result still returned: {}", e.getMessage());
+        }
+
+        return result;
     }
 
     private DashboardActionContext buildContext(String email) {
@@ -121,25 +213,207 @@ public class AiInsightService {
             .filter(budget -> budget.getStatus() == BudgetStatus.ACTIVE)
             .toList();
 
+        LocalDateTime nowWat = LocalDateTime.now(LAGOS_ZONE);
+
         DashboardActionContext context = new DashboardActionContext();
+
+        // ── Identity ──────────────────────────────────────────────────────────
         context.userName = user.getName() != null && !user.getName().isBlank()
-            ? user.getName()
-            : "there";
+            ? user.getName() : "there";
+
+        // Extract firstName from profileData; fall back to splitting full name
+        if (user.getProfileData() != null) {
+            Object fnObj = user.getProfileData().get("firstName");
+            if (fnObj != null && !fnObj.toString().isBlank()) {
+                context.firstName = fnObj.toString().trim();
+            } else if (context.userName.contains(" ")) {
+                context.firstName = context.userName.substring(0, context.userName.indexOf(" "));
+            } else {
+                context.firstName = context.userName;
+            }
+            Object occObj = user.getProfileData().get("occupation");
+            if (occObj != null && !occObj.toString().isBlank()) {
+                context.occupation = occObj.toString().trim();
+            }
+        } else {
+            context.firstName = context.userName;
+        }
+
+        context.gender = user.getGender() != null ? user.getGender().name().toLowerCase() : "unknown";
+
+        // ── Time & day ────────────────────────────────────────────────────────
+        context.currentTimeFormatted = formatTime12hr(nowWat);
+        context.dayOfWeek = nowWat.getDayOfWeek()
+            .getDisplayName(TextStyle.FULL, Locale.ENGLISH);
+
+        // ── PSP awareness ─────────────────────────────────────────────────────
+        try {
+            String activePsp = systemConfigService.getString(SystemConfigService.PSP_ACTIVE, "");
+            context.isPspRubies = "RUBIES".equalsIgnoreCase(activePsp);
+        } catch (Exception e) {
+            logger.warn("[Monnie] PSP check failed: {}", e.getMessage());
+        }
+
+        // ── Wallet ────────────────────────────────────────────────────────────
         context.walletBalance = walletOpt.map(Wallet::getBalance).orElse(BigDecimal.ZERO);
         context.hasLinkedSettlementAccount = walletOpt
             .map(wallet -> wallet.getSettlementAccountNumber() != null
                 && !wallet.getSettlementAccountNumber().isBlank())
             .orElse(false);
+
+        // ── Budget state ──────────────────────────────────────────────────────
         context.activeBudget = activeBudget;
         context.completedBudget = completedBudget;
         context.hasBudgetHistory = !activeBudgets.isEmpty() || completedBudget != null;
         context.activeBudgets = activeBudgets;
+        context.activeBudgetCount = activeBudgets.size();
         if (activeBudget != null && activeBudget.getEndDate() != null) {
             long days = ChronoUnit.DAYS.between(LocalDate.now(LAGOS_ZONE), activeBudget.getEndDate());
             context.daysUntilActiveBudgetEnds = (int) Math.max(0, days);
         }
+
+        // ── Envelope health (overspend / drift) ───────────────────────────────
+        detectEnvelopeIssues(activeBudgets, nowWat, context);
+
+        // ── Budget % elapsed (primary active budget) ──────────────────────────
+        if (activeBudget != null
+                && activeBudget.getStartDate() != null
+                && activeBudget.getEndDate() != null) {
+            long totalDays = ChronoUnit.DAYS.between(
+                    activeBudget.getStartDate(), activeBudget.getEndDate());
+            long daysElapsed = ChronoUnit.DAYS.between(
+                    activeBudget.getStartDate(), nowWat.toLocalDate());
+            if (totalDays > 0) {
+                long clamped = Math.max(0, Math.min(daysElapsed, totalDays));
+                context.budgetPctElapsed = (int) Math.round(100.0 * clamped / totalDays);
+            }
+        }
+
+        // ── All active budget names ────────────────────────────────────────────
+        context.activeBudgetNames = activeBudgets.stream()
+                .map(b -> b.getName() != null ? b.getName() : "Budget")
+                .collect(Collectors.toList());
+
+        // ── Full envelope snapshot across all active budgets ───────────────────
+        List<EnvelopeSummaryDto> allEnvelopes = new ArrayList<>();
+        for (Budget budget : activeBudgets) {
+            if (budget.getEnvelopes() == null) continue;
+            String budgetLabel = budget.getName() != null ? budget.getName() : "Budget";
+            for (Envelope envelope : budget.getEnvelopes()) {
+                BigDecimal allocated = envelope.getAmount();
+                if (allocated == null || allocated.compareTo(BigDecimal.ZERO) <= 0) continue;
+                BigDecimal rem = envelope.getRemainingAmount();
+                BigDecimal remaining = rem != null ? rem : BigDecimal.ZERO;
+                BigDecimal spent = allocated.subtract(remaining);
+                int pctSpent = spent.max(BigDecimal.ZERO)
+                        .divide(allocated, 2, RoundingMode.HALF_UP)
+                        .multiply(new BigDecimal("100"))
+                        .intValue();
+                allEnvelopes.add(new EnvelopeSummaryDto(
+                        envelope.getName() != null ? envelope.getName() : "Unnamed",
+                        budgetLabel,
+                        allocated.doubleValue(),
+                        remaining.doubleValue(),
+                        pctSpent));
+            }
+        }
+        context.allEnvelopes = allEnvelopes;
+
+        // ── Transfer pattern ──────────────────────────────────────────────────
+        detectTransferPattern(user.getId(), nowWat, context);
+
         context.candidates = rankCandidates(context);
         return context;
+    }
+
+    /** Detects envelopes near their spending limit ahead of schedule and budget drift. */
+    private void detectEnvelopeIssues(List<Budget> activeBudgets, LocalDateTime now, DashboardActionContext ctx) {
+        List<String> nearLimit = new ArrayList<>();
+        for (Budget budget : activeBudgets) {
+            if (budget.getEnvelopes() == null || budget.getStartDate() == null || budget.getEndDate() == null) {
+                continue;
+            }
+            long totalDays = ChronoUnit.DAYS.between(budget.getStartDate(), budget.getEndDate());
+            long daysElapsed = ChronoUnit.DAYS.between(budget.getStartDate(), now.toLocalDate());
+            if (totalDays <= 0) continue;
+            double pctElapsed = Math.max(0, Math.min(1.0, (double) daysElapsed / totalDays));
+
+            for (Envelope envelope : budget.getEnvelopes()) {
+                BigDecimal allocated = envelope.getAmount();
+                BigDecimal remaining = envelope.getRemainingAmount();
+                if (allocated == null || allocated.compareTo(BigDecimal.ZERO) <= 0) continue;
+                BigDecimal spent = allocated.subtract(remaining != null ? remaining : allocated);
+                if (spent.compareTo(BigDecimal.ZERO) <= 0) continue;
+
+                double pctSpent = spent.divide(allocated, 4, RoundingMode.HALF_UP).doubleValue();
+
+                // Near-limit: > 80% spent before 60% of budget period has elapsed
+                if (pctSpent > 0.80 && pctElapsed < 0.60 && !nearLimit.contains(envelope.getName())) {
+                    nearLimit.add(envelope.getName());
+                }
+                // Budget drift: spending at least 40% faster than the time elapsed
+                if (!ctx.hasBudgetDrift && pctElapsed > 0.10
+                        && pctSpent > (pctElapsed * 1.40)) {
+                    ctx.hasBudgetDrift = true;
+                    ctx.driftingEnvelopeName = envelope.getName() != null ? envelope.getName() : "";
+                }
+            }
+        }
+        ctx.envelopesNearLimit = nearLimit;
+    }
+
+    /** Detects the user's habitual outgoing-transfer day + time-of-day slot. */
+    private void detectTransferPattern(Long userId, LocalDateTime now, DashboardActionContext ctx) {
+        try {
+            LocalDateTime since = now.minusDays(60);
+            List<TransactionLog> transfers = transactionLogRepository
+                .findRecentOutgoingTransfers(userId, since);
+
+            if (transfers.size() < TRANSFER_PATTERN_MIN_SAMPLES) return;
+
+            Map<String, Integer> patternCounts = new HashMap<>();
+            for (TransactionLog tx : transfers) {
+                if (tx.getCreatedAt() == null) continue;
+                String day  = tx.getCreatedAt().getDayOfWeek()
+                    .getDisplayName(TextStyle.FULL, Locale.ENGLISH);
+                String slot = getTimeSlot(tx.getCreatedAt().getHour());
+                patternCounts.merge(day + " " + slot, 1, Integer::sum);
+            }
+
+            patternCounts.entrySet().stream()
+                .filter(e -> e.getValue() >= TRANSFER_PATTERN_MIN_SAMPLES)
+                .max(Map.Entry.comparingByValue())
+                .ifPresent(top -> {
+                    String currentPattern = now.getDayOfWeek()
+                        .getDisplayName(TextStyle.FULL, Locale.ENGLISH)
+                        + " " + getTimeSlot(now.getHour());
+                    if (currentPattern.equals(top.getKey())) {
+                        ctx.isUsualTransferTime = true;
+                        ctx.transferPatternDesc = top.getKey() + "s"; // e.g. "Friday evenings"
+                    }
+                });
+        } catch (Exception e) {
+            logger.warn("[Monnie] Transfer pattern detection failed: {}", e.getMessage());
+        }
+    }
+
+    /** Maps an hour (0-23) to a human-friendly time slot name. */
+    private String getTimeSlot(int hour) {
+        if (hour >= 5  && hour < 12) return "mornings";
+        if (hour >= 12 && hour < 17) return "afternoons";
+        if (hour >= 17 && hour < 21) return "evenings";
+        return "nights";
+    }
+
+    /** Formats a LocalDateTime as 12-hour time (e.g. "5pm", "9:30am"). */
+    private String formatTime12hr(LocalDateTime dt) {
+        int hour   = dt.getHour();
+        int minute = dt.getMinute();
+        String amPm = hour < 12 ? "am" : "pm";
+        int displayHour = hour % 12;
+        if (displayHour == 0) displayHour = 12;
+        if (minute == 0) return displayHour + amPm;
+        return displayHour + ":" + String.format("%02d", minute) + amPm;
     }
 
     private List<ActionCandidate> rankCandidates(DashboardActionContext context) {
@@ -212,7 +486,8 @@ public class AiInsightService {
             ));
         }
 
-        if (!context.hasLinkedSettlementAccount) {
+        // set_account is irrelevant for Rubies — users enter destination at transfer time
+        if (!context.hasLinkedSettlementAccount && !context.isPspRubies) {
             double score = context.walletBalance.compareTo(new BigDecimal("50000")) > 0 ? 620 : 420;
             candidates.add(baseCandidate(
                 "Link your payout account",
@@ -222,6 +497,82 @@ public class AiInsightService {
                 "normal",
                 "The user has not linked a payout account yet.",
                 score
+            ));
+        }
+
+        // ── Envelope near-limit (spending too fast ahead of schedule) ─────────
+        if (!context.envelopesNearLimit.isEmpty()) {
+            String first = context.envelopesNearLimit.get(0);
+            String extra = context.envelopesNearLimit.size() > 1
+                ? " (+" + (context.envelopesNearLimit.size() - 1) + " more)"
+                : "";
+            ActionCandidate nearLimitCandidate = baseCandidate(
+                first + " is almost gone" + extra,
+                first + " has used over 80% of its allocation — and the budget period isn't close to ending.",
+                "Review " + first,
+                "review_active_budget",
+                "high",
+                "Envelope(s) spending ahead of the budget schedule: " + String.join(", ", context.envelopesNearLimit),
+                750
+            );
+            // Wire to the first active budget that contains this envelope
+            context.activeBudgets.stream()
+                .filter(b -> b.getEnvelopes() != null && b.getEnvelopes().stream()
+                    .anyMatch(e -> first.equals(e.getName())))
+                .findFirst()
+                .ifPresent(b -> {
+                    nearLimitCandidate.budgetId = b.getId();
+                    nearLimitCandidate.budgetName = b.getName();
+                    b.getEnvelopes().stream()
+                        .filter(e -> first.equals(e.getName()))
+                        .findFirst()
+                        .ifPresent(e -> {
+                            nearLimitCandidate.envelopeId = e.getId();
+                            nearLimitCandidate.envelopeName = e.getName();
+                        });
+                });
+            candidates.add(nearLimitCandidate);
+        }
+
+        // ── Budget drift (spending materially faster than time elapsed) ───────
+        if (context.hasBudgetDrift && !context.driftingEnvelopeName.isBlank()) {
+            ActionCandidate driftCandidate = baseCandidate(
+                context.driftingEnvelopeName + " spending faster than planned",
+                "You're ahead of your spending pace in " + context.driftingEnvelopeName + ". It may run out before the budget ends.",
+                "Review " + context.driftingEnvelopeName,
+                "review_active_budget",
+                "high",
+                "Spending velocity in " + context.driftingEnvelopeName + " exceeds the budget timeline by over 40%.",
+                760
+            );
+            context.activeBudgets.stream()
+                .filter(b -> b.getEnvelopes() != null && b.getEnvelopes().stream()
+                    .anyMatch(e -> context.driftingEnvelopeName.equals(e.getName())))
+                .findFirst()
+                .ifPresent(b -> {
+                    driftCandidate.budgetId = b.getId();
+                    driftCandidate.budgetName = b.getName();
+                    b.getEnvelopes().stream()
+                        .filter(e -> context.driftingEnvelopeName.equals(e.getName()))
+                        .findFirst()
+                        .ifPresent(e -> {
+                            driftCandidate.envelopeId = e.getId();
+                            driftCandidate.envelopeName = e.getName();
+                        });
+                });
+            candidates.add(driftCandidate);
+        }
+
+        // ── Usual transfer time nudge ─────────────────────────────────────────
+        if (context.isUsualTransferTime && context.walletBalance.compareTo(BigDecimal.ZERO) > 0) {
+            candidates.add(baseCandidate(
+                "It's your usual transfer time",
+                "You typically make transfers on " + context.transferPatternDesc + ". Ready when you are.",
+                "Go to budget",
+                "review_active_budget",
+                "normal",
+                "Current day and time matches the user's historical transfer pattern.",
+                380
             ));
         }
 
@@ -984,16 +1335,71 @@ public class AiInsightService {
     }
 
     private static class DashboardActionContext {
-        private String userName;
-        private BigDecimal walletBalance;
-        private boolean hasLinkedSettlementAccount;
-        private boolean hasBudgetHistory;
-        private Budget activeBudget;
-        private Budget completedBudget;
-        private List<Budget> activeBudgets = List.of();
-        private List<ActionCandidate> candidates = List.of();
+        // ── Identity ──────────────────────────────────────────────────────────
+        private String userName   = "there";
+        private String firstName  = "there";
+        private String gender     = "unknown";   // "male" | "female" | "other" | "unknown"
+        private String occupation = "";
+
+        // ── Time / day ────────────────────────────────────────────────────────
+        private String currentTimeFormatted = "";  // "5pm", "9:30am"
+        private String dayOfWeek            = "";  // "Monday", "Friday" …
+
+        // ── PSP ───────────────────────────────────────────────────────────────
+        private boolean isPspRubies = false;
+
+        // ── Wallet & budget ───────────────────────────────────────────────────
+        private BigDecimal walletBalance          = BigDecimal.ZERO;
+        private boolean    hasLinkedSettlementAccount = false;
+        private boolean    hasBudgetHistory        = false;
+        private Budget     activeBudget            = null;
+        private Budget     completedBudget         = null;
+        private List<Budget> activeBudgets         = List.of();
+        private List<ActionCandidate> candidates   = List.of();
+        private int activeBudgetCount              = 0;
         /** -1 = no active budget; 0 = ends today; N = ends in N days */
-        private int daysUntilActiveBudgetEnds = -1;
+        private int daysUntilActiveBudgetEnds      = -1;
+        /** How far through the budget period we are, by days elapsed (0-100). -1 = no budget */
+        private int budgetPctElapsed               = -1;
+        /** Names of all currently active budgets */
+        private List<String> activeBudgetNames     = List.of();
+
+        // ── Full envelope snapshot ────────────────────────────────────────────
+        /** Every envelope across all active budgets — gives Gemini specific ₦ figures */
+        private List<EnvelopeSummaryDto> allEnvelopes = List.of();
+
+        // ── Envelope health ───────────────────────────────────────────────────
+        private List<String> envelopesNearLimit = List.of();
+        private boolean hasBudgetDrift          = false;
+        private String  driftingEnvelopeName    = "";
+
+        // ── Transfer pattern ──────────────────────────────────────────────────
+        private boolean isUsualTransferTime  = false;
+        private String  transferPatternDesc  = "";  // e.g. "Friday evenings"
+    }
+
+    /** Lightweight envelope snapshot passed to Gemini so it can reference exact ₦ figures. */
+    private static class EnvelopeSummaryDto {
+        final String name;
+        final String budgetName;
+        final double allocated;
+        final double remaining;
+        final int    pctSpent;
+
+        EnvelopeSummaryDto(String name, String budgetName,
+                           double allocated, double remaining, int pctSpent) {
+            this.name       = name;
+            this.budgetName = budgetName;
+            this.allocated  = allocated;
+            this.remaining  = remaining;
+            this.pctSpent   = pctSpent;
+        }
+
+        @Override
+        public String toString() {
+            return String.format("  • %s [%s] — ₦%.0f allocated, ₦%.0f remaining (%d%% spent)",
+                    name, budgetName, allocated, remaining, pctSpent);
+        }
     }
 
     private static class ActionCandidate {

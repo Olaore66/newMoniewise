@@ -1,5 +1,6 @@
 package com.moniewise.moniewise_backend.controller;
 
+import com.moniewise.moniewise_backend.service.AiInsightService;
 import com.moniewise.moniewise_backend.service.SystemConfigService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -30,9 +31,12 @@ public class SystemConfigController {
     private static final Logger logger = LoggerFactory.getLogger(SystemConfigController.class);
 
     private final SystemConfigService systemConfig;
+    private final AiInsightService    aiInsightService;
 
-    public SystemConfigController(SystemConfigService systemConfig) {
-        this.systemConfig = systemConfig;
+    public SystemConfigController(SystemConfigService systemConfig,
+                                   AiInsightService aiInsightService) {
+        this.systemConfig     = systemConfig;
+        this.aiInsightService = aiInsightService;
     }
 
     /**
@@ -86,6 +90,14 @@ public class SystemConfigController {
 
         logger.info("[Admin] Config update: key='{}' → '{}'", key, value);
         systemConfig.set(key, value, description);
+
+        // When the active PSP changes, stale MONNIE cards must be flushed
+        // immediately — otherwise users see incorrect actions (e.g. "Set Account"
+        // shown to Rubies users who don't need a pre-registered payout account).
+        if (SystemConfigService.PSP_ACTIVE.equals(key)) {
+            aiInsightService.evictAllMonnieCaches();
+            logger.info("[Admin] PSP switched to '{}' — all MONNIE insight caches flushed", value);
+        }
 
         return ResponseEntity.ok(Map.of(
                 "status", true,

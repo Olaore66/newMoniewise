@@ -209,7 +209,8 @@ public class WalletService {
                     amount,
                     wallet.getBalance()
             );
-            notificationService.sendNotification(userId.toString(), message, NotificationType.INSUFFICIENT_BALANCE);
+            notificationService.sendNotification(userId.toString(), message,
+                    NotificationType.INSUFFICIENT_BALANCE, null, null, "VIEW_WALLET", "/wallet");
             throw new InsufficientFundsException(message);
         }
 
@@ -234,8 +235,8 @@ public class WalletService {
                 NotificationType.BUDGET_CREATION_FEE,
                 null,
                 null,
-                null,
-                null
+                "VIEW_ACTIVITY",
+                "/activity"
         );
 
         logger.info("Deducted ₦{} from wallet for user {}", amount, userId);
@@ -525,6 +526,44 @@ public class WalletService {
         logger.warn("No upstream data and no stale cache — serving static Nigerian bank fallback ({} banks)",
                 NIGERIAN_BANK_FALLBACK.size());
         return NIGERIAN_BANK_FALLBACK;
+    }
+
+    /**
+     * Pre-loads the bank list for the default PSP into Redis at server startup.
+     * After this runs, every call to {@link #getSupportedBanks} returns from
+     * Redis (< 5ms) — no user ever waits on a live Rubies/upstream call.
+     *
+     * <p>If the cache is already populated (e.g. a recent restart), the upstream
+     * call is skipped entirely to avoid unnecessary latency at boot time.
+     */
+    public void warmBankListCache() {
+        try {
+            PaymentGateway gateway = paymentGatewayResolver.resolveDefault();
+            String cacheKey = BANK_LIST_CACHE_PREFIX + gateway.getClass().getSimpleName().toLowerCase();
+
+            // Already warm? Nothing to do.
+            String existing = redisTemplate.opsForValue().get(cacheKey);
+            if (existing != null && !existing.isBlank()) {
+                logger.info("[BankList] Cache already warm at startup — skipping upstream call");
+                return;
+            }
+
+            List<Map<String, Object>> banks = gateway.getSupportedBanks();
+            if (banks != null && !banks.isEmpty()) {
+                redisTemplate.opsForValue().set(
+                        cacheKey,
+                        objectMapper.writeValueAsString(banks),
+                        BANK_LIST_TTL_HOURS, TimeUnit.HOURS);
+                logger.info("[BankList] Warmed {} banks into Redis at startup (key={})", banks.size(), cacheKey);
+            } else {
+                // Upstream returned nothing — static fallback will serve requests until
+                // the next successful upstream call populates the cache.
+                logger.warn("[BankList] Startup warm skipped — upstream returned empty list. " +
+                        "Static fallback will be used until upstream recovers.");
+            }
+        } catch (Exception e) {
+            logger.warn("[BankList] Startup warm failed — requests will lazy-load: {}", e.getMessage());
+        }
     }
 
     public String resolveBankAccount(Long userId, String bankCode, String accountNumber) {

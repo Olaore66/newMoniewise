@@ -117,6 +117,26 @@ public interface TransactionLogRepository extends JpaRepository<TransactionLog, 
 
     Optional<TransactionLog> findByProviderReference(String providerReference);
 
+    /** Used by AiInsightService to detect the user's habitual transfer day/time pattern. */
+    @Query("""
+        SELECT t FROM TransactionLog t
+        WHERE t.userId = :userId
+          AND t.createdAt >= :since
+          AND t.transactionType IN (
+              com.moniewise.moniewise_backend.enums.TransactionType.ENVELOPE_TO_EXTERNAL,
+              com.moniewise.moniewise_backend.enums.TransactionType.WALLET_TO_EXTERNAL,
+              com.moniewise.moniewise_backend.enums.TransactionType.USER_TO_USER,
+              com.moniewise.moniewise_backend.enums.TransactionType.WALLET_TO_USER,
+              com.moniewise.moniewise_backend.enums.TransactionType.ENVELOPE_TO_USER,
+              com.moniewise.moniewise_backend.enums.TransactionType.WALLET_WITHDRAWAL
+          )
+        ORDER BY t.createdAt DESC
+    """)
+    List<TransactionLog> findRecentOutgoingTransfers(
+            @Param("userId") Long userId,
+            @Param("since") LocalDateTime since
+    );
+
 
     @Query("""
        SELECT COALESCE(SUM(ABS(t.amount)), 0)

@@ -19,6 +19,7 @@ import javax.crypto.spec.SecretKeySpec;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
 /**
@@ -278,12 +279,18 @@ public class RubiesGateway implements PaymentGateway {
                 return Collections.emptyList();
             }
 
+            // Map to the canonical shape Flutter's Bank.fromJson expects:
+            //   { "id": int, "name": String, "bank_code": String }
+            // This must match the static NIGERIAN_BANK_FALLBACK shape in WalletService.
+            AtomicInteger idx = new AtomicInteger(1);
             return body.getData().stream()
+                    .filter(entry -> entry.getBankName() != null && entry.getBankCode() != null)
                     .map(entry -> {
-                        Map<String, Object> m = new HashMap<>();
-                        m.put("bankName", entry.getBankName());
-                        m.put("bankCode", entry.getBankCode());
-                        return m;
+                        Map<String, Object> m = new LinkedHashMap<>();
+                        m.put("id",        idx.getAndIncrement());
+                        m.put("name",      entry.getBankName());
+                        m.put("bank_code", entry.getBankCode());
+                        return (Map<String, Object>) m;
                     })
                     .collect(Collectors.toList());
 

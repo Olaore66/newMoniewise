@@ -10,6 +10,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.Duration;
+import java.util.List;
 
 /**
  * Typed access to the {@code system_config} table.
@@ -162,6 +163,30 @@ public class SystemConfigService {
             redis.delete(CACHE_PREFIX + key);
         } catch (Exception e) {
             logger.warn("[SystemConfig] Redis evict failed for key='{}': {}", key, e.getMessage());
+        }
+    }
+
+    /**
+     * Bulk-loads every row in the system_config table into Redis in one shot.
+     * Called at server startup by CacheWarmupService so the very first request
+     * of the day hits Redis (< 5ms) rather than the DB (10–50ms).
+     *
+     * <p>Safe to call multiple times — existing Redis entries are simply overwritten.
+     */
+    public void warmCache() {
+        try {
+            List<SystemConfig> all = repository.findAll();
+            int count = 0;
+            for (SystemConfig cfg : all) {
+                if (cfg.getConfigKey() != null && cfg.getConfigValue() != null) {
+                    putInCache(cfg.getConfigKey(), cfg.getConfigValue());
+                    count++;
+                }
+            }
+            logger.info("[SystemConfig] Warmed {} config key(s) into Redis", count);
+        } catch (Exception e) {
+            logger.warn("[SystemConfig] Startup cache warm failed — " +
+                    "keys will lazy-load on first use: {}", e.getMessage());
         }
     }
 
