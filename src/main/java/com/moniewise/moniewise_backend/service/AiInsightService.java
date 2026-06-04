@@ -210,7 +210,8 @@ public class AiInsightService {
                 objectMapper.readValue(cleanedText, AiDashboardNextActionResponse.class);
             result = sanitizeResponse(response, context, deterministic);
         } catch (Exception e) {
-            logger.warn("AiInsightService: Gemini dashboard action failed, using deterministic: {}", e.getMessage());
+            logger.error("[Monnie] Gemini call failed for {} — using deterministic fallback. Error type={} msg={}",
+                    email, e.getClass().getSimpleName(), e.getMessage());
             result = deterministic != null ? deterministic : buildFallback(context);
         }
 
@@ -1278,18 +1279,29 @@ public class AiInsightService {
     }
 
     private String cleanJson(String rawText) {
-        if (rawText == null) {
+        if (rawText == null || rawText.isBlank()) {
             return "{}";
         }
 
-        String cleaned = rawText.trim();
-        if (cleaned.startsWith("```") && cleaned.endsWith("```")) {
-            cleaned = cleaned.replace("```json", "")
-                .replace("```JSON", "")
-                .replace("```", "")
+        // 1. Strip ALL markdown code fences (```json, ```JSON, ``` alone)
+        String cleaned = rawText.trim()
+                .replaceAll("(?i)```json", "")
+                .replaceAll("```", "")
                 .trim();
+
+        // 2. Extract just the JSON object — find the first { and matching last }
+        //    This handles cases where Gemini adds introductory text before the JSON
+        //    (e.g. "Here is the MONNIE card:\n\n{...}") which previously caused
+        //    objectMapper.readValue to fail and forced the deterministic fallback.
+        int start = cleaned.indexOf('{');
+        int end   = cleaned.lastIndexOf('}');
+        if (start != -1 && end != -1 && end > start) {
+            return cleaned.substring(start, end + 1);
         }
-        return cleaned;
+
+        // Couldn't find a JSON object — return empty so the caller falls back cleanly
+        logger.warn("[Monnie] cleanJson: no JSON object found in Gemini response (length={})", rawText.length());
+        return "{}";
     }
 
     private boolean isAllowedActionType(String value) {
