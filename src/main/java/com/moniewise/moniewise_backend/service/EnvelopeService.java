@@ -514,20 +514,23 @@ public class EnvelopeService {
         ));
 
         // Ã¢Å“â€¦ ADD NEW EVENT: Recipient Notification
-        Map<String, Object> recipientParams = Map.of(
-                "amount", String.format("%,.2f", amount),
-                "senderName", senderName
-        );
+        if (!providerBackedP2p) {
+            // Rubies P2P recipient alerts are sent by the CR webhook after the balance is credited.
+            Map<String, Object> recipientParams = Map.of(
+                    "amount", String.format("%,.2f", amount),
+                    "senderName", senderName
+            );
 
-        eventPublisher.publishEvent(new GenericNotificationEvent(
-                this,
-                recipient.getId().toString(),
-                NotificationType.WALLET_DEPOSIT, // Or P2P_RECEIVED if you have it
-                recipientParams,
-                null, // No budget context for recipient usually
-                null,
-                "/dashboard"
-        ));
+            eventPublisher.publishEvent(new GenericNotificationEvent(
+                    this,
+                    recipient.getId().toString(),
+                    NotificationType.WALLET_DEPOSIT, // Or P2P_RECEIVED if you have it
+                    recipientParams,
+                    null, // No budget context for recipient usually
+                    null,
+                    "/dashboard"
+            ));
+        }
         try { beneficiaryService.addBeneficiary(sender.getId(), recipient.getEmail(), recipientName); } catch (Exception e) {}
     }
 

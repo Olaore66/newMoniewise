@@ -73,6 +73,8 @@ public class WalletService {
 
     private static final String BANK_LIST_CACHE_PREFIX = "bank_list:";
     private static final long   BANK_LIST_TTL_HOURS    = 24;
+    private static final String RUBIES_P2P_CREDIT_REF_PREFIX = "P2P-RB-CR-";
+    private static final String RUBIES_P2P_SETTLEMENT_MARKER_PREFIX = "P2P-RB-WH-";
 
     @Autowired
     @Lazy
@@ -311,6 +313,19 @@ public class WalletService {
 
         if (amount.compareTo(BigDecimal.ZERO) <= 0) {
             throw new IllegalArgumentException("Funding amount must be positive");
+        }
+
+        if (suppressLogAndNotification) {
+            Wallet wallet = walletRepository.findByUser(user)
+                    .orElseGet(() -> createWalletForUser(user));
+
+            wallet.setBalance(wallet.getBalance().add(amount));
+            wallet.setUpdatedAt(LocalDateTime.now());
+            wallet.setLastBalanceSyncAt(LocalDateTime.now());
+            walletRepository.save(wallet);
+
+            logger.info("Internal wallet balance-only funding applied for user {}", userId);
+            return;
         }
 
         String internalRef = "INT-" + System.currentTimeMillis() + "-" + userId;
@@ -1712,6 +1727,18 @@ public class WalletService {
                 return;
             }
 
+            String sessionId = root.path("sessionId").asText(null);
+            String originatorName = root.path("originatorName").asText(null);
+            Optional<TransactionLog> internalP2pCreditLog =
+                    findRubiesP2pCreditLog(wallet.getUser().getId(), reference, sessionId);
+
+            if (isRubiesP2pCredit(reference, internalP2pCreditLog)) {
+                logger.info("[RUBIES-WEBHOOK] Processing internal P2P credit: acct={} amount={} ref={} sessionId={}",
+                        creditAccountNumber, amount, reference, sessionId);
+                settleRubiesP2pCredit(wallet, internalP2pCreditLog, amount, reference, sessionId, originatorName);
+                return;
+            }
+
             String description = "Inbound transfer: " + narration;
             logger.info("[RUBIES-WEBHOOK] Processing deposit: acct={} amount={} ref={}", creditAccountNumber, amount, reference);
 
@@ -1754,6 +1781,168 @@ public class WalletService {
     // Providus payload extraction helpers
     // (multi-pattern because Providus hasn't confirmed their exact field names)
     // ─────────────────────────────────────────────────────────────────────────────
+
+    private Optional<TransactionLog> findRubiesP2pCreditLog(Long userId, String paymentReference, String sessionId) {
+        Set<String> candidateReferences = new LinkedHashSet<>();
+        if (isPresent(paymentReference)) {
+            candidateReferences.add(RUBIES_P2P_CREDIT_REF_PREFIX + paymentReference);
+        }
+        if (isPresent(sessionId)) {
+            candidateReferences.add(RUBIES_P2P_CREDIT_REF_PREFIX + sessionId);
+        }
+
+        if (!candidateReferences.isEmpty()) {
+            Optional<TransactionLog> byReference =
+                    transactionLogRepository.findFirstByUserIdAndTransactionTypeAndReferenceInOrderByCreatedAtDesc(
+                            userId,
+                            TransactionType.USER_TO_ENVELOPE,
+                            candidateReferences
+                    );
+            if (byReference.isPresent()) {
+                return byReference;
+            }
+        }
+
+        if (isPresent(sessionId)) {
+            Optional<TransactionLog> bySession =
+                    transactionLogRepository.findFirstByUserIdAndTransactionTypeAndProviderReferenceOrderByCreatedAtDesc(
+                            userId,
+                            TransactionType.USER_TO_ENVELOPE,
+                            sessionId
+                    );
+            if (bySession.isPresent()) {
+                return bySession;
+            }
+        }
+
+        if (isPresent(paymentReference)) {
+            return transactionLogRepository.findFirstByUserIdAndTransactionTypeAndProviderReferenceOrderByCreatedAtDesc(
+                    userId,
+                    TransactionType.USER_TO_ENVELOPE,
+                    paymentReference
+            );
+        }
+
+        return Optional.empty();
+    }
+
+    private boolean isRubiesP2pCredit(String paymentReference, Optional<TransactionLog> creditLog) {
+        return creditLog.isPresent()
+                || (isPresent(paymentReference) && paymentReference.startsWith("P2P-RB-"));
+    }
+
+    private void settleRubiesP2pCredit(
+            Wallet wallet,
+            Optional<TransactionLog> creditLog,
+            BigDecimal amount,
+            String paymentReference,
+            String sessionId,
+            String originatorName
+    ) {
+        String markerReference = rubiesP2pSettlementMarkerReference(paymentReference, sessionId);
+        if (!isPresent(markerReference)) {
+            logger.error("[RUBIES-WEBHOOK] P2P credit missing stable reference; cannot settle safely");
+            return;
+        }
+
+        if (transactionLogRepository.existsByReference(markerReference)) {
+            logger.info("[RUBIES-WEBHOOK] P2P credit already settled marker={} ref={} sessionId={}",
+                    markerReference, paymentReference, sessionId);
+            completeRubiesP2pCreditLog(creditLog, sessionId);
+            return;
+        }
+
+        if (isPresent(paymentReference) && transactionLogRepository.existsByReference(paymentReference)) {
+            logger.warn("[RUBIES-WEBHOOK] P2P credit ref={} was already processed as a generic deposit; skipping balance update",
+                    paymentReference);
+            completeRubiesP2pCreditLog(creditLog, sessionId);
+            return;
+        }
+
+        TransactionLog marker = new TransactionLog();
+        marker.setUserId(wallet.getUser().getId());
+        marker.setAmount(amount);
+        marker.setFee(BigDecimal.ZERO);
+        marker.setTransactionType(TransactionType.P2P_RUBIES_SETTLEMENT);
+        marker.setReference(markerReference);
+        marker.setProviderName(RubiesGateway.PROVIDER_NAME);
+        marker.setProviderReference(isPresent(sessionId) ? sessionId : paymentReference);
+        marker.setDescription("Rubies P2P credit webhook processed");
+        marker.setStatus(TransactionStatus.COMPLETED);
+        marker.setCreatedAt(LocalDateTime.now());
+        transactionLogRepository.save(marker);
+
+        wallet.setBalance(wallet.getBalance().add(amount));
+        wallet.setUpdatedAt(LocalDateTime.now());
+        wallet.setLastBalanceSyncAt(LocalDateTime.now());
+        walletRepository.save(wallet);
+
+        completeRubiesP2pCreditLog(creditLog, sessionId);
+        sendRubiesP2pCreditNotification(wallet.getUser().getId(), amount, creditLog, originatorName);
+    }
+
+    private String rubiesP2pSettlementMarkerReference(String paymentReference, String sessionId) {
+        if (isPresent(paymentReference) && !paymentReference.startsWith("RUB-DEP-")) {
+            return RUBIES_P2P_SETTLEMENT_MARKER_PREFIX + paymentReference;
+        }
+        if (isPresent(sessionId)) {
+            return RUBIES_P2P_SETTLEMENT_MARKER_PREFIX + sessionId;
+        }
+        return null;
+    }
+
+    private void completeRubiesP2pCreditLog(Optional<TransactionLog> creditLog, String sessionId) {
+        creditLog.ifPresent(log -> {
+            boolean changed = false;
+            if (log.getStatus() != TransactionStatus.COMPLETED) {
+                log.setStatus(TransactionStatus.COMPLETED);
+                changed = true;
+            }
+            if (!isPresent(log.getProviderReference()) && isPresent(sessionId)) {
+                log.setProviderReference(sessionId);
+                changed = true;
+            }
+            if (changed) {
+                transactionLogRepository.save(log);
+            }
+        });
+    }
+
+    private void sendRubiesP2pCreditNotification(
+            Long userId,
+            BigDecimal amount,
+            Optional<TransactionLog> creditLog,
+            String originatorName
+    ) {
+        try {
+            String senderName = resolveRubiesP2pSenderName(creditLog, originatorName);
+            String message = String.format("\u20A6%,.2f has been credited to your wallet from %s.",
+                    amount, senderName);
+            notificationService.sendNotification(
+                    userId.toString(),
+                    message,
+                    NotificationType.WALLET_DEPOSIT,
+                    null,
+                    null,
+                    "VIEW_WALLET",
+                    "/dashboard"
+            );
+        } catch (Exception e) {
+            logger.error("[RUBIES-WEBHOOK] Failed to send P2P credit notification for userId={}", userId, e);
+        }
+    }
+
+    private String resolveRubiesP2pSenderName(Optional<TransactionLog> creditLog, String originatorName) {
+        if (creditLog.isPresent() && creditLog.get().getCounterpartyUserId() != null) {
+            return userRepository.findById(creditLog.get().getCounterpartyUserId())
+                    .map(this::resolveDisplayName)
+                    .orElse("a Wisemonie user");
+        }
+        if (isPresent(originatorName)) {
+            return originatorName.trim();
+        }
+        return "a Wisemonie user";
+    }
 
     private String extractProvidusEmail(JsonNode root) {
         // Root-level

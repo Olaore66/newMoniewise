@@ -117,6 +117,16 @@ public interface TransactionLogRepository extends JpaRepository<TransactionLog, 
 
     Optional<TransactionLog> findByProviderReference(String providerReference);
 
+    Optional<TransactionLog> findFirstByUserIdAndTransactionTypeAndReferenceInOrderByCreatedAtDesc(
+            Long userId,
+            TransactionType transactionType,
+            Set<String> references);
+
+    Optional<TransactionLog> findFirstByUserIdAndTransactionTypeAndProviderReferenceOrderByCreatedAtDesc(
+            Long userId,
+            TransactionType transactionType,
+            String providerReference);
+
     /** Used by AiInsightService to detect the user's habitual transfer day/time pattern. */
     @Query("""
         SELECT t FROM TransactionLog t
