@@ -510,12 +510,30 @@ public class BudgetService {
             throw new IllegalArgumentException("Minimum budget amount is ₦5,000.00");
         }
 
-        // Maximum duration
+        // Duration — read max from system_config so it can be changed without a deploy.
+        // Default 730 days (2 years) supports goal budgets and annual savings plans.
         long durationDays = ChronoUnit.DAYS.between(request.getStartDate(), request.getEndDate());
         if (durationDays <= 0) durationDays = 1;
 
-        if (durationDays > 90) {
-            throw new IllegalArgumentException("Budget duration must be between 1 and 90 days");
+        int maxDurationDays = systemConfig.getInt(SystemConfigService.BUDGET_MAX_DURATION_DAYS, 730);
+        if (durationDays > maxDurationDays) {
+            throw new IllegalArgumentException(
+                    "Budget duration cannot exceed " + maxDurationDays + " days");
+        }
+
+        // Envelope count — server-side guard matching frontend soft/hard limits
+        int minEnvelopes = systemConfig.getInt(SystemConfigService.BUDGET_MIN_ENVELOPES, 1);
+        int maxEnvelopes = systemConfig.getInt(SystemConfigService.BUDGET_MAX_ENVELOPES, 15);
+        int envelopeCount = request.getEnvelopes() == null ? 0 : request.getEnvelopes().size();
+
+        if (envelopeCount < minEnvelopes) {
+            throw new IllegalArgumentException(
+                    "A budget needs at least " + minEnvelopes + " envelopes to be meaningful.");
+        }
+        if (envelopeCount > maxEnvelopes) {
+            throw new IllegalArgumentException(
+                    "Maximum " + maxEnvelopes + " envelopes per budget. " +
+                    "More than that makes budgets harder to stick to.");
         }
 
         // === CALCULATE FEE (read from system_config — never hardcoded) ===

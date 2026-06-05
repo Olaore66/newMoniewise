@@ -453,21 +453,34 @@ public class NotificationService {
             messageBuilder.putData("title", title);
             messageBuilder.putData("body", body);
 
-            firebaseMessaging.send(messageBuilder.build());
-//            logger.info("Sent FCM to user {}: {}", user.getId(), title);
+            String messageId = firebaseMessaging.send(messageBuilder.build());
+            logger.info("[FCM] Delivered to user {} type={} messageId={}", userId, type, messageId);
 
         } catch (FirebaseMessagingException e) {
-            String errorCode = e.getMessagingErrorCode().toString();
-            if (errorCode.equals("UNREGISTERED") || errorCode.equals("NOT_FOUND") || errorCode.equals("INVALID_ARGUMENT")) {
-                logger.warn("ðŸš¨ Token for user {} is dead. Removing it from active sessions.", userId);
+            String errorCode = e.getMessagingErrorCode() != null
+                    ? e.getMessagingErrorCode().toString() : "UNKNOWN";
+
+            if (errorCode.equals("UNREGISTERED") || errorCode.equals("NOT_FOUND")
+                    || errorCode.equals("INVALID_ARGUMENT")) {
+                // Dead token — clean it up but don't retry (retrying with a dead
+                // token will never succeed).
+                logger.warn("[FCM] Dead token for user {} (code={}). Removing from sessions.", userId, errorCode);
                 try {
                     authSessionService.clearDeadFcmToken(fcmToken);
                 } catch (Exception ex) {
-                    logger.error("Failed to clear dead token for user {}", userId, ex);
+                    logger.error("[FCM] Failed to clear dead token for user {}", userId, ex);
                 }
+                // Do NOT rethrow — dead token errors are permanent, not retriable.
             } else {
-                logger.error("Failed to send FCM message", e);
+                // Transient error (QUOTA_EXCEEDED, INTERNAL, UNAVAILABLE, etc.)
+                // Rethrow so the outbox worker marks the event as PENDING and retries.
+                logger.error("[FCM] Transient error for user {} (code={}). Will retry via outbox.", userId, errorCode, e);
+                throw new RuntimeException("FCM transient failure: " + errorCode, e);
             }
+        } catch (Exception e) {
+            // Any other unexpected error — rethrow for outbox retry
+            logger.error("[FCM] Unexpected error sending push to user {}", userId, e);
+            throw new RuntimeException("FCM unexpected failure", e);
         }
     }
 

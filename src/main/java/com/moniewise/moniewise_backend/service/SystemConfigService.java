@@ -76,6 +76,19 @@ public class SystemConfigService {
     /** Budget creation fee per 30-day interval (NGN). Set to 0 to disable. */
     public static final String BUDGET_CREATION_FEE   = "budget.creation.fee";
 
+    /**
+     * Maximum budget duration in days.
+     * Default: 730 (2 years) — covers goal budgets, project budgets, annual plans.
+     * Can be lowered via admin to e.g. 90 for more conservative policies.
+     */
+    public static final String BUDGET_MAX_DURATION_DAYS = "budget.max.duration.days";
+
+    /** Minimum number of envelopes per budget (server-side guard). Default: 3. */
+    public static final String BUDGET_MIN_ENVELOPES = "budget.min.envelopes";
+
+    /** Maximum number of envelopes per budget (server-side guard). Default: 15. */
+    public static final String BUDGET_MAX_ENVELOPES = "budget.max.envelopes";
+
     /** Monthly premium subscription price (NGN) */
     public static final String PREMIUM_MONTHLY_PRICE = "premium.monthly.price";
     /** Comma-separated PremiumFeature values included in premium plan */
