@@ -181,6 +181,8 @@ public class UserController {
         return ResponseEntity.ok(result);
     }
 
+    // Image upload/delete endpoints are in UserController lines 53–78 (Firebase Storage)
+
     private String extractSessionId(String authHeader) {
         if (authHeader == null || !authHeader.startsWith("Bearer ")) {
             throw new IllegalArgumentException("Invalid or missing token");

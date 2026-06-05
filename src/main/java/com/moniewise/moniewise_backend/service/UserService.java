@@ -673,21 +673,30 @@ public class UserService implements UserDetailsService {
             throw new IllegalArgumentException("BVN cannot be modified after initial setup. Contact support.");
         }
 
-        // For later profile edits, Gender update".
-        Gender incomingGender = request.getGender() != null ? request.getGender() : null;
-        if (user.getGender() == null) {
-            if (incomingGender == null) {
-                throw new IllegalArgumentException("Gender is required to complete your profile.");
-            }
-            user.setGender(incomingGender);
+        // Gender — required on first setup, updatable on edits.
+        Gender incomingGender = request.getGender();
+        if (incomingGender != null) {
+            user.setGender(incomingGender); // Always allow updating gender
+        } else if (user.getGender() == null) {
+            throw new IllegalArgumentException("Gender is required to complete your profile.");
         }
 
         Map<String, Object> profileData = user.getProfileData();
         if (profileData == null) profileData = new HashMap<>();
 
-        profileData.put("name", request.getFirstName() + " " + request.getLastName());
-        profileData.put("firstName", request.getFirstName());
-        profileData.put("lastName", request.getLastName());
+        // ── Name handling — separate KYC (regulatory) from profile (display) ──
+        // On FIRST profile setup (wallet doesn't exist yet), the user-provided
+        // firstName/lastName are the BVN-verified values from the form.
+        // On subsequent EDIT calls, we do NOT overwrite the name — it stays as
+        // whatever was set during initial setup (which matches the KYC table).
+        // Regulators read from kyc_profiles; profile_data.name is only for display.
+        boolean isFirstSetup = !walletRepository.existsByUser(user);
+        if (isFirstSetup) {
+            profileData.put("name", request.getFirstName() + " " + request.getLastName());
+            profileData.put("firstName", request.getFirstName());
+            profileData.put("lastName", request.getLastName());
+        }
+        // Always update user-preference fields (these are never KYC data)
         profileData.put("monthlyIncome", request.getMonthlyIncome());
         profileData.put("mainExpense", request.getMainExpense());
         profileData.put("savingsGoal", request.getSavingsGoal());
@@ -984,54 +993,60 @@ public class UserService implements UserDetailsService {
         passwordResetTokenRepository.save(resetToken);
     }
 
-    // 1. UPLOAD IMAGE TO FIREBASE
+    // 1. UPLOAD IMAGE TO FIREBASE — permanent public URL, no expiry
     public String uploadProfileImage(Long userId, MultipartFile file) {
         validateProfileImage(file);
         try {
             User user = userRepository.findById(userId)
                     .orElseThrow(() -> new RuntimeException("User not found"));
 
-            // Get the filename extension (e.g., .jpg, .png)
             String originalFilename = file.getOriginalFilename();
-            String extension = "jpg"; // Default
+            String extension = "jpg";
             if (originalFilename != null && originalFilename.contains(".")) {
-                extension = originalFilename.substring(originalFilename.lastIndexOf(".") + 1);
+                extension = originalFilename.substring(originalFilename.lastIndexOf(".") + 1).toLowerCase();
             }
 
-            // Create a unique file path: profile_images/USER_ID_TIMESTAMP.jpg
             String fileName = String.format("profile_images/%d_%d.%s",
                     userId, System.currentTimeMillis(), extension);
 
-            // Get Firebase Storage Bucket
             Bucket bucket = StorageClient.getInstance().bucket();
-
-            // Upload file
             Blob blob = bucket.create(fileName, file.getInputStream(), file.getContentType());
 
-            // OPTION A: Generate a Signed URL (Valid for X days/years) - More Secure
-            // URL signedUrl = blob.signUrl(365, TimeUnit.DAYS);
-            // String publicUrl = signedUrl.toString();
+            // Make the object publicly readable — no signed URL needed, no expiry.
+            // Requires Firebase Storage rules to allow public read on profile_images/**
+            // OR we set the object-level ACL here.
+            try {
+                blob.createAcl(com.google.cloud.storage.Acl.of(
+                        com.google.cloud.storage.Acl.User.ofAllUsers(),
+                        com.google.cloud.storage.Acl.Role.READER));
+            } catch (Exception aclEx) {
+                logger.warn("[Image] ACL set failed (may already be public via bucket policy): {}", aclEx.getMessage());
+            }
 
-            // OPTION B: Make Public (Easiest for Profile Pics)
-            // Note: This requires the bucket or object to be publicly readable via IAM or Rules.
-            // For simple apps, we often construct the public token manually or use signed URLs.
-            // Let's use the Signed URL approach as it works out of the box with the Admin SDK.
-            URL signedUrl = blob.signUrl(12, TimeUnit.HOURS); // Short-lived signed URL
-            String publicUrl = signedUrl.toString();
+            // Permanent GCS public URL — never expires
+            String bucketName = bucket.getName();
+            String encodedPath = java.net.URLEncoder.encode(fileName, "UTF-8").replace("+", "%20");
+            String publicUrl = String.format(
+                    "https://firebasestorage.googleapis.com/v0/b/%s/o/%s?alt=media",
+                    bucketName, encodedPath);
 
-            // Save the URL to Database
+            // Persist URL in both the dedicated column AND in profileData['imageUrl']
+            // so the Flutter ProfileData model (which reads profile_data['imageUrl']) picks it up.
             user.setProfileImageUrl(publicUrl);
             user.setProfileImageBlobName(fileName);
+            user.setProfileImage(null); // clear legacy byte blob if present
 
-            // Remove legacy byte data if it exists to free up space
-            user.setProfileImage(null);
+            Map<String, Object> pd = user.getProfileData();
+            if (pd == null) pd = new HashMap<>();
+            pd.put("imageUrl", publicUrl);
+            user.setProfileData(pd);
 
             userRepository.save(user);
-
+            logger.info("[Image] Uploaded profile image for user {} → {}", userId, publicUrl);
             return publicUrl;
 
         } catch (IOException e) {
-            throw new RuntimeException("Failed to upload image to Firebase", e);
+            throw new RuntimeException("Failed to upload image to Firebase Storage: " + e.getMessage(), e);
         }
     }
 
