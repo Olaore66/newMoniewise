@@ -594,6 +594,20 @@ public class WalletService {
     }
 
     @Transactional
+    /** Convenience overload — notification always sent. */
+    public void processSuccessfulFunding(
+            String email, BigDecimal netAmount, BigDecimal grossAmount,
+            BigDecimal fee, String ref, String desc, LocalDateTime time) {
+        processSuccessfulFunding(email, netAmount, grossAmount, fee, ref, desc, time, false);
+    }
+
+    /**
+     * Credits the wallet and (optionally) fires a push notification.
+     *
+     * @param suppressNotification pass {@code true} for internal P2P credits where
+     *                             EnvelopeService already sent the recipient a notification,
+     *                             preventing the duplicate "Wallet funded" alert.
+     */
     public void processSuccessfulFunding(
             String email,
             BigDecimal netAmount,
@@ -601,7 +615,8 @@ public class WalletService {
             BigDecimal fee,
             String ref,
             String desc,
-            LocalDateTime time
+            LocalDateTime time,
+            boolean suppressNotification
     ) {
         if (transactionLogRepository.existsByReference(ref)) {
             logger.info("Transaction {} already processed.", ref);
@@ -643,26 +658,29 @@ public class WalletService {
             transactionLogRepository.save(feeLog);
         }
 
-        CompletableFuture.runAsync(() -> {
-            try {
-                String alertMessage = String.format(
-                        "Wallet funded with ₦%.2f. (₦%.2f deposit fee applied)",
-                        netAmount,
-                        fee
-                );
-                notificationService.sendNotification(
-                        user.getId().toString(),
-                        alertMessage,
-                        NotificationType.WALLET_FUNDED,
-                        null,
-                        null,
-                        "VIEW_WALLET",
-                        "/wallet"
-                );
-            } catch (Exception e) {
-                logger.error("Failed to send credit alert", e);
-            }
-        });
+        if (!suppressNotification) {
+            final BigDecimal finalFee = fee;
+            CompletableFuture.runAsync(() -> {
+                try {
+                    String alertMessage = String.format(
+                            "Wallet funded with ₦%.2f. (₦%.2f deposit fee applied)",
+                            netAmount,
+                            finalFee
+                    );
+                    notificationService.sendNotification(
+                            user.getId().toString(),
+                            alertMessage,
+                            NotificationType.WALLET_FUNDED,
+                            null,
+                            null,
+                            "VIEW_WALLET",
+                            "/wallet"
+                    );
+                } catch (Exception e) {
+                    logger.error("Failed to send credit alert", e);
+                }
+            });
+        }
     }
 
     private boolean hasStoredSettlementAccount(Wallet wallet) {
@@ -1697,6 +1715,21 @@ public class WalletService {
             String description = "Inbound transfer: " + narration;
             logger.info("[RUBIES-WEBHOOK] Processing deposit: acct={} amount={} ref={}", creditAccountNumber, amount, reference);
 
+            // Detect P2P transfers: EnvelopeService saves the credit log as
+            // "P2P-RB-CR-{providerReference}" before the webhook arrives.
+            // If that log exists it means:
+            //   1. EnvelopeService already sent the recipient a WALLET_DEPOSIT notification.
+            //   2. The balance was NOT credited by EnvelopeService (Rubies handles it) —
+            //      so processSuccessfulFunding MUST still run to update the balance.
+            //   3. But the notification must be suppressed to avoid a duplicate.
+            boolean isInternalP2p = transactionLogRepository
+                    .existsByReference("P2P-RB-CR-" + reference);
+
+            if (isInternalP2p) {
+                logger.info("[RUBIES-WEBHOOK] P2P credit ref={} — balance update only, " +
+                        "suppressing duplicate notification (EnvelopeService already sent one)", reference);
+            }
+
             // Credit the internal wallet (idempotent — skips if reference already processed)
             processSuccessfulFunding(
                     wallet.getUser().getEmail(),
@@ -1705,7 +1738,8 @@ public class WalletService {
                     BigDecimal.ZERO,
                     reference,
                     description,
-                    LocalDateTime.now()
+                    LocalDateTime.now(),
+                    isInternalP2p   // suppress notification for P2P credits
             );
 
         } catch (RuntimeException e) {

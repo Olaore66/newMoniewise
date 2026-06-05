@@ -405,7 +405,7 @@ public class EnvelopeService {
                         creditAccountName,
                         amount,
                         p2pReference,
-                        "Moniewise P2P: " + senderName + " to " + recipientName
+                        "Wisemonie P2P: " + senderName + " to " + recipientName
                 );
             } catch (RuntimeException ex) {
                 // Sanitise Rubies float-related errors — don't expose internal float state to users.
@@ -1179,7 +1179,14 @@ public class EnvelopeService {
                     .divide(BigDecimal.valueOf(100), 2, RoundingMode.HALF_UP);
         }
 
-        validateEnvelopeConditions(request, amount);
+        // Compute effective duration so the condition validator can reject
+        // plans that make no sense for the budget length (e.g. weekly on a 1-day budget).
+        long budgetDurationDays = (budget.getStartDate() != null && budget.getEndDate() != null)
+                ? java.time.temporal.ChronoUnit.DAYS.between(budget.getStartDate(), budget.getEndDate())
+                : (budget.getDurationDays() != null ? budget.getDurationDays() : 30L);
+        if (budgetDurationDays <= 0) budgetDurationDays = 1;
+
+        validateEnvelopeConditions(request, amount, (int) budgetDurationDays);
 
         Map<String, Object> conditions = request.getConditions();
         String type = "standard";
@@ -1264,7 +1271,12 @@ public class EnvelopeService {
     public EnvelopeResponse updateEnvelopeConditions(Long envelopeId, EnvelopeRequest request, String email) {
         Envelope envelope = envelopeRepository.findByIdAndBudget_UserEmail(envelopeId, email)
                 .orElseThrow(() -> new EntityNotFoundException("Envelope not found or not accessible"));
-        validateEnvelopeConditions(request, envelope.getAmount());
+        Budget b = envelope.getBudget();
+        long updDuration = (b.getStartDate() != null && b.getEndDate() != null)
+                ? java.time.temporal.ChronoUnit.DAYS.between(b.getStartDate(), b.getEndDate())
+                : (b.getDurationDays() != null ? b.getDurationDays() : 30L);
+        if (updDuration <= 0) updDuration = 1;
+        validateEnvelopeConditions(request, envelope.getAmount(), (int) updDuration);
         envelope.setConditions(request.getConditions());
         envelope.setRemainingAmount(getPeriodLimit(request.getConditions()));
         envelopeRepository.save(envelope);
@@ -1520,12 +1532,55 @@ public class EnvelopeService {
                 .orElse(null);
     }
 
-    private void validateEnvelopeConditions(EnvelopeRequest request, BigDecimal allocatedAmount) {
+    /**
+     * Validates envelope conditions both structurally (required fields) and
+     * contextually (does the release plan make sense for the budget duration?).
+     *
+     * <p>Duration tiers — mirrors the Flutter add/edit envelope dialog logic:
+     * <ul>
+     *   <li>1 day  → only {@code emergency} is meaningful</li>
+     *   <li>2–6 days  → {@code daily}, {@code dynamic}, {@code emergency}</li>
+     *   <li>7 days  → {@code daily}, {@code emergency}</li>
+     *   <li>8–13 days → {@code daily}, {@code dynamic}, {@code emergency}</li>
+     *   <li>14+ days  → all types</li>
+     * </ul>
+     */
+    private void validateEnvelopeConditions(EnvelopeRequest request,
+                                             BigDecimal allocatedAmount,
+                                             int budgetDurationDays) {
         Map<String, Object> conditions = request.getConditions();
         if (conditions == null || !conditions.containsKey("type")) {
             throw new IllegalArgumentException("Envelope conditions must include 'type'");
         }
         String type = conditions.get("type").toString().toLowerCase();
+
+        // ── Duration-based plan eligibility (same rules as the Flutter UI) ───────
+        boolean isOneDayBudget    = budgetDurationDays <= 1;
+        boolean isShortBudget     = budgetDurationDays >= 2 && budgetDurationDays <= 6;
+        boolean isOneWeekBudget   = budgetDurationDays == 7;
+        boolean isMultiWeekBudget = budgetDurationDays >= 14;
+
+        if (isOneDayBudget && !"emergency".equals(type)) {
+            throw new IllegalArgumentException(
+                "A 1-day budget only supports the 'emergency' release plan.");
+        }
+        if (isShortBudget && "weekly".equals(type)) {
+            throw new IllegalArgumentException(
+                "A weekly release plan requires at least 8 days. " +
+                "Your budget is only " + budgetDurationDays + " day(s).");
+        }
+        if (isOneWeekBudget && ("weekly".equals(type) || "dynamic".equals(type))) {
+            throw new IllegalArgumentException(
+                "A " + type + " release plan is not useful for a 7-day budget. " +
+                "Use daily or emergency instead.");
+        }
+        if (!isMultiWeekBudget && budgetDurationDays > 7 && "weekly".equals(type)) {
+            throw new IllegalArgumentException(
+                "A weekly release plan requires at least 14 days. " +
+                "Your budget is only " + budgetDurationDays + " day(s).");
+        }
+
+        // ── Structural field validation ───────────────────────────────────────────
         switch (type) {
             case "daily":
                 if (!conditions.containsKey("limit") || !(conditions.get("limit") instanceof Number)) {
@@ -1582,9 +1637,6 @@ public class EnvelopeService {
                 }
                 break;
             case "emergency":
-//                if (!conditions.containsKey("limit") || !(conditions.get("limit") instanceof Number)) {
-//                    throw new IllegalArgumentException("Emergency envelope must include a numeric 'limit'");
-//                }
                 break;
             default:
                 throw new IllegalArgumentException("Unsupported envelope type: " + type);

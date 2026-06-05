@@ -1010,25 +1010,28 @@ public class UserService implements UserDetailsService {
                     userId, System.currentTimeMillis(), extension);
 
             Bucket bucket = StorageClient.getInstance().bucket();
-            Blob blob = bucket.create(fileName, file.getInputStream(), file.getContentType());
 
-            // Make the object publicly readable — no signed URL needed, no expiry.
-            // Requires Firebase Storage rules to allow public read on profile_images/**
-            // OR we set the object-level ACL here.
-            try {
-                blob.createAcl(com.google.cloud.storage.Acl.of(
-                        com.google.cloud.storage.Acl.User.ofAllUsers(),
-                        com.google.cloud.storage.Acl.Role.READER));
-            } catch (Exception aclEx) {
-                logger.warn("[Image] ACL set failed (may already be public via bucket policy): {}", aclEx.getMessage());
-            }
+            // Embed a Firebase download token in the object's custom metadata.
+            // Firebase Storage honours ?token=<uuid> as a permanent authenticated
+            // download key — no ACL change, no bucket policy change, works even
+            // with Uniform Bucket-Level Access enabled.
+            String downloadToken = java.util.UUID.randomUUID().toString();
+            com.google.cloud.storage.BlobInfo blobInfo = com.google.cloud.storage.BlobInfo
+                    .newBuilder(bucket.getName(), fileName)
+                    .setContentType(file.getContentType())
+                    .setMetadata(java.util.Map.of("firebaseStorageDownloadTokens", downloadToken))
+                    .build();
 
-            // Permanent GCS public URL — never expires
+            // Upload via the underlying GCS client so we can set metadata at creation time
+            Blob blob = StorageClient.getInstance().bucket().getStorage()
+                    .create(blobInfo, file.getBytes());
+
+            // Firebase Storage public download URL — permanent, never expires
             String bucketName = bucket.getName();
             String encodedPath = java.net.URLEncoder.encode(fileName, "UTF-8").replace("+", "%20");
             String publicUrl = String.format(
-                    "https://firebasestorage.googleapis.com/v0/b/%s/o/%s?alt=media",
-                    bucketName, encodedPath);
+                    "https://firebasestorage.googleapis.com/v0/b/%s/o/%s?alt=media&token=%s",
+                    bucketName, encodedPath, downloadToken);
 
             // Persist URL in both the dedicated column AND in profileData['imageUrl']
             // so the Flutter ProfileData model (which reads profile_data['imageUrl']) picks it up.
