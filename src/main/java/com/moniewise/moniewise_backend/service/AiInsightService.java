@@ -344,7 +344,8 @@ public class AiInsightService {
                         budgetLabel,
                         allocated.doubleValue(),
                         remaining.doubleValue(),
-                        pctSpent));
+                        pctSpent,
+                        buildDisbursementText(envelope, nowWat)));
             }
         }
         context.allEnvelopes = allEnvelopes;
@@ -1235,6 +1236,22 @@ public class AiInsightService {
         return score;
     }
 
+    /** Returns a human-readable disbursement text for an envelope, e.g. "in 2d 4h (Mon, 8 Jun - 8:00 am)" or "available NOW". */
+    private String buildDisbursementText(Envelope envelope, LocalDateTime now) {
+        LocalDateTime next = envelope.getNextDisbursementAt();
+        if (next == null) return null;
+        if (!next.isAfter(now)) return "available NOW";
+        Duration d = Duration.between(now, next);
+        long days    = d.toDays();
+        long hours   = d.toHours() % 24;
+        long minutes = d.toMinutes() % 60;
+        StringBuilder sb = new StringBuilder("in ");
+        if (days > 0)    sb.append(days).append("d ");
+        if (hours > 0)   sb.append(hours).append("h ");
+        if (minutes > 0 || (days == 0 && hours == 0)) sb.append(minutes).append("m");
+        return sb.toString().trim() + " (" + formatNextAvailableAt(next) + ")";
+    }
+
     private String formatNextAvailableAt(LocalDateTime dateTime) {
         if (dateTime == null) {
             return "soon";
@@ -1419,27 +1436,34 @@ public class AiInsightService {
         private String  transferPatternDesc  = "";  // e.g. "Friday evenings"
     }
 
-    /** Lightweight envelope snapshot passed to Gemini so it can reference exact ₦ figures. */
+    /** Lightweight envelope snapshot passed to Gemini so it can reference exact ₦ figures and disbursement timing. */
     private static class EnvelopeSummaryDto {
         final String name;
         final String budgetName;
         final double allocated;
         final double remaining;
         final int    pctSpent;
+        /** Human-readable next disbursement text, e.g. "in 2d 4h (Mon, 8 Jun - 8:00 am)" or "available NOW". Null if none. */
+        final String nextDisbursementText;
 
         EnvelopeSummaryDto(String name, String budgetName,
-                           double allocated, double remaining, int pctSpent) {
-            this.name       = name;
-            this.budgetName = budgetName;
-            this.allocated  = allocated;
-            this.remaining  = remaining;
-            this.pctSpent   = pctSpent;
+                           double allocated, double remaining, int pctSpent,
+                           String nextDisbursementText) {
+            this.name                  = name;
+            this.budgetName            = budgetName;
+            this.allocated             = allocated;
+            this.remaining             = remaining;
+            this.pctSpent              = pctSpent;
+            this.nextDisbursementText  = nextDisbursementText;
         }
 
         @Override
         public String toString() {
-            return String.format("  • %s [%s] — ₦%.0f allocated, ₦%.0f remaining (%d%% spent)",
-                    name, budgetName, allocated, remaining, pctSpent);
+            String disbText = nextDisbursementText != null && !nextDisbursementText.isBlank()
+                    ? " | next disbursement: " + nextDisbursementText
+                    : "";
+            return String.format("  • %s [%s] — ₦%.0f allocated, ₦%.0f remaining (%d%% spent)%s",
+                    name, budgetName, allocated, remaining, pctSpent, disbText);
         }
     }
 

@@ -51,6 +51,27 @@ public class NotificationOutboxWorker {
         try {
             logger.info("Processing outbox event {} type {}", event.getId(), event.getEventType());
 
+            // ── STALENESS GUARD ──────────────────────────────────────────────────────
+            // If the event carries a TTL and that window has already passed, skip
+            // delivery entirely. Delivering a "funds unlocking soon" alert 3 hours
+            // late is worse than silence — it confuses users and undermines trust.
+            // Financial events (DISBURSEMENT_SUCCESS etc.) have a 72-hour TTL so
+            // they are never suppressed by normal offline periods.
+            Long ttlSeconds = event.getTtlSeconds();
+            if (ttlSeconds != null && ttlSeconds > 0) {
+                LocalDateTime expiresAt = event.getCreatedAt().plusSeconds(ttlSeconds);
+                if (LocalDateTime.now().isAfter(expiresAt)) {
+                    event.setStatus("STALE");
+                    event.setProcessedAt(LocalDateTime.now());
+                    event.setLastError("Skipped: event expired at " + expiresAt
+                            + " (ttl=" + ttlSeconds + "s, type=" + event.getEventType() + ")");
+                    logger.info("[OUTBOX] Skipping stale event {} type={} (expired {} ago)",
+                            event.getId(), event.getEventType(), expiresAt);
+                    return;
+                }
+            }
+            // ────────────────────────────────────────────────────────────────────────
+
             event.setStatus("PROCESSING");
             event.setLockedAt(LocalDateTime.now());
 

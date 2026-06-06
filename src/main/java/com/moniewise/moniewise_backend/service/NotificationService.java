@@ -1,4 +1,4 @@
-package com.moniewise.moniewise_backend.service;
+﻿package com.moniewise.moniewise_backend.service;
 
 import com.google.firebase.messaging.*;
 import com.moniewise.moniewise_backend.config.GenericNotificationEvent;
@@ -140,7 +140,9 @@ public class NotificationService {
 //            if (fcmToken != null && !fcmToken.isEmpty() && !"stub".equals(activeProfile)) {
 //                if (firebaseMessaging != null) {
 //                    String dynamicTitle = getNotificationTitle(event.getType());
-//                    sendFCMMessage(fcmToken, dynamicTitle, message, null, event.getActionUrl(), event.getType(), userId);
+//                    sendFCMMessage(fcmToken, dynamicTitle, message, null,
+                                    event.getActionUrl(), event.getType(), userId,
+                                    event.getContextId2()); // contextId2 = envelopeId
 //                } else {
 //                    logger.warn("âš ï¸ Skipping FCM: Firebase is not initialized.");
 //                }
@@ -185,7 +187,9 @@ public class NotificationService {
                     if (firebaseMessaging != null) {
                         String dynamicTitle = getNotificationTitle(event.getType());
                         for (String fcmToken : fcmTokens) {
-                            sendFCMMessage(fcmToken, dynamicTitle, message, null, event.getActionUrl(), event.getType(), userId);
+                            sendFCMMessage(fcmToken, dynamicTitle, message, null,
+                                    event.getActionUrl(), event.getType(), userId,
+                                    event.getContextId2()); // contextId2 = envelopeId
                         }
                     } else {
                         logger.warn("âš ï¸ FCM is not initialized. Cannot send push.");
@@ -385,7 +389,7 @@ public class NotificationService {
                     if (firebaseMessaging != null) {
                         String dynamicTitle = getNotificationTitle(type);
                         for (String fcmToken : fcmTokens) {
-                            sendFCMMessage(fcmToken, dynamicTitle, message, actionType, redirectUrl, type, uId);
+                            sendFCMMessage(fcmToken, dynamicTitle, message, actionType, redirectUrl, type, uId, envelopeId);
                         }
                     } else {
                         logger.warn("âš ï¸ Skipping FCM: Firebase is not initialized.");
@@ -403,12 +407,54 @@ public class NotificationService {
     // =========================================================================
     // 3. CORE FCM LOGIC
     // =========================================================================
-    private void sendFCMMessage(String fcmToken, String title, String body, String actionType, String redirectUrl, NotificationType type, Long userId) {
+
+    /**
+     * Per-type FCM Time-To-Live (milliseconds).
+     *
+     * FCM honours TTL: if the device is offline when we push, FCM holds the message
+     * for at most {@code ttlMs}. After that it drops it silently — exactly what we want
+     * for time-sensitive nudges (PRE_DISBURSEMENT) but NOT for financial events.
+     *
+     * PRE_DISBURSEMENT / DISBURSEMENT_REMINDER  -> 45 min  (stale nudge is useless)
+     * DISBURSEMENT_SUCCESS / credits / transfers -> 72 h   (must arrive eventually)
+     * BUDGET_END_SOON / warnings                -> 24 h
+     * LOW_BALANCE / ENVELOPE_LOW_BALANCE        ->  6 h
+     * Default                                   -> 24 h
+     */
+    private long computeFcmTtlMs(NotificationType type) {
+        if (type == null) return 86_400_000L;
+        return switch (type) {
+            case PRE_DISBURSEMENT, DISBURSEMENT_REMINDER                  -> 2_700_000L;   // 45 min
+            case DISBURSEMENT_SUCCESS, DISBURSEMENT_READY, DISBURSEMENT,
+                 WALLET_FUNDED, WALLET_DEPOSIT, EXTERNAL_TRANSFER,
+                 ENVELOPE_TRANSFER, REFUND_ISSUED, DISBURSEMENT_REFUNDED,
+                 BUDGET_UNALLOCATED_REFUNDED                              -> 259_200_000L; // 72 h
+            case LOW_BALANCE_WARNING, ENVELOPE_LOW_BALANCE               -> 21_600_000L;  //  6 h
+            default                                                       -> 86_400_000L;  // 24 h
+        };
+    }
+
+    /**
+     * Sends one FCM push notification.
+     *
+     * @param envelopeId used to build a per-envelope collapse key so that
+     *                   multiple disbursement notifications are NOT silently
+     *                   merged into one on Android.
+     */
+    private void sendFCMMessage(String fcmToken, String title, String body, String actionType,
+                                String redirectUrl, NotificationType type, Long userId, Long envelopeId) {
         try {
-            String collapseKey = getGroupKey(type);
+            // ── Unique collapse key per envelope ─────────────────────────────────────
+            // The old code used a single "DISBURSEMENTS" key for every disbursement
+            // notification, which caused Android to keep only the *last* one and silently
+            // discard all earlier ones.  A per-envelope key ensures every notification
+            // for a different envelope is shown independently.
+            String collapseKey = getGroupKey(type, userId, envelopeId);
+
+            // ── Per-type FCM TTL ──────────────────────────────────────────────────────
+            long ttlMs = computeFcmTtlMs(type);
 
             // 1. Define the Visible Notification (For System Tray)
-            // âœ… THIS IS THE MISSING PIECE
             com.google.firebase.messaging.Notification notificationPayload =
                     com.google.firebase.messaging.Notification.builder()
                             .setTitle(title)
@@ -416,7 +462,7 @@ public class NotificationService {
                             .build();
 
             AndroidConfig androidConfig = AndroidConfig.builder()
-                    .setTtl(86400 * 1000) // 24 hours
+                    .setTtl(ttlMs)
                     .setPriority(AndroidConfig.Priority.HIGH)
                     .setNotification(AndroidNotification.builder()
                             .setChannelId("wisemonie_alerts_v2") // Must match Flutter Channel
@@ -439,7 +485,7 @@ public class NotificationService {
                     .build();
 
             Message.Builder messageBuilder = Message.builder()
-                    .setToken(fcmToken) // ðŸ‘ˆ Use the string directly
+                    .setToken(fcmToken)
                     .setNotification(notificationPayload)
                     .setAndroidConfig(androidConfig)
                     .setApnsConfig(apnsConfig);
@@ -454,7 +500,8 @@ public class NotificationService {
             messageBuilder.putData("body", body);
 
             String messageId = firebaseMessaging.send(messageBuilder.build());
-            logger.info("[FCM] Delivered to user {} type={} messageId={}", userId, type, messageId);
+            logger.info("[FCM] Delivered to user {} type={} envelope={} ttlMs={} messageId={}",
+                    userId, type, envelopeId, ttlMs, messageId);
 
         } catch (FirebaseMessagingException e) {
             String errorCode = e.getMessagingErrorCode() != null
@@ -462,7 +509,7 @@ public class NotificationService {
 
             if (errorCode.equals("UNREGISTERED") || errorCode.equals("NOT_FOUND")
                     || errorCode.equals("INVALID_ARGUMENT")) {
-                // Dead token — clean it up but don't retry (retrying with a dead
+                // Dead token — clean it up but don’t retry (retrying with a dead
                 // token will never succeed).
                 logger.warn("[FCM] Dead token for user {} (code={}). Removing from sessions.", userId, errorCode);
                 try {
@@ -516,10 +563,24 @@ public class NotificationService {
             default -> "Wisemonie Notification";
         };
     }
-    private String getGroupKey(NotificationType type) {
+    /**
+     * Builds an Android/APNs collapse key for a notification.
+     *
+     * IMPORTANT: disbursement types get a PER-ENVELOPE unique key.
+     * Using a shared "DISBURSEMENTS" key caused Android to keep only the
+     * last notification and silently discard all earlier ones, so users
+     * with multiple envelopes would miss every disbursement except the last.
+     *
+     * Transaction types still share a collapse key so that a rapid burst of
+     * wallet-top-up events is consolidated — that's intentional and user-friendly.
+     */
+    private String getGroupKey(NotificationType type, Long userId, Long envelopeId) {
         if (type == null) return "GENERAL";
         return switch (type) {
-            case DISBURSEMENT, DISBURSEMENT_SUCCESS, DISBURSEMENT_READY -> "DISBURSEMENTS";
+            // Per-envelope key: each disbursement is an independent financial event
+            case DISBURSEMENT, DISBURSEMENT_SUCCESS, DISBURSEMENT_READY ->
+                    "DISB_" + (userId != null ? userId : "0")
+                            + "_" + (envelopeId != null ? envelopeId : "0");
             case WALLET_DEPOSIT, WALLET_FUNDED, ENVELOPE_TRANSFER -> "TRANSACTIONS";
             case LOW_BALANCE_WARNING, BUDGET_LIMIT_WARNING -> "WARNINGS";
             default -> "GENERAL";
@@ -743,7 +804,7 @@ public class NotificationService {
                 String title = getNotificationTitle(type);
 
                 for (String token : fcmTokens) {
-                    sendFCMMessage(token, title, message, null, redirectUrl, type, userId);
+                    sendFCMMessage(token, title, message, null, redirectUrl, type, userId, envelopeId);
                 }
             }
         }

@@ -63,5 +63,21 @@ public class OutboxEvent {
     @Column(name = "created_at", nullable = false)
     private LocalDateTime createdAt = LocalDateTime.now();
 
+    /**
+     * How long (seconds) this event remains relevant after it was created.
+     * The outbox worker will skip (mark STALE) any event where
+     * {@code createdAt + ttlSeconds < now}.
+     * <p>
+     * Typical values:
+     * <ul>
+     *   <li>PRE_DISBURSEMENT / DISBURSEMENT_REMINDER → 2,700 s (45 min)</li>
+     *   <li>DISBURSEMENT_SUCCESS / wallet credits     → 259,200 s (72 h)</li>
+     *   <li>BUDGET_END_SOON / warnings                → 86,400 s (24 h)</li>
+     * </ul>
+     * NULL means "no expiry" (always deliver).
+     */
+    @Column(name = "ttl_seconds")
+    private Long ttlSeconds;
+
     // getters and setters
 }

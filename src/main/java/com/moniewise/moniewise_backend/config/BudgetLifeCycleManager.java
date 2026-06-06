@@ -715,20 +715,10 @@ public class BudgetLifeCycleManager {
                 break;
         }
 
-        if (message != null) {
-            envelope.setLastAccessed(now);
-            envelopesToUpdate.add(envelope);
-            notificationService.sendNotification(
-                    userId,
-                    message,
-                    NotificationType.DISBURSEMENT,
-                    envelope.getBudget().getId(),
-                    envelope.getId(),
-                    "VIEW_ENVELOPE",
-                    "/envelopes/" + envelope.getId() // <--- URL
-            );
-            logger.debug("Sent disbursement notification for envelope {}: {}", envelope.getId(), message);
-        }
+        // NOTE: Direct sendNotification() call removed. All disbursement notifications
+        // are now created as outbox events inside disburseEnvelope() and processed
+        // reliably by NotificationOutboxWorker. The `message` variable above is always
+        // null in every active code path — this block was dead code and has been removed.
     }
 
     private void disburseEnvelope(Envelope envelope, LocalDateTime now, List<Envelope> envelopesToUpdate,
@@ -1284,7 +1274,45 @@ public class BudgetLifeCycleManager {
         event.setStatus("PENDING");
         event.setRetryCount(0);
         event.setCreatedAt(LocalDateTime.now());
+        event.setTtlSeconds(computeOutboxTtlSeconds(type));
         return event;
+    }
+
+    /**
+     * Per-type TTL for outbox events (matches the FCM TTL strategy in NotificationService).
+     * The outbox worker will mark an event STALE and skip delivery once
+     * {@code createdAt + ttlSeconds < now}.
+     *
+     * <ul>
+     *   <li>PRE_DISBURSEMENT / DISBURSEMENT_REMINDER → 45 min (highly time-sensitive nudge)</li>
+     *   <li>DISBURSEMENT_SUCCESS / credits / transfers → 72 h  (financial record; must arrive)</li>
+     *   <li>BUDGET_END_SOON / warnings                → 24 h  (informational)</li>
+     *   <li>ENVELOPE_LOW_BALANCE / LOW_BALANCE         → 6 h   (actionable but not critical)</li>
+     *   <li>null (default)                             → 24 h  (safe fallback)</li>
+     * </ul>
+     */
+    private Long computeOutboxTtlSeconds(NotificationType type) {
+        if (type == null) return 86_400L; // 24 h default
+        return switch (type) {
+            // Transient nudges — stale fast
+            case PRE_DISBURSEMENT, DISBURSEMENT_REMINDER -> 2_700L; // 45 min
+
+            // Financial events — never drop; hold for 72 h
+            case DISBURSEMENT_SUCCESS, DISBURSEMENT_READY, DISBURSEMENT,
+                 WALLET_FUNDED, WALLET_DEPOSIT, EXTERNAL_TRANSFER,
+                 ENVELOPE_TRANSFER, REFUND_ISSUED, DISBURSEMENT_REFUNDED,
+                 BUDGET_UNALLOCATED_REFUNDED -> 259_200L; // 72 h
+
+            // Important but not financial — 24 h
+            case EXPIRED_DISBURSEMENT, DISBURSEMENT_FAILED,
+                 BUDGET_END_SOON, BUDGET_ENDING_SOON, BUDGET_COMPLETED,
+                 INSUFFICIENT_BALANCE, LIMIT_REACHED, BUDGET_LIMIT_WARNING -> 86_400L; // 24 h
+
+            // Low-balance alerts — still useful within a few hours
+            case LOW_BALANCE_WARNING, ENVELOPE_LOW_BALANCE -> 21_600L; // 6 h
+
+            default -> 86_400L; // 24 h safe fallback
+        };
     }
 
     private boolean isBudgetPastEndDate(Budget budget, LocalDateTime now) {

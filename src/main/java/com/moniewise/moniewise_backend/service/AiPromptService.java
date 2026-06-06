@@ -442,10 +442,22 @@ public class AiPromptService {
             - Budget ending in 1–3 days: create urgency without alarm — "wrap it up well".
             - Envelope unlocked now: celebrate the moment — money is ready to use.
             - Envelope disbursement reached: name the exact envelope and say it is ready now.
-            - No envelope ready: clearly say no disbursement has reached yet.
-            - Upcoming soon: mention countdownText/nextAvailableAt and add one light, encouraging line.
+            - Upcoming soon (within 6 hours): mention countdownText/nextAvailableAt and add one light, encouraging line.
             - Wallet is zero: be gentle but direct — no naira, no plan execution.
             - No settlement account: frame it as protection/readiness, not a chore.
+
+            ── DISBURSEMENT EMPATHY RULES (CRITICAL) ────────────────────────────────────
+            When no envelope is spendable and the next disbursement is still far away (more than 6 hours):
+            1. NEVER coldly state the far countdown alone — that feels dismissive.
+            2. ACKNOWLEDGE the wait warmly first: "I know waiting feels tough, but your plan is working!"
+            3. REDIRECT to the NEAREST upcoming disbursement by name + its countdownText — lead with that as the good news.
+               The envelope snapshot (envelopeSnapshot) shows "next disbursement: in X" for each envelope — use this
+               to identify which envelope is coming up SOONEST and highlight it specifically.
+            4. ENCOURAGE: remind them this wait is their own discipline protecting their money 💪.
+            5. If ALL envelopes have no scheduled disbursement or all are more than 3 days away:
+               - Validate their patience warmly.
+               - Remind them their budget is quietly doing its job.
+               - End on a motivating note — never leave them feeling stuck or hopeless.
 
             ── Allowed action types ───────────────────────────────────────────────────────
             - create_budget
