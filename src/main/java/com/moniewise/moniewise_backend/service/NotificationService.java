@@ -1,4 +1,4 @@
-﻿package com.moniewise.moniewise_backend.service;
+package com.moniewise.moniewise_backend.service;
 
 import com.google.firebase.messaging.*;
 import com.moniewise.moniewise_backend.config.GenericNotificationEvent;
@@ -141,8 +141,8 @@ public class NotificationService {
 //                if (firebaseMessaging != null) {
 //                    String dynamicTitle = getNotificationTitle(event.getType());
 //                    sendFCMMessage(fcmToken, dynamicTitle, message, null,
-                                    event.getActionUrl(), event.getType(), userId,
-                                    event.getContextId2()); // contextId2 = envelopeId
+//                                    event.getActionUrl(), event.getType(), userId,
+//                                    event.getContextId2()); // contextId2 = envelopeId
 //                } else {
 //                    logger.warn("âš ï¸ Skipping FCM: Firebase is not initialized.");
 //                }
