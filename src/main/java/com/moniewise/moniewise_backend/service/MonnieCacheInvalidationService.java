@@ -4,6 +4,7 @@ import com.moniewise.moniewise_backend.config.GenericNotificationEvent;
 import com.moniewise.moniewise_backend.entity.User;
 import com.moniewise.moniewise_backend.enums.NotificationType;
 import com.moniewise.moniewise_backend.repository.UserRepository;
+import org.springframework.beans.factory.ObjectProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Async;
@@ -21,14 +22,14 @@ public class MonnieCacheInvalidationService {
 
     private static final Logger logger = LoggerFactory.getLogger(MonnieCacheInvalidationService.class);
 
-    private final AiInsightService aiInsightService;
+    private final ObjectProvider<AiInsightService> aiInsightServiceProvider;
     private final UserRepository userRepository;
 
     public MonnieCacheInvalidationService(
-            AiInsightService aiInsightService,
+            ObjectProvider<AiInsightService> aiInsightServiceProvider,
             UserRepository userRepository
     ) {
-        this.aiInsightService = aiInsightService;
+        this.aiInsightServiceProvider = aiInsightServiceProvider;
         this.userRepository = userRepository;
     }
 
@@ -87,6 +88,11 @@ public class MonnieCacheInvalidationService {
 
     private void evictEmail(String email) {
         if (email == null || email.isBlank()) return;
+        AiInsightService aiInsightService = aiInsightServiceProvider.getIfAvailable();
+        if (aiInsightService == null) {
+            logger.debug("[Monnie] Cache eviction skipped for {}; AiInsightService is not available yet", email);
+            return;
+        }
         aiInsightService.evictMonnieCache(email);
     }
 
