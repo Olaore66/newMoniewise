@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Finish setting up your Wisemonie account</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+      background-color: #F2F4F7;
+      padding: 40px 16px;
+      -webkit-text-size-adjust: none;
+      color: #344054;
+    }
+    .wrapper { max-width: 580px; margin: 0 auto; }
+
+    /* ── Logo bar ── */
+    .logo-bar { text-align: center; padding-bottom: 24px; }
+    .logo-bar img { max-width: 160px; }
+
+    /* ── Card ── */
+    .card {
+      background: #FFFFFF;
+      border: 1px solid #E4E7EC;
+      border-radius: 12px;
+      overflow: hidden;
+    }
+
+    /* ── Header stripe ── */
+    .card-header {
+      background-color: #0F4C4C;
+      padding: 32px 40px;
+      text-align: center;
+    }
+    .card-header .tag {
+      display: inline-block;
+      background-color: rgba(199, 243, 107, 0.15);
+      color: #C7F36B;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      padding: 4px 12px;
+      border-radius: 100px;
+      margin-bottom: 14px;
+    }
+    .card-header h1 { color: #FFFFFF; font-size: 22px; font-weight: 700; letter-spacing: -0.3px; }
+    .card-header p  { color: #A7C8C0; font-size: 14px; margin-top: 6px; }
+
+    /* ── Body ── */
+    .card-body { padding: 36px 40px; }
+    .greeting {
+      font-size: 16px;
+      color: #101828;
+      font-weight: 600;
+      margin-bottom: 12px;
+    }
+    .body-text {
+      font-size: 15px;
+      color: #475467;
+      line-height: 1.7;
+      margin-bottom: 22px;
+    }
+    .body-text strong { color: #101828; }
+
+    /* ── Button ── */
+    .btn-container { text-align: center; margin: 28px 0; }
+    .btn-complete {
+      display: inline-block;
+      background-color: #0F4C4C;
+      color: #FFFFFF !important;
+      text-decoration: none;
+      padding: 14px 36px;
+      border-radius: 8px;
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: 0.2px;
+    }
+    .btn-subtext {
+      text-align: center;
+      font-size: 12px;
+      color: #98A2B3;
+      margin-top: 10px;
+    }
+
+    /* ── Divider ── */
+    .divider { border: none; border-top: 1px solid #F2F4F7; margin: 24px 0; }
+
+    /* ── Info rows (the "why this matters" reasons) ── */
+    .info-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+    .info-icon {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      background: #F0FAF5;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 15px;
+      flex-shrink: 0;
+      line-height: 32px;
+      text-align: center;
+    }
+    .info-text { font-size: 14px; color: #475467; line-height: 1.6; }
+    .info-text strong { color: #101828; font-weight: 600; }
+
+    /* ── Urgency notice (only shown on later reminders) ── */
+    .notice {
+      background: #FFFAEB;
+      border: 1px solid #FEC84B;
+      border-radius: 8px;
+      padding: 14px 16px;
+      font-size: 13px;
+      color: #92400E;
+      line-height: 1.6;
+      margin: 24px 0;
+    }
+    .notice strong { color: #78350F; }
+
+    /* ── Footer ── */
+    .card-footer {
+      border-top: 1px solid #F2F4F7;
+      padding: 20px 40px;
+      text-align: center;
+    }
+    .footer-brand { font-size: 13px; font-weight: 700; color: #0F4C4C; margin-bottom: 4px; }
+    .footer-text  { font-size: 12px; color: #98A2B3; line-height: 1.6; }
+    .footer-text a { color: #1F9E89; text-decoration: none; }
+
+    .outer-footer {
+      text-align: center;
+      margin-top: 24px;
+      font-size: 12px;
+      color: #98A2B3;
+    }
+
+    @media only screen and (max-width: 600px) {
+      body { padding: 20px 12px; }
+      .card-header { padding: 24px 24px; }
+      .card-body   { padding: 24px 24px; }
+      .card-footer { padding: 18px 24px; }
+      .btn-complete { display: block; text-align: center; }
+    }
+  </style>
+</head>
+<body>
+<div class="wrapper">
+
+  <!-- Logo -->
+  <div class="logo-bar">
+    <img th:src="${logoUrl}" src="https://wisemonie.app/images/wisemonie-logo.png" alt="Wisemonie" style="height: 44px; width: auto; display: inline-block;">
+  </div>
+
+  <div class="card">
+
+    <!-- Header -->
+    <div class="card-header">
+      <div class="tag">We saved your spot</div>
+      <h1>Your money story is waiting to change</h1>
+      <p>You're just one short step away.</p>
+    </div>
+
+    <!-- Body -->
+    <div class="card-body">
+
+      <p class="greeting">Hi <span th:text="${firstName}">there</span>,</p>
+
+      <p class="body-text">
+        Be honest — when last did you check your account balance and felt
+        completely calm about it? For most people, the answer is "it's been a while."
+        Money has a way of disappearing quietly: a transfer here, a "small" purchase there,
+        and suddenly it's the third week of the month and you're wondering where it all went.
+      </p>
+
+      <p class="body-text">
+        That feeling — that quiet, low-grade anxiety about money — is exactly what
+        <strong>Wisemonie</strong> was built to take off your shoulders. You started creating
+        your account, which tells us something important: <strong>you're already looking for
+        a better way.</strong> You just haven't taken the last step yet, and that's okay —
+        we kept everything exactly as you left it.
+      </p>
+
+      <div class="btn-container">
+        <a th:href="${completeProfileLink}" class="btn-complete">Finish Setting Up My Account</a>
+      </div>
+      <p class="btn-subtext">It takes less than 3 minutes — most of it is just confirming who you are.</p>
+
+      <hr class="divider">
+
+      <!-- Why finishing matters -->
+      <div class="info-row">
+        <div class="info-icon">🧭</div>
+        <div class="info-text">
+          <strong>See exactly where your money goes</strong><br>
+          No more guessing. Every naira gets a name and a purpose, so month-end never
+          catches you off guard again.
+        </div>
+      </div>
+      <div class="info-row">
+        <div class="info-icon">🛡️</div>
+        <div class="info-text">
+          <strong>Build a cushion for the unexpected</strong><br>
+          Life happens — rent, family emergencies, "soft life" temptations. A little structure
+          now means you're not caught flat-footed later.
+        </div>
+      </div>
+      <div class="info-row">
+        <div class="info-icon">🌱</div>
+        <div class="info-text">
+          <strong>Turn good intentions into actual habits</strong><br>
+          Wanting to save is easy. Wisemonie makes it automatic — so discipline isn't
+          something you have to white-knuckle every day.
+        </div>
+      </div>
+
+      <!-- Urgency notice — only rendered for later-stage reminders -->
+      <div class="notice" th:if="${showUrgencyNotice}">
+        <strong>⏳ A gentle heads-up:</strong><br>
+        For your security, accounts that stay unverified for a while are eventually
+        cleared from our system — this one will be removed in
+        <strong th:text="${daysRemaining}">5</strong> day(s) if it isn't completed.
+        We'd genuinely hate for you to lose your spot over something that takes minutes to finish.
+      </div>
+
+      <p class="body-text" style="margin-top: 4px; margin-bottom: 0;">
+        Whenever you're ready, we'll be here. — The Wisemonie Team
+      </p>
+
+    </div>
+
+    <!-- Footer -->
+    <div class="card-footer">
+      <div class="footer-brand">Wisemonie</div>
+      <p class="footer-text">
+        Didn't try to sign up for Wisemonie? You can safely ignore this email — no account
+        will be created without you completing this step.<br>
+        Questions? Reach us at <a href="mailto:wisemoniehelpdesk@gmail.com">wisemoniehelpdesk@gmail.com</a>
+      </p>
+    </div>
+
+  </div>
+
+  <div class="outer-footer">
+    &copy; 2026 Wisemonie. All rights reserved. &nbsp;·&nbsp; Ibadan, Nigeria
+  </div>
+
+</div>
+</body>
+</html>

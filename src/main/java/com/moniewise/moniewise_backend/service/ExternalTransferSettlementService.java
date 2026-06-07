@@ -32,6 +32,7 @@ public class ExternalTransferSettlementService {
     private final RevenueLogRepository revenueLogRepository;
     private final WalletService walletService;
     private final MarkupCalculatorService markupCalculatorService;
+    private final MonnieCacheInvalidationService monnieCacheInvalidationService;
 
     public ExternalTransferSettlementService(
             TransactionLogRepository transactionLogRepository,
@@ -39,7 +40,8 @@ public class ExternalTransferSettlementService {
             WalletRepository walletRepository,
             RevenueLogRepository revenueLogRepository,
             @Lazy WalletService walletService,
-            MarkupCalculatorService markupCalculatorService
+            MarkupCalculatorService markupCalculatorService,
+            MonnieCacheInvalidationService monnieCacheInvalidationService
     ) {
         this.transactionLogRepository = transactionLogRepository;
         this.envelopeRepository = envelopeRepository;
@@ -47,6 +49,7 @@ public class ExternalTransferSettlementService {
         this.revenueLogRepository = revenueLogRepository;
         this.walletService = walletService;
         this.markupCalculatorService = markupCalculatorService;
+        this.monnieCacheInvalidationService = monnieCacheInvalidationService;
     }
 
     @Transactional
@@ -138,6 +141,7 @@ public class ExternalTransferSettlementService {
             feeTxn.setStatus(txn.getStatus());
             transactionLogRepository.save(feeTxn);
         });
+        monnieCacheInvalidationService.evictUserAfterCommit(txn.getUserId());
     }
     private boolean isSuccessful(String status) {
         if (status == null) return false;

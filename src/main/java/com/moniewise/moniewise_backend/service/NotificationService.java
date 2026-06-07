@@ -23,7 +23,6 @@ import org.springframework.transaction.event.TransactionalEventListener;
 import org.thymeleaf.TemplateEngine;
 import org.thymeleaf.context.Context;
 
-import org.springframework.core.io.ClassPathResource;
 import javax.annotation.PostConstruct;
 import javax.mail.MessagingException;
 import javax.mail.internet.MimeMessage;
@@ -644,6 +643,64 @@ public class NotificationService {
             logger.error("Failed to send welcome email to {}", email, e);
         }
     }
+
+    /**
+     * "Complete your profile" nudge email for users who signed up but never
+     * finished KYC/profile (and therefore never got a wallet). Sent on a
+     * cadence by {@code IncompleteSignupLifecycleManager}: ~24h after signup,
+     * then every 5 days, until either the profile is completed or the
+     * registration is purged at the 30-day mark.
+     *
+     * @param email               recipient
+     * @param firstName           best-effort first name (falls back to "there")
+     * @param completeProfileLink deep link back into the app's onboarding flow
+     * @param daysSinceSignup     used only to pick a fitting subject line/tone
+     * @param daysRemaining       days left before the account is purged — shown
+     *                            only when {@code showUrgencyNotice} is true
+     * @param showUrgencyNotice   true for the later reminders (close to the
+     *                            30-day cutoff), renders the soft warning block
+     */
+    @Async
+    public void sendOnboardingReminderEmail(String email, String firstName, String completeProfileLink,
+                                             int daysSinceSignup, int daysRemaining, boolean showUrgencyNotice) {
+        if ("stub".equals(activeProfile) || mailSender == null) return;
+        try {
+            Context context = new Context();
+            context.setVariable("logoUrl", logoUrl());
+            context.setVariable("firstName", firstName != null && !firstName.isBlank() ? firstName : "there");
+            context.setVariable("completeProfileLink", completeProfileLink);
+            context.setVariable("daysRemaining", daysRemaining);
+            context.setVariable("showUrgencyNotice", showUrgencyNotice);
+
+            String htmlContent = templateEngine.process("onboarding-reminder", context);
+
+            MimeMessage mimeMessage = mailSender.createMimeMessage();
+            MimeMessageHelper helper = new MimeMessageHelper(mimeMessage, true);
+
+            helper.setFrom(fromEmail);
+            helper.setTo(email);
+            helper.setSubject(buildOnboardingReminderSubject(daysSinceSignup, showUrgencyNotice));
+            helper.setText(htmlContent, true);
+            attachLogo(helper);
+
+            mailSender.send(mimeMessage);
+            logger.info("Sent onboarding-reminder email (day {} since signup, urgent={}) to {}",
+                    daysSinceSignup, showUrgencyNotice, email);
+        } catch (MessagingException e) {
+            logger.error("Failed to send onboarding-reminder email to {}", email, e);
+        }
+    }
+
+    private String buildOnboardingReminderSubject(int daysSinceSignup, boolean urgent) {
+        if (urgent) {
+            return "⏳ Your Wisemonie account is waiting — don't lose your spot";
+        }
+        if (daysSinceSignup <= 1) {
+            return "👋 You're one step away from a calmer relationship with money";
+        }
+        return "Still thinking it over? Your Wisemonie account is right where you left it";
+    }
+
     @Async
     public void sendOtpEmail(String email, String otpCode) {
         if ("stub".equals(activeProfile) || mailSender == null) return;

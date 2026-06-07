@@ -84,6 +84,24 @@ public class User {
     @Convert(converter = Jsr310JpaConverters.LocalDateTimeConverter.class) // Add this
     private LocalDateTime createdAt = LocalDateTime.now();
 
+    /**
+     * How many "complete your profile" nudge emails have been sent to this
+     * user since signup. Used by {@code IncompleteSignupLifecycleManager} to
+     * compute when the next nudge is due (and, eventually, when to purge a
+     * stale registration that never completed KYC/profile + wallet creation).
+     * 0 = no nudge sent yet.
+     */
+    @Column(name = "onboarding_reminder_count", nullable = false)
+    private int onboardingReminderCount = 0;
+
+    /**
+     * Timestamp of the most recent "complete your profile" nudge email.
+     * NULL means none has been sent yet. Prevents double-sends if the
+     * lifecycle worker runs more than once in a short window.
+     */
+    @Column(name = "last_onboarding_reminder_at")
+    private LocalDateTime lastOnboardingReminderAt;
+
     @Column(name = "last_login")
     private Instant lastLogin;
 

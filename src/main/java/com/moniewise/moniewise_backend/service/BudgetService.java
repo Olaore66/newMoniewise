@@ -59,6 +59,7 @@ public class BudgetService {
     private final SavingsService savingsService;
 
     private final SystemConfigService systemConfig;
+    private final MonnieCacheInvalidationService monnieCacheInvalidationService;
 
     @Value("${moniewise.revenue.wallet.user-id}")
     private Long revenueWalletUserId;
@@ -73,7 +74,8 @@ public class BudgetService {
             WalletService walletService, ScheduledTaskRepository scheduledTaskRepository,
             @Lazy EnvelopeService envelopeService, BudgetLifeCycleManager budgetLifeCycleManager,
             ApplicationEventPublisher eventPublisher, SavingsService savingsService,
-            SystemConfigService systemConfig) {
+            SystemConfigService systemConfig,
+            MonnieCacheInvalidationService monnieCacheInvalidationService) {
         this.envelopeRepository = envelopeRepository;
         this.budgetRepository = budgetRepository;
         this.revenueLogRepository = revenueLogRepository;
@@ -88,6 +90,7 @@ public class BudgetService {
         this.eventPublisher = eventPublisher;
         this.savingsService = savingsService;
         this.systemConfig = systemConfig;
+        this.monnieCacheInvalidationService = monnieCacheInvalidationService;
     }
 
     // Helper method to fetch current date/time from Postgres
@@ -770,6 +773,7 @@ public class BudgetService {
         }
         budget.setStatus(BudgetStatus.ACTIVE);
         Budget updatedBudget = budgetRepository.save(budget);
+        monnieCacheInvalidationService.evictUserAfterCommit(user.getId());
         return mapToResponse(updatedBudget);
     }
 
@@ -783,6 +787,7 @@ public class BudgetService {
             throw new SecurityException("You do not have permission to delete this budget");
         }
         budgetRepository.delete(budget);
+        monnieCacheInvalidationService.evictUserAfterCommit(user.getId());
     }
 
 
@@ -930,6 +935,7 @@ public class BudgetService {
         );
         transactionLog.setCreatedAt(now);
         transactionLogRepository.save(transactionLog);
+        monnieCacheInvalidationService.evictUserAfterCommit(user.getId());
     }
 
     // New: Extend Budget
@@ -977,6 +983,7 @@ public class BudgetService {
         );
         transactionLog.setCreatedAt(now);
         transactionLogRepository.save(transactionLog);
+        monnieCacheInvalidationService.evictUserAfterCommit(user.getId());
     }
 
     // Placeholder for getTimeBasedGreeting

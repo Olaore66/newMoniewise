@@ -7,6 +7,7 @@ import com.moniewise.moniewise_backend.enums.TransactionStatus;
 import com.moniewise.moniewise_backend.enums.TransactionType;
 import com.moniewise.moniewise_backend.repository.*;
 import com.moniewise.moniewise_backend.service.EnvelopeService;
+import com.moniewise.moniewise_backend.service.MonnieCacheInvalidationService;
 import com.moniewise.moniewise_backend.service.NotificationService;
 import com.moniewise.moniewise_backend.service.WalletService;
 import org.slf4j.Logger;
@@ -50,6 +51,7 @@ public class BudgetLifeCycleManager {
     private final NotificationRepository notificationRepository;
     private final PendingDisbursementRepository pendingDisbursementRepository;
     private final EnvelopeService envelopeService;
+    private final MonnieCacheInvalidationService monnieCacheInvalidationService;
 
     private final OutboxEventRepository outboxEventRepository;
 
@@ -69,6 +71,7 @@ public class BudgetLifeCycleManager {
             NotificationRepository notificationRepository,
             PendingDisbursementRepository pendingDisbursementRepository,
             @Lazy EnvelopeService envelopeService,
+            MonnieCacheInvalidationService monnieCacheInvalidationService,
             OutboxEventRepository outboxEventRepository, ApplicationEventPublisher eventPublisher) {
         this.budgetRepository = budgetRepository;
         this.envelopeRepository = envelopeRepository;
@@ -80,6 +83,7 @@ public class BudgetLifeCycleManager {
         this.notificationRepository = notificationRepository;
         this.pendingDisbursementRepository = pendingDisbursementRepository;
         this.envelopeService = envelopeService;
+        this.monnieCacheInvalidationService = monnieCacheInvalidationService;
         this.outboxEventRepository = outboxEventRepository;
         this.eventPublisher = eventPublisher;
     }
@@ -315,6 +319,15 @@ public class BudgetLifeCycleManager {
 
                 if (!envelopesToUpdate.isEmpty()) {
                     envelopeRepository.saveAll(envelopesToUpdate);
+                    Set<Long> userIdsToEvict = new HashSet<>();
+                    for (Envelope envelope : envelopesToUpdate) {
+                        if (envelope.getBudget() != null
+                                && envelope.getBudget().getUser() != null
+                                && envelope.getBudget().getUser().getId() != null) {
+                            userIdsToEvict.add(envelope.getBudget().getUser().getId());
+                        }
+                    }
+                    monnieCacheInvalidationService.evictUsersAfterCommit(userIdsToEvict);
                 }
 
                 if (!logsToSave.isEmpty()) {

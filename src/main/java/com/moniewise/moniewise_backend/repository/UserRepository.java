@@ -138,4 +138,28 @@ List<UserSummary> searchUsers(@Param("query") String query, Pageable pageable);
     @Transactional // ✅ Uses Spring Transactional now
     @Query("UPDATE User u SET u.fcmToken = NULL WHERE u.id = :id")
     void clearFcmToken(@Param("id") Long id);
+
+    /**
+     * Finds "abandoned signups" — users who registered but never finished
+     * onboarding, i.e. they have NEITHER a wallet NOR a KYC profile.
+     * (Wallet creation requires verified KYC data, so "no wallet + no KYC"
+     * reliably identifies someone who dropped off before completing their
+     * profile — as opposed to, say, a user mid-KYC whose wallet creation
+     * merely failed.)
+     * <p>
+     * Used by {@code IncompleteSignupLifecycleManager} to drive the
+     * "complete your profile" nudge-email cadence and, eventually, the
+     * 30-day purge of registrations that never went anywhere.
+     */
+    @Query(value = """
+            SELECT u.*
+            FROM users u
+            LEFT JOIN wallets w ON w.user_id = u.id
+            LEFT JOIN kyc_profiles k ON k.user_id = u.id
+            WHERE w.id IS NULL
+              AND k.id IS NULL
+              AND u.is_deleted = false
+            ORDER BY u.created_at ASC
+            """, nativeQuery = true)
+    List<User> findIncompleteSignups();
 }

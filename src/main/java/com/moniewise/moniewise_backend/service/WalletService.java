@@ -68,6 +68,7 @@ public class WalletService {
 
     private final SystemConfigService systemConfigService;
     private final RedisTemplate<String, String> redisTemplate;
+    private final MonnieCacheInvalidationService monnieCacheInvalidationService;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -94,7 +95,8 @@ public class WalletService {
             MarkupCalculatorService markupCalculatorService,
             RevenueLogRepository revenueLogRepository,
             SystemConfigService systemConfigService,
-            RedisTemplate<String, String> redisTemplate) {
+            RedisTemplate<String, String> redisTemplate,
+            MonnieCacheInvalidationService monnieCacheInvalidationService) {
         this.walletRepository = walletRepository;
         this.transactionLogRepository = transactionLogRepository;
         this.notificationService = notificationService;
@@ -109,6 +111,7 @@ public class WalletService {
         this.revenueLogRepository = revenueLogRepository;
         this.systemConfigService = systemConfigService;
         this.redisTemplate = redisTemplate;
+        this.monnieCacheInvalidationService = monnieCacheInvalidationService;
     }
 
     public Wallet getWalletByUserId(Long userId) {
@@ -242,6 +245,7 @@ public class WalletService {
         );
 
         logger.info("Deducted ₦{} from wallet for user {}", amount, userId);
+        monnieCacheInvalidationService.evictUserAfterCommit(userId);
     }
 
 //    @Transactional
@@ -325,6 +329,7 @@ public class WalletService {
             walletRepository.save(wallet);
 
             logger.info("Internal wallet balance-only funding applied for user {}", userId);
+            monnieCacheInvalidationService.evictUserAfterCommit(userId);
             return;
         }
 
@@ -341,6 +346,7 @@ public class WalletService {
         );
 
         logger.info("Internal Wallet Funding triggered for user {}", userId);
+        monnieCacheInvalidationService.evictUserAfterCommit(userId);
     }
 
     public void fundWallet(Long userId, BigDecimal amount, String notificationMessage) {
@@ -648,6 +654,7 @@ public class WalletService {
         wallet.setUpdatedAt(LocalDateTime.now());
         wallet.setLastBalanceSyncAt(LocalDateTime.now());
         walletRepository.save(wallet);
+        monnieCacheInvalidationService.evictUserAfterCommit(user.getId());
 
         TransactionLog log = new TransactionLog();
         log.setUserId(user.getId());
@@ -968,6 +975,7 @@ public class WalletService {
         }
         wallet.setBalance(wallet.getBalance().subtract(amount));
         walletRepository.save(wallet);
+        monnieCacheInvalidationService.evictUserAfterCommit(userId);
     }
 
     @Transactional(readOnly = true)
@@ -1010,6 +1018,7 @@ public class WalletService {
             wallet.setBalance(wallet.getBalance().add(withdrawal.getTotalDebit()));
             wallet.setUpdatedAt(LocalDateTime.now());
             walletRepository.save(wallet);
+            monnieCacheInvalidationService.evictUserAfterCommit(withdrawal.getUserId());
 
             transactionLogRepository.findByReference(withdrawal.getClientReference()).ifPresent(logEntry -> {
                 logEntry.setStatus(TransactionStatus.FAILED);
@@ -1069,6 +1078,7 @@ public class WalletService {
         wallet.setUpdatedAt(LocalDateTime.now());
         wallet.setLastBalanceSyncAt(LocalDateTime.now());
         walletRepository.save(wallet);
+        monnieCacheInvalidationService.evictUserAfterCommit(withdrawal.getUserId());
 
         if (transactionLogRepository.findByReference(withdrawal.getClientReference()).isEmpty()) {
             TransactionLog logEntry = TransactionLog.builder()
@@ -1286,7 +1296,11 @@ public class WalletService {
         wallet.setLastBalanceSyncAt(LocalDateTime.now());
         wallet.setUpdatedAt(LocalDateTime.now());
 
-        return walletRepository.save(wallet);
+        Wallet savedWallet = walletRepository.save(wallet);
+        if (savedWallet.getUser() != null && savedWallet.getUser().getId() != null) {
+            monnieCacheInvalidationService.evictUserAfterCommit(savedWallet.getUser().getId());
+        }
+        return savedWallet;
     }
 
     public Wallet getWalletByProviderWalletRef(String providerWalletRef) {
@@ -1876,6 +1890,7 @@ public class WalletService {
         wallet.setUpdatedAt(LocalDateTime.now());
         wallet.setLastBalanceSyncAt(LocalDateTime.now());
         walletRepository.save(wallet);
+        monnieCacheInvalidationService.evictUserAfterCommit(wallet.getUser().getId());
 
         completeRubiesP2pCreditLog(creditLog, sessionId);
         sendRubiesP2pCreditNotification(wallet.getUser().getId(), amount, creditLog, originatorName);

@@ -330,11 +330,15 @@ public class AiInsightService {
             if (budget.getEnvelopes() == null) continue;
             String budgetLabel = budget.getName() != null ? budget.getName() : "Budget";
             for (Envelope envelope : budget.getEnvelopes()) {
-                BigDecimal allocated = envelope.getAmount();
+                BigDecimal allocated = resolveReferenceAmount(envelope);
+                if (allocated == null || allocated.compareTo(BigDecimal.ZERO) <= 0) {
+                    allocated = envelope.getAmount();
+                }
                 if (allocated == null || allocated.compareTo(BigDecimal.ZERO) <= 0) continue;
-                BigDecimal rem = envelope.getRemainingAmount();
-                BigDecimal remaining = rem != null ? rem : BigDecimal.ZERO;
-                BigDecimal spent = allocated.subtract(remaining);
+                BigDecimal remaining = resolveSpendableAmount(envelope);
+                BigDecimal spent = isEnvelopeSpendable(envelope)
+                        ? allocated.subtract(remaining)
+                        : BigDecimal.ZERO;
                 int pctSpent = spent.max(BigDecimal.ZERO)
                         .divide(allocated, 2, RoundingMode.HALF_UP)
                         .multiply(new BigDecimal("100"))
@@ -370,8 +374,12 @@ public class AiInsightService {
             double pctElapsed = Math.max(0, Math.min(1.0, (double) daysElapsed / totalDays));
 
             for (Envelope envelope : budget.getEnvelopes()) {
-                BigDecimal allocated = envelope.getAmount();
-                BigDecimal remaining = envelope.getRemainingAmount();
+                if (!isEnvelopeSpendable(envelope)) {
+                    continue;
+                }
+
+                BigDecimal allocated = resolveReferenceAmount(envelope);
+                BigDecimal remaining = resolveSpendableAmount(envelope);
                 if (allocated == null || allocated.compareTo(BigDecimal.ZERO) <= 0) continue;
                 BigDecimal spent = allocated.subtract(remaining != null ? remaining : allocated);
                 if (spent.compareTo(BigDecimal.ZERO) <= 0) continue;
@@ -1236,7 +1244,7 @@ public class AiInsightService {
         return score;
     }
 
-    /** Returns a human-readable disbursement text for an envelope, e.g. "in 2d 4h (Mon, 8 Jun - 8:00 am)" or "available NOW". */
+    /** Returns a human-readable availability text for an envelope, e.g. "locked until in 2d 4h (Mon, 8 Jun - 8:00 am)" or "available NOW". */
     private String buildDisbursementText(Envelope envelope, LocalDateTime now) {
         LocalDateTime next = envelope.getNextDisbursementAt();
         if (next == null) return null;
@@ -1249,7 +1257,10 @@ public class AiInsightService {
         if (days > 0)    sb.append(days).append("d ");
         if (hours > 0)   sb.append(hours).append("h ");
         if (minutes > 0 || (days == 0 && hours == 0)) sb.append(minutes).append("m");
-        return sb.toString().trim() + " (" + formatNextAvailableAt(next) + ")";
+        String countdown = sb.toString().trim() + " (" + formatNextAvailableAt(next) + ")";
+        return isEnvelopeSpendable(envelope)
+                ? "next release " + countdown
+                : "locked until " + countdown;
     }
 
     private String formatNextAvailableAt(LocalDateTime dateTime) {
@@ -1443,7 +1454,7 @@ public class AiInsightService {
         final double allocated;
         final double remaining;
         final int    pctSpent;
-        /** Human-readable next disbursement text, e.g. "in 2d 4h (Mon, 8 Jun - 8:00 am)" or "available NOW". Null if none. */
+        /** Human-readable availability text, e.g. "locked until in 2d 4h (Mon, 8 Jun - 8:00 am)" or "available NOW". Null if none. */
         final String nextDisbursementText;
 
         EnvelopeSummaryDto(String name, String budgetName,
@@ -1460,7 +1471,7 @@ public class AiInsightService {
         @Override
         public String toString() {
             String disbText = nextDisbursementText != null && !nextDisbursementText.isBlank()
-                    ? " | next disbursement: " + nextDisbursementText
+                    ? " | availability: " + nextDisbursementText
                     : "";
             return String.format("  • %s [%s] — ₦%.0f allocated, ₦%.0f remaining (%d%% spent)%s",
                     name, budgetName, allocated, remaining, pctSpent, disbText);

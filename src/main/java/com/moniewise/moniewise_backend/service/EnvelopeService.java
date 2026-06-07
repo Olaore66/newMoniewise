@@ -71,6 +71,7 @@ public class EnvelopeService {
     private final PaymentGatewayResolver paymentGatewayResolver;
 
     private final TransferFeeService transferFeeService;
+    private final MonnieCacheInvalidationService monnieCacheInvalidationService;
 
     @Value("${moniewise.revenue.wallet.user-id}")
     private Long revenueWalletUserId;
@@ -88,7 +89,8 @@ public class EnvelopeService {
             BudgetService budgetService, PendingDisbursementRepository pendingDisbursementRepository,
             JdbcTemplate jdbcTemplate, BeneficiaryService beneficiaryService, PaymentProvider paymentProvider,
             ProvidusExpressGateway providusExpressGateway, PaymentGatewayResolver paymentGatewayResolver,
-            TransferFeeService transferFeeService) {
+            TransferFeeService transferFeeService,
+            MonnieCacheInvalidationService monnieCacheInvalidationService) {
         this.envelopeRepository = envelopeRepository;
         this.budgetRepository = budgetRepository;
         this.revenueLogRepository = revenueLogRepository;
@@ -107,6 +109,7 @@ public class EnvelopeService {
         this.providusExpressGateway = providusExpressGateway;
         this.paymentGatewayResolver = paymentGatewayResolver;
         this.transferFeeService = transferFeeService;
+        this.monnieCacheInvalidationService = monnieCacheInvalidationService;
     }
 
     @PostConstruct
@@ -668,8 +671,12 @@ public class EnvelopeService {
 
 
 
+        BigDecimal previousRemaining = safeAmount(envelope.getRemainingAmount());
         envelope.setRemainingAmount(remainingLimit);
         envelopeRepository.save(envelope);
+        if (previousRemaining.compareTo(remainingLimit) != 0) {
+            monnieCacheInvalidationService.evictUserIdentifierAfterCommit(email);
+        }
 
         return envelope.getRemainingAmount();
     }
@@ -1330,7 +1337,7 @@ public class EnvelopeService {
 
         eventPublisher.publishEvent(new GenericNotificationEvent(
                 this,
-                email, // assuming email acts as user identifier or fetch userId
+                envelope.getBudget().getUser().getId().toString(),
                 NotificationType.DISBURSEMENT_SUCCESS,
                 params,
                 envelope.getBudget().getId(),
