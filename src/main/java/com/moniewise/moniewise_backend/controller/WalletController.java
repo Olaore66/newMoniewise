@@ -118,6 +118,32 @@ public class WalletController {
     }
 
     /**
+     * GET: "Transferred before" auto-suggest list for the Transfer to Bank screen.
+     *
+     * <p>Returns up to 10 distinct destination accounts the authenticated user
+     * has successfully sent money to before, most-recent-first — derived live
+     * from their own COMPLETED withdrawal history (see
+     * {@link WalletService#getRecentRecipients}). The frontend shows these as
+     * a dropdown while the user types the account number; selecting one
+     * auto-fills bank + account number + name.
+     *
+     * <p>No rate limiting — this purely reads the user's own transaction
+     * history (same trust level as {@code GET /wallets/withdrawals}), no
+     * external calls or enumeration risk like {@code resolve-account} has.
+     */
+    @GetMapping("/recent-recipients")
+    public ResponseEntity<?> getRecentRecipients(Authentication authentication) {
+        try {
+            Long userId = userService.findByEmail(authentication.getName()).getId();
+            return ResponseEntity.ok(walletService.getRecentRecipients(userId));
+        } catch (Exception e) {
+            log.error("getRecentRecipients error: {}", e.getMessage());
+            return ResponseEntity.internalServerError()
+                    .body(Map.of("message", "An error occurred while fetching recent recipients"));
+        }
+    }
+
+    /**
      * POST: Resolve Account Name (KYC Check).
      * Rate-limited per user+IP — 30 lookups per 5 minutes to prevent scraping.
      */

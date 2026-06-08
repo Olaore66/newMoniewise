@@ -61,6 +61,10 @@ public class AbuseProtectionService {
     public static final String TXN_WITHDRAW = "txn.withdraw";
     public static final String TXN_TRANSFER = "txn.transfer";
 
+    // ── Payeelord VAS (airtime & data) ────────────────────────────────────────
+    public static final String VAS_AIRTIME_PURCHASE = "vas.airtime_purchase";
+    public static final String VAS_DATA_PURCHASE    = "vas.data_purchase";
+
     // ── Disbursements ─────────────────────────────────────────────────────────
     public static final String DISBURSEMENT_CLAIM = "disbursement.claim";
 

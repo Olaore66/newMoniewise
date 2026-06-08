@@ -42,5 +42,11 @@ public enum NotificationType {
     ENVELOPE_LOW_BALANCE,
     DISBURSEMENT_REFUNDED,
     BUDGET_UNALLOCATED_REFUNDED,
-    SAVINGS_MATURED
+    SAVINGS_MATURED,
+
+    // ── Payeelord VAS (airtime & data) ──────────────────────────────────────
+    AIRTIME_PURCHASE_SUCCESS,
+    AIRTIME_PURCHASE_FAILED,
+    DATA_PURCHASE_SUCCESS,
+    DATA_PURCHASE_FAILED
 }

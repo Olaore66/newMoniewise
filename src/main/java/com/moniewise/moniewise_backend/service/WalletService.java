@@ -783,7 +783,46 @@ public class WalletService {
             destBankCode      = request.getBankCode().trim();
             destBankName      = request.getBankName() != null ? request.getBankName().trim() : destBankCode;
             destAccountNumber = request.getAccountNumber().trim();
-            destAccountName   = request.getAccountName().trim();
+
+            // ── Server-side re-verification — never trust the client-submitted name ──
+            // The frontend calls POST /wallets/resolve-account to SHOW the user the
+            // real account-holder name for confirmation before they submit, but
+            // nothing stops a modified client (or a direct API call) from then
+            // submitting an arbitrary (accountNumber, accountName) pair to THIS
+            // endpoint — request.getAccountName() up to this point was only checked
+            // for being non-blank. We re-resolve here and use Rubies' own answer as
+            // the name that actually gets sent onward, exactly mirroring how
+            // updateSettlementAccount() already treats the gateway as the sole
+            // source of truth for the pre-linked-account flow. If the resolve
+            // fails (bad account number, Rubies outage, etc.) we fail the
+            // withdrawal up front rather than risk moving funds toward an
+            // unverified destination.
+            String verifiedAccountName;
+            try {
+                verifiedAccountName = gateway.resolveAccount(destBankCode, destAccountNumber);
+            } catch (RuntimeException e) {
+                logger.warn("[Withdrawal] Could not re-verify destination account for user={} bank={} acct={}: {}",
+                        userId, destBankCode, destAccountNumber, e.getMessage());
+                throw new IllegalArgumentException(
+                        "We couldn't verify the destination account right now. Please re-check the " +
+                        "account number and try again.");
+            }
+            if (verifiedAccountName == null || verifiedAccountName.isBlank()) {
+                throw new IllegalArgumentException(
+                        "We couldn't verify the destination account right now. Please re-check the " +
+                        "account number and try again.");
+            }
+            verifiedAccountName = verifiedAccountName.trim();
+
+            String submittedAccountName = request.getAccountName().trim();
+            if (!submittedAccountName.equalsIgnoreCase(verifiedAccountName)) {
+                logger.warn("[Withdrawal][SECURITY] Submitted account name didn't match Rubies' verified " +
+                                "name — user={} bank={} acct={} submitted='{}' verified='{}'. Proceeding " +
+                                "with the VERIFIED name; client input is never trusted for transfer destinations.",
+                        userId, destBankCode, destAccountNumber, submittedAccountName, verifiedAccountName);
+            }
+
+            destAccountName = verifiedAccountName;
         } else {
             // Legacy Providus / SecureWave — must have a pre-linked settlement account
             if (wallet.getSettlementAccountNumber() == null || wallet.getSettlementBankCode() == null) {
@@ -981,6 +1020,56 @@ public class WalletService {
     @Transactional(readOnly = true)
     public List<Withdrawal> getRecentWithdrawals(Long userId) {
         return withdrawalRepository.findTop20ByUserIdOrderByCreatedAtDesc(userId);
+    }
+
+    /**
+     * Powers the "transferred before" auto-suggest dropdown on the Transfer to
+     * Bank screen — as the user starts typing an account number, the frontend
+     * shows a list of accounts they've successfully sent money to before;
+     * picking one auto-fills bank + account number + name, leaving just the
+     * amount to enter.
+     *
+     * <p>Deliberately derived live from the user's own {@code COMPLETED}
+     * withdrawal history rather than a separate "saved beneficiary" table:
+     * <ul>
+     *   <li>zero new schema/migration — works the moment this ships</li>
+     *   <li>always accurate — no separate "save this recipient" step that can
+     *       drift out of sync or go stale</li>
+     *   <li>only ever surfaces destinations that actually settled successfully
+     *       — never a mistyped account from a FAILED/REVERSED attempt</li>
+     * </ul>
+     *
+     * <p>Dedupes by {@code bankCode + accountNumber} (a user may have sent to
+     * the same account many times — we only want it to appear once, using the
+     * most recent — and verified — {@code accountName} on file), capped at 10
+     * for a clean dropdown. Note the destination name shown here is whatever
+     * Rubies verified at the time of that past transfer (see the server-side
+     * re-verification in {@code processWithdrawal}); the gateway is still
+     * re-resolved on submission regardless, so even a "trusted" suggestion
+     * gets the same fresh-name guarantee as a brand-new recipient.
+     */
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> getRecentRecipients(Long userId) {
+        List<Withdrawal> recent = withdrawalRepository
+                .findTop50ByUserIdAndStatusOrderByCreatedAtDesc(userId, WithdrawalStatus.COMPLETED);
+
+        LinkedHashMap<String, Map<String, Object>> deduped = new LinkedHashMap<>();
+        for (Withdrawal w : recent) {
+            if (w.getBankCode() == null || w.getAccountNumber() == null) continue;
+
+            String key = w.getBankCode().trim() + "|" + w.getAccountNumber().trim();
+            if (deduped.containsKey(key)) continue;
+
+            Map<String, Object> recipient = new LinkedHashMap<>();
+            recipient.put("bankCode", w.getBankCode());
+            recipient.put("bankName", w.getBankName());
+            recipient.put("accountNumber", w.getAccountNumber());
+            recipient.put("accountName", w.getAccountName());
+            deduped.put(key, recipient);
+
+            if (deduped.size() >= 10) break;
+        }
+        return new ArrayList<>(deduped.values());
     }
 
     @Transactional

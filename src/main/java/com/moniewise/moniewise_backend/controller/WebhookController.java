@@ -7,6 +7,8 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import javax.servlet.http.HttpServletRequest;
+
 @RestController
 @RequestMapping("/api/webhooks")
 public class WebhookController {
@@ -91,9 +93,25 @@ public class WebhookController {
     /**
      * Rubies MFB webhook receiver.
      *
-     * <p>Rubies signs the payload with HMAC-SHA512 and sends the signature in the
-     * {@code X-Rubies-Signature} header. This endpoint accepts that header (and a
-     * generic {@code X-Signature} fallback) and forwards to the service layer.
+     * <p>Two verification mechanisms are supported (see
+     * {@link WebhookService#processRubiesWebhook} for the precedence rules):
+     * <ul>
+     *   <li><b>Custom header key/value</b> — Rubies' dashboard lets you configure
+     *       a "Live Header Key"/"Live Header Value" pair that it echoes on every
+     *       webhook call. Configured via the {@code RUBIES_WEBHOOK_HEADER_KEY} /
+     *       {@code RUBIES_WEBHOOK_HEADER_VALUE} env vars (same place as
+     *       {@code RUBIES_WEBHOOK_SECRET} — Render → Environment). Since the
+     *       header *name* itself is admin-chosen, it can't be statically
+     *       declared with {@code @RequestHeader} — we pass the raw
+     *       {@link HttpServletRequest} through so the service can look it up by
+     *       whatever name is currently configured.</li>
+     *   <li><b>Legacy HMAC signature</b> — {@code X-Rubies-Signature} (or the
+     *       generic {@code X-Signature} fallback), validated against
+     *       {@code RUBIES_WEBHOOK_SECRET}. Kept only as a fallback for
+     *       deployments that haven't set the header env vars yet — Rubies' own
+     *       webhook docs don't describe any payload-signing scheme, so real
+     *       production webhooks will never carry this header.</li>
+     * </ul>
      *
      * <p><b>Give Rubies this URL:</b>
      * {@code https://your-render-domain.onrender.com/api/webhooks/rubies}
@@ -102,14 +120,15 @@ public class WebhookController {
     public ResponseEntity<String> handleRubiesWebhook(
             @RequestHeader(value = "X-Rubies-Signature", required = false) String rubiesSig,
             @RequestHeader(value = "X-Signature",        required = false) String xSig,
-            @RequestBody String rawPayload) {
+            @RequestBody String rawPayload,
+            HttpServletRequest httpRequest) {
 
         logger.info("[RUBIES-WEBHOOK] Received webhook call");
 
         String signature = firstPresent(rubiesSig, xSig);
 
         try {
-            webhookService.processRubiesWebhook(signature, rawPayload);
+            webhookService.processRubiesWebhook(signature, rawPayload, httpRequest);
             return ResponseEntity.ok("Webhook received");
         } catch (SecurityException e) {
             logger.warn("[RUBIES-WEBHOOK] Rejected — {}", e.getMessage());

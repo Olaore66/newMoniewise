@@ -7,6 +7,13 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  *
  * <p><strong>Critical:</strong> {@code amount} must be a STRING, not a number.
  * Rubies rejects numeric amounts with a 400 / validation error.
+ *
+ * <p><strong>Field name note:</strong> per the official Rubies {@code FundTransferRequest}
+ * schema, our idempotency/tracking string must be sent as {@code reference} —
+ * NOT {@code transactionReference} (an earlier dev-sandbox assumption that the
+ * production schema does not recognise). Sending the wrong key means Rubies
+ * silently ignores it and auto-generates its own reference, which then breaks
+ * webhook/TSQ reconciliation against our local records.
  */
 public class RubiesFundTransferRequest {
 
@@ -32,8 +39,9 @@ public class RubiesFundTransferRequest {
     @JsonProperty("amount")
     private String amount;
 
-    @JsonProperty("transactionReference")
-    private String transactionReference;
+    /** Our unique tracking string — wire key MUST be "reference" (see class Javadoc). */
+    @JsonProperty("reference")
+    private String reference;
 
     @JsonProperty("narration")
     private String narration;
@@ -43,7 +51,7 @@ public class RubiesFundTransferRequest {
     public RubiesFundTransferRequest(String debitAccountNumber, String debitAccountName,
                                      String creditBankCode, String creditBankName,
                                      String creditAccountNumber, String creditAccountName,
-                                     String amount, String transactionReference, String narration) {
+                                     String amount, String reference, String narration) {
         this.debitAccountNumber  = debitAccountNumber;
         this.debitAccountName    = debitAccountName;
         this.creditBankCode      = creditBankCode;
@@ -51,7 +59,7 @@ public class RubiesFundTransferRequest {
         this.creditAccountNumber = creditAccountNumber;
         this.creditAccountName   = creditAccountName;
         this.amount              = amount;
-        this.transactionReference = transactionReference;
+        this.reference           = reference;
         this.narration           = narration;
     }
 
@@ -78,8 +86,8 @@ public class RubiesFundTransferRequest {
     public String getAmount()                         { return amount; }
     public void setAmount(String v)                   { this.amount = v; }
 
-    public String getTransactionReference()           { return transactionReference; }
-    public void setTransactionReference(String v)     { this.transactionReference = v; }
+    public String getReference()                      { return reference; }
+    public void setReference(String v)                { this.reference = v; }
 
     public String getNarration()                      { return narration; }
     public void setNarration(String v)                { this.narration = v; }

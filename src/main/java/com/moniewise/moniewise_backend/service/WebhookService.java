@@ -8,8 +8,10 @@ import com.moniewise.moniewise_backend.psp.SecureWaveGateway;
 import com.moniewise.moniewise_backend.psp.rubies.RubiesGateway;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import javax.servlet.http.HttpServletRequest;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 
@@ -23,6 +25,33 @@ public class WebhookService {
     private final PaymentGatewayResolver paymentGatewayResolver;
 
     private final ExternalTransferSettlementService externalTransferSettlementService;
+
+    /**
+     * Shared-secret HTTP header pair used to authenticate inbound Rubies
+     * webhook calls — the "Live Header Key" / "Live Header Value" fields on
+     * Rubies' organisation-settings dashboard.
+     *
+     * <p>Deliberately wired as plain environment variables (not
+     * {@code system_config} DB rows) — exactly like {@code RUBIES_WEBHOOK_SECRET}
+     * / {@code RUBIES_API_KEY} on {@link RubiesGateway}. Secrets belong in env
+     * vars (Render dashboard → Environment), never in a database table that's
+     * readable through a generic admin-config endpoint, cached in Redis, or
+     * captured in DB backups/dumps. This also matches the workflow you already
+     * use for {@code RUBIES_WEBHOOK_SECRET}: generate the value, paste it into
+     * Render's environment variables (and identically into Rubies' "Live Header
+     * Key"/"Live Header Value" dashboard fields) — no extra admin API call needed.
+     *
+     * <p>Set {@code RUBIES_WEBHOOK_HEADER_KEY} / {@code RUBIES_WEBHOOK_HEADER_VALUE}
+     * env vars (map to {@code rubies.webhook.header.key} / {@code .value}).
+     * While either is blank, authentication falls back to the legacy HMAC
+     * {@code X-Rubies-Signature} check — see {@link #verifyRubiesWebhookAuthenticity}.
+     */
+    @Value("${rubies.webhook.header.key:}")
+    private String rubiesWebhookHeaderKey;
+
+    /** Expected value for the {@link #rubiesWebhookHeaderKey} header — see its Javadoc. */
+    @Value("${rubies.webhook.header.value:}")
+    private String rubiesWebhookHeaderValue;
 
     public WebhookService(
             WebhookEventService webhookEventService,
@@ -270,25 +299,25 @@ public class WebhookService {
      * <p>Flow:
      * <ol>
      *   <li>Log raw payload immediately for auditability</li>
-     *   <li>Validate signature via {@code X-Rubies-Signature} header</li>
+     *   <li>Authenticate the call — see {@link #verifyRubiesWebhookAuthenticity}</li>
      *   <li>Extract event type + reference, generate idempotency key</li>
      *   <li>Persist to {@code webhook_events}, route to settlement handler</li>
      * </ol>
      *
-     * @param signatureHeader value of the {@code X-Rubies-Signature} header
+     * @param signatureHeader value of the legacy {@code X-Rubies-Signature} header (fallback path only)
      * @param rawPayload      the raw request body from Rubies
+     * @param httpRequest     the raw inbound request — needed to look up the
+     *                        admin-configured custom auth header by name, since
+     *                        its name isn't fixed at compile time
      */
-    public void processRubiesWebhook(String signatureHeader, String rawPayload) {
+    public void processRubiesWebhook(String signatureHeader, String rawPayload, HttpServletRequest httpRequest) {
         String cleanPayload = normalizePayload(rawPayload);
 
         logger.info("[RUBIES-WEBHOOK] ===== Incoming payload =====\n{}", cleanPayload);
 
         PaymentGateway gateway = paymentGatewayResolver.resolveByProviderName(RubiesGateway.PROVIDER_NAME);
 
-        if (!gateway.validateWebhookSignature(signatureHeader, cleanPayload)) {
-            logger.warn("[RUBIES-WEBHOOK] Rejected — invalid signature");
-            throw new SecurityException("Invalid Rubies webhook signature");
-        }
+        verifyRubiesWebhookAuthenticity(gateway, signatureHeader, cleanPayload, httpRequest);
 
         String providerName   = gateway.getProviderName();
         String eventType      = gateway.extractWebhookEventType(cleanPayload);
@@ -341,6 +370,75 @@ public class WebhookService {
             webhookEventService.markFailed(event.getId(), e.getMessage());
             throw e;
         }
+    }
+
+    // ── Rubies webhook authenticity check ────────────────────────────────────
+
+    /**
+     * Authenticates an inbound Rubies webhook call using whichever mechanism
+     * is actually configured — see {@link #rubiesWebhookHeaderKey} for the
+     * full rationale. In short: Rubies' own webhook documentation describes
+     * no payload-signing scheme at all (just "configure your callback URL"),
+     * so the legacy HMAC {@code X-Rubies-Signature} check is very likely to
+     * either fail-open (no secret configured) or hard-reject every single
+     * real webhook (secret configured but Rubies never sends the header).
+     *
+     * <p>Precedence:
+     * <ol>
+     *   <li><b>Custom header key/value</b> ({@code RUBIES_WEBHOOK_HEADER_KEY} /
+     *       {@code _VALUE} env vars, mirroring "Live Header Key"/"Live Header
+     *       Value" on Rubies' dashboard) — when BOTH are configured, this is
+     *       the <em>only</em> check performed: the inbound request must carry
+     *       a header with that exact name and value (constant-time compared),
+     *       or the call is rejected outright.</li>
+     *   <li><b>Legacy HMAC signature</b> — only consulted when the header pair
+     *       above is left unconfigured, so deployments that haven't set the
+     *       new env vars yet keep working exactly as before.</li>
+     * </ol>
+     *
+     * @throws SecurityException if neither configured mechanism accepts the request
+     */
+    private void verifyRubiesWebhookAuthenticity(PaymentGateway gateway,
+                                                  String signatureHeader,
+                                                  String cleanPayload,
+                                                  HttpServletRequest httpRequest) {
+        String configuredHeaderKey   = rubiesWebhookHeaderKey   == null ? "" : rubiesWebhookHeaderKey.trim();
+        String configuredHeaderValue = rubiesWebhookHeaderValue == null ? "" : rubiesWebhookHeaderValue.trim();
+
+        if (!configuredHeaderKey.isBlank() && !configuredHeaderValue.isBlank()) {
+            String actualValue = httpRequest.getHeader(configuredHeaderKey);
+            if (actualValue == null || !constantTimeEquals(actualValue.trim(), configuredHeaderValue)) {
+                logger.warn("[RUBIES-WEBHOOK][SECURITY] Custom auth header check failed — " +
+                                "configured header name='{}', present in request={}",
+                        configuredHeaderKey, actualValue != null);
+                throw new SecurityException("Invalid Rubies webhook authentication header");
+            }
+            logger.debug("[RUBIES-WEBHOOK] Custom auth header '{}' verified", configuredHeaderKey);
+            return;
+        }
+
+        // ── Fallback: legacy HMAC signature path (pre-existing behaviour) ──
+        // Only reached while RUBIES_WEBHOOK_HEADER_KEY/_VALUE are unset —
+        // preserves backward compatibility for any deployment that already had
+        // RUBIES_WEBHOOK_SECRET working some other way (e.g. a sandbox that
+        // genuinely does sign payloads), without permanently locking out real
+        // production webhooks the moment a secret happens to be set.
+        if (!gateway.validateWebhookSignature(signatureHeader, cleanPayload)) {
+            logger.warn("[RUBIES-WEBHOOK] Rejected — invalid signature, and no " +
+                    "RUBIES_WEBHOOK_HEADER_KEY/_VALUE configured as an alternative. " +
+                    "If Rubies' real webhooks don't send X-Rubies-Signature (their docs " +
+                    "don't describe any signing scheme), set those two env vars instead — " +
+                    "see WebhookService.rubiesWebhookHeaderKey.");
+            throw new SecurityException("Invalid Rubies webhook signature");
+        }
+    }
+
+    /** Timing-attack-resistant string comparison for shared-secret header values. */
+    private boolean constantTimeEquals(String a, String b) {
+        if (a == null || b == null) return false;
+        return MessageDigest.isEqual(
+                a.getBytes(StandardCharsets.UTF_8),
+                b.getBytes(StandardCharsets.UTF_8));
     }
 
     // ── Rubies event-type classifiers ─────────────────────────────────────────

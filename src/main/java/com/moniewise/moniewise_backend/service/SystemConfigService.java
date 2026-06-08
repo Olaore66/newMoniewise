@@ -48,6 +48,16 @@ public class SystemConfigService {
     /** Display name for Moniewise's Rubies revenue wallet (used in narration). */
     public static final String RUBIES_REVENUE_ACCOUNT_NAME   = "rubies.revenue.account.name";
 
+    /**
+     * NOTE: The Rubies webhook auth header pair ("Live Header Key"/"Live
+     * Header Value") is intentionally NOT a system_config entry — secrets
+     * belong in environment variables, not DB rows readable through a
+     * generic admin-config endpoint. See {@code RUBIES_WEBHOOK_HEADER_KEY}
+     * / {@code RUBIES_WEBHOOK_HEADER_VALUE} env vars, wired via {@code @Value}
+     * directly on {@code WebhookService} (mirrors {@code RUBIES_WEBHOOK_SECRET}
+     * / {@code RUBIES_API_KEY} on {@link RubiesGateway}).
+     */
+
     /** Tier 1 transfer upper bound (NGN) — transfers ≤ this value use tier1 fee */
     public static final String MARKUP_TIER1_MAX      = "transfer.markup.tier1.max_amount";
     /** Markup fee applied to tier 1 transfers (NGN) */
@@ -93,6 +103,26 @@ public class SystemConfigService {
     public static final String PREMIUM_MONTHLY_PRICE = "premium.monthly.price";
     /** Comma-separated PremiumFeature values included in premium plan */
     public static final String PREMIUM_FEATURES      = "premium.features";
+
+    // ── Payeelord VAS (airtime & data) ─────────────────────────────────────────
+    /**
+     * Wholesale discount Payeelord grants on airtime — e.g. {@code 0.975} means
+     * Payeelord charges our float 97.5% of face value (a 2.5% wholesale discount).
+     * We pass airtime to users at face value, so {@code costAmount = amount × this}
+     * and the margin is simply {@code amount − costAmount}. Seeded to "0.975".
+     */
+    public static final String PAYEELORD_AIRTIME_DISCOUNT_RATE = "payeelord.airtime.discount_rate";
+    /**
+     * Optional flat markup ON TOP of face value for airtime (NGN). Defaults to 0
+     * (we currently sell airtime at face value and keep only the wholesale-discount
+     * margin — see {@link #PAYEELORD_AIRTIME_DISCOUNT_RATE}). Admins can raise this
+     * later without a code change.
+     */
+    public static final String PAYEELORD_AIRTIME_MARKUP_AMOUNT = "payeelord.airtime.markup_amount";
+    /** Payeelord API base URL — runtime-overridable without redeploying. */
+    public static final String PAYEELORD_API_BASE_URL = "payeelord.api.base_url";
+    /** Master switch for the periodic data-plan catalog sync job. Default: false (off until verified). */
+    public static final String PAYEELORD_CATALOG_SYNC_ENABLED = "payeelord.catalog.sync.enabled";
 
     // ──────────────────────────────────────────────────────────────────────────
 

@@ -353,7 +353,12 @@ public class RubiesGateway implements PaymentGateway {
 
             // "00" = success, "09"/"90"/"99" = pending — both are acceptable outcomes here.
             // The caller/webhook handler will finalize on pending.
-            String sessionId = body.getData() != null ? body.getData().getSessionId() : reference;
+            // NOTE: FundTransferResponse is FLAT per the official Rubies production schema
+            // (no "data" wrapper) — read sessionId directly off the body, falling back to
+            // our locally-generated reference only if Rubies didn't echo one back.
+            String sessionId = (body.getSessionId() != null && !body.getSessionId().isBlank())
+                    ? body.getSessionId()
+                    : reference;
             logger.info("[Rubies] Fund transfer {}: ref={} sessionId={}",
                     body.isSuccess() ? "SUCCESS" : "PENDING", reference, sessionId);
 
