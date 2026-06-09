@@ -458,17 +458,54 @@ public class AiInsightService {
     private List<ActionCandidate> rankCandidates(DashboardActionContext context) {
         List<ActionCandidate> candidates = new ArrayList<>();
 
-        // Fund-wallet nudge fires for ALL users with zero balance — new users
-        // who haven't funded yet need this step before anything else makes sense.
-        if (context.walletBalance.compareTo(BigDecimal.ZERO) <= 0) {
-            String fundTitle  = context.hasBudgetHistory
-                    ? "Boss, your wallet is empty 👀"
-                    : "Step 1: fund your wallet first 💰";
-            String fundMsg    = context.hasBudgetHistory
-                    ? "Fund your wallet so your budget can actually do something. No money in = no plan running."
-                    : "Your wallet is empty. Add money using your unique account number — budgets, envelopes and smart spending all unlock the moment your first kobo lands.";
-            candidates.add(baseCandidate(fundTitle, fundMsg, "Fund wallet", "fund_wallet", "high",
-                    "Wallet balance is zero — the user cannot run a budget until the wallet is funded.", 1000));
+        // ── Fund-wallet nudge ─────────────────────────────────────────────────
+        // Only shown under two specific conditions (not every time balance hits 0):
+        //
+        //   1. Balance = 0 AND no active budget at all
+        //      → new user who hasn't started, OR user between budget cycles.
+        //      Nudging makes sense: there is nothing running that could be spending
+        //      the wallet balance anyway.
+        //
+        //   2. Balance = 0 AND an active budget is ending within 7 days
+        //      → user should top up now so they're ready for the next cycle.
+        //
+        // If the user has a healthy active budget with time left AND their wallet
+        // happens to be 0, we stay quiet — their money is already in envelopes and
+        // they don't need us nagging them about it.
+        final boolean noActiveBudget  = context.activeBudget == null;
+        final boolean budgetEndingSoon = context.activeBudget != null
+                && context.daysUntilActiveBudgetEnds >= 0
+                && context.daysUntilActiveBudgetEnds <= 7;
+
+        if (context.walletBalance.compareTo(BigDecimal.ZERO) <= 0
+                && (noActiveBudget || budgetEndingSoon)) {
+
+            final String fundTitle;
+            final String fundMsg;
+            final String fundReason;
+
+            if (budgetEndingSoon) {
+                String daysText = context.daysUntilActiveBudgetEnds == 0
+                        ? "today"
+                        : "in " + context.daysUntilActiveBudgetEnds + " day(s)";
+                fundTitle = context.activeBudget.getName() + " ends " + daysText + " — wallet's empty 👀";
+                fundMsg   = "Your current budget closes " + daysText + " and your wallet is at zero. "
+                        + "Top up now so you're set for the next cycle without any gap.";
+                fundReason = "Active budget ending within 7 days and wallet balance is zero.";
+            } else if (!context.hasBudgetHistory) {
+                fundTitle  = "Step 1: fund your wallet first 💰";
+                fundMsg    = "Your wallet is empty. Add money using your unique account number — "
+                        + "budgets, envelopes and smart spending all unlock the moment your first kobo lands.";
+                fundReason = "Brand new user: no budget history and wallet is empty.";
+            } else {
+                fundTitle  = "Your wallet needs a top-up 👀";
+                fundMsg    = "No active budget is running and your wallet is at zero. "
+                        + "Fund your wallet so you can kick off a fresh budget cycle.";
+                fundReason = "No active budget and wallet balance is zero (between cycles).";
+            }
+
+            candidates.add(baseCandidate(fundTitle, fundMsg, "Fund wallet",
+                    "fund_wallet", "high", fundReason, 1000));
         }
 
         List<ActionCandidate> spendableEnvelopeCandidates = buildSpendableEnvelopeCandidates(context.activeBudgets);

@@ -1292,29 +1292,57 @@ public class WalletService {
             BigDecimal feeAmount,
             String fromWalletRef,
             String fromWalletName,
-            String originalRef) {
+            String originalRef,
+            Long userId) {
 
         if (feeAmount == null || feeAmount.compareTo(BigDecimal.ZERO) <= 0) return;
         if (fromWalletRef == null || fromWalletRef.isBlank()) return;
 
+        // ── Resolve revenue account: DB wallet record is primary, system_config is fallback ──
+        // After POST /admin/rubies/register-revenue-wallet (or setup-revenue-wallet), both
+        // the DB wallet's providerWalletRef and the system_config key hold the same number.
+        // Checking the DB record first is slightly more reliable and avoids a Redis round-trip.
         String revenueAccountNumber = null;
         String revenueAccountName   = "Moniewise Revenue";
         try {
-            revenueAccountNumber = systemConfigService.getString(
+            // Primary: revenue wallet DB record's providerWalletRef
+            Wallet revenueWallet = walletRepository.findByRevenueWalletTrue().orElse(null);
+            if (revenueWallet != null
+                    && revenueWallet.getProviderWalletRef() != null
+                    && !revenueWallet.getProviderWalletRef().isBlank()) {
+                revenueAccountNumber = revenueWallet.getProviderWalletRef();
+                if (revenueWallet.getAccountNumber() != null
+                        && !revenueWallet.getAccountNumber().isBlank()) {
+                    // use the wallet's account display name if set via providerMetadata / bankName
+                    revenueAccountName = "Moniewise Revenue";   // overridden below from system_config if available
+                }
+                logger.debug("[Rubies-Fee] Revenue account resolved from DB wallet record: acct={}",
+                        revenueAccountNumber);
+            }
+
+            // Fallback: system_config (also used to pick up the display name regardless)
+            String cfgNumber = systemConfigService.getString(
                     SystemConfigService.RUBIES_REVENUE_ACCOUNT_NUMBER);
-            String configuredName = systemConfigService.getString(
+            String cfgName   = systemConfigService.getString(
                     SystemConfigService.RUBIES_REVENUE_ACCOUNT_NAME);
-            if (configuredName != null && !configuredName.isBlank()) {
-                revenueAccountName = configuredName;
+
+            if (revenueAccountNumber == null || revenueAccountNumber.isBlank()) {
+                // DB wallet not linked yet — use system_config
+                revenueAccountNumber = cfgNumber;
+                logger.debug("[Rubies-Fee] Revenue account resolved from system_config: acct={}",
+                        revenueAccountNumber);
+            }
+            if (cfgName != null && !cfgName.isBlank()) {
+                revenueAccountName = cfgName;
             }
         } catch (Exception e) {
-            logger.warn("[Rubies-Fee] Could not read revenue account config: {}", e.getMessage());
+            logger.warn("[Rubies-Fee] Could not resolve revenue account: {}", e.getMessage());
         }
 
         if (revenueAccountNumber == null || revenueAccountNumber.isBlank()) {
-            logger.warn("[Rubies-Fee] rubies.revenue.account.number not configured — " +
+            logger.warn("[Rubies-Fee] Revenue wallet not configured — " +
                     "markup fee ₦{} for ref={} tracked internally only. " +
-                    "Set via PUT /admin/config/rubies.revenue.account.number",
+                    "Register via POST /admin/rubies/register-revenue-wallet",
                     feeAmount, originalRef);
             return;
         }
@@ -1322,8 +1350,35 @@ public class WalletService {
         final String revRef     = "REV-" + originalRef;
         final String revAccount = revenueAccountNumber;
         final String revName    = revenueAccountName;
+        final Long   revUserId  = userId;
 
         CompletableFuture.runAsync(() -> {
+
+            // ── 1. Write PENDING transaction log (our DB record of this Rubies P2P) ──
+            // Written first so the record exists even if the Rubies call hangs or
+            // the JVM crashes before we get a chance to update to COMPLETED.
+            // Runs in its own transaction (SimpleJpaRepository.save is @Transactional).
+            TransactionLog feeLog = TransactionLog.builder()
+                    .userId(revUserId)
+                    .reference(revRef)
+                    .amount(feeAmount)
+                    .transactionType(TransactionType.MARKUP_FEE_COLLECTION)
+                    .status(TransactionStatus.PENDING)
+                    .externalAccountNumber(revAccount)
+                    .externalAccountName(revName)
+                    .externalBankName("Rubies MFB")
+                    .providerName(RubiesGateway.PROVIDER_NAME)
+                    .description("Markup fee ₦" + feeAmount + " collected via Rubies P2P for " + originalRef)
+                    .createdAt(LocalDateTime.now())
+                    .build();
+            try {
+                transactionLogRepository.save(feeLog);
+            } catch (Exception ex) {
+                logger.warn("[Rubies-Fee] Could not write PENDING fee log for ref={}: {}",
+                        revRef, ex.getMessage());
+            }
+
+            // ── 2. Fire Rubies-to-Rubies P2P ─────────────────────────────────────
             try {
                 PaymentGateway rubies = paymentGatewayResolver
                         .resolveByProviderName(RubiesGateway.PROVIDER_NAME);
@@ -1338,11 +1393,24 @@ public class WalletService {
                         revRef,
                         "Markup fee for " + originalRef
                 );
-                logger.info("[Rubies-Fee] Markup fee ₦{} transferred to revenue wallet for ref={}",
-                        feeAmount, originalRef);
+
+                // ── 3. Update log to COMPLETED ────────────────────────────────────
+                transactionLogRepository.findByReference(revRef).ifPresent(log -> {
+                    log.setStatus(TransactionStatus.COMPLETED);
+                    transactionLogRepository.save(log);
+                });
+                logger.info("[Rubies-Fee] ₦{} markup fee transferred to revenue wallet. ref={}",
+                        feeAmount, revRef);
+
             } catch (Exception e) {
-                logger.error("[Rubies-Fee] Failed to transfer markup fee ₦{} to revenue wallet for ref={}: {}",
-                        feeAmount, originalRef, e.getMessage());
+                // ── 4. Update log to FAILED ───────────────────────────────────────
+                transactionLogRepository.findByReference(revRef).ifPresent(log -> {
+                    log.setStatus(TransactionStatus.FAILED);
+                    log.setDescription(log.getDescription() + " | FAILED: " + e.getMessage());
+                    transactionLogRepository.save(log);
+                });
+                logger.error("[Rubies-Fee] Failed to transfer ₦{} markup fee for ref={}: {}",
+                        feeAmount, revRef, e.getMessage());
             }
         });
     }
@@ -1726,7 +1794,8 @@ public class WalletService {
                                     markupFee,
                                     userWallet.getProviderWalletRef(),
                                     fromName,
-                                    withdrawal.getClientReference()
+                                    withdrawal.getClientReference(),
+                                    withdrawal.getUserId()
                             );
                         }
                     });

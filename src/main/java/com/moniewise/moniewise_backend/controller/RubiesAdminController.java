@@ -1,14 +1,18 @@
 package com.moniewise.moniewise_backend.controller;
 
+import com.moniewise.moniewise_backend.entity.Wallet;
 import com.moniewise.moniewise_backend.psp.rubies.RubiesGateway;
+import com.moniewise.moniewise_backend.repository.WalletRepository;
 import com.moniewise.moniewise_backend.service.SystemConfigService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.LocalDateTime;
 import java.util.Map;
 
 /**
@@ -32,10 +36,14 @@ public class RubiesAdminController {
 
     private final RubiesGateway rubiesGateway;
     private final SystemConfigService systemConfig;
+    private final WalletRepository walletRepository;
 
-    public RubiesAdminController(RubiesGateway rubiesGateway, SystemConfigService systemConfig) {
-        this.rubiesGateway  = rubiesGateway;
-        this.systemConfig   = systemConfig;
+    public RubiesAdminController(RubiesGateway rubiesGateway,
+                                 SystemConfigService systemConfig,
+                                 WalletRepository walletRepository) {
+        this.rubiesGateway    = rubiesGateway;
+        this.systemConfig     = systemConfig;
+        this.walletRepository = walletRepository;
     }
 
     /**
@@ -164,11 +172,15 @@ public class RubiesAdminController {
                     accountNumber,
                     "Moniewise Rubies revenue wallet — auto-created via admin API"
             );
+            String savedName = accountName != null ? accountName : displayName;
             systemConfig.set(
                     SystemConfigService.RUBIES_REVENUE_ACCOUNT_NAME,
-                    accountName != null ? accountName : displayName,
+                    savedName,
                     "Display name for Moniewise Rubies revenue wallet"
             );
+
+            // Also link the DB revenue wallet record so it appears in wallet queries.
+            linkRevenueWalletRecord(accountNumber, savedName);
 
             logger.info("[Admin] Rubies revenue wallet created and saved: acct={} name={}",
                     accountNumber, accountName);
@@ -194,6 +206,81 @@ public class RubiesAdminController {
     }
 
     /**
+     * POST /admin/rubies/register-revenue-wallet
+     *
+     * <p>Links Moniewise's <em>existing</em> Rubies MFB business account (the one
+     * created when you signed up on the Rubies dashboard) to this server's DB and
+     * system_config — <strong>no new wallet is created on Rubies</strong>.
+     *
+     * <p>Use this instead of {@code setup-revenue-wallet} when you already have a
+     * Rubies account and just need to tell the backend where to route the markup fee.
+     *
+     * <p>Request body:
+     * <pre>
+     * {
+     *   "accountNumber": "7012345678",              ← your existing Rubies account number
+     *   "accountName":   "MONIEWISE TECHNOLOGIES"   ← optional display name
+     * }
+     * </pre>
+     *
+     * <p>Effect:
+     * <ol>
+     *   <li>Saves the account number to {@code system_config} — the fee-routing logic
+     *       picks this up within 5 seconds (Redis TTL).</li>
+     *   <li>Sets {@code providerWalletRef} on the internal revenue-wallet DB record
+     *       so the wallet is visible in admin queries and reconciliation runs.</li>
+     * </ol>
+     *
+     * <p>This endpoint is idempotent — calling it again with the same number is safe.
+     */
+    @PostMapping("/register-revenue-wallet")
+    @Transactional
+    public synchronized ResponseEntity<?> registerRevenueWallet(@RequestBody Map<String, String> body) {
+
+        String accountNumber = body.get("accountNumber");
+        String accountName   = body.getOrDefault("accountName", "MONIEWISE TECHNOLOGIES");
+
+        if (isBlank(accountNumber)) {
+            return ResponseEntity.badRequest().body(Map.of(
+                    "status", false,
+                    "error",  "accountNumber is required."
+            ));
+        }
+
+        // Persist to system_config (evicts Redis cache immediately)
+        systemConfig.set(
+                SystemConfigService.RUBIES_REVENUE_ACCOUNT_NUMBER,
+                accountNumber,
+                "Moniewise Rubies revenue wallet — registered via admin API (existing account)"
+        );
+        systemConfig.set(
+                SystemConfigService.RUBIES_REVENUE_ACCOUNT_NAME,
+                accountName,
+                "Display name for Moniewise Rubies revenue wallet"
+        );
+
+        // Link the DB revenue wallet record
+        boolean dbLinked = linkRevenueWalletRecord(accountNumber, accountName);
+
+        logger.info("[Admin] Existing Rubies revenue wallet registered: acct={} name={} dbLinked={}",
+                accountNumber, accountName, dbLinked);
+
+        return ResponseEntity.ok(Map.of(
+                "status",        true,
+                "accountNumber", accountNumber,
+                "accountName",   accountName,
+                "bank",          "Rubies MFB",
+                "bankCode",      "090175",
+                "dbLinked",      dbLinked,
+                "message",       "Revenue wallet registered successfully. " +
+                                 "All future markup fees will route here. " +
+                                 (dbLinked
+                                  ? "DB revenue wallet record updated."
+                                  : "Note: no DB revenue wallet record found — system_config updated only.")
+        ));
+    }
+
+    /**
      * DELETE /admin/rubies/revenue-wallet
      *
      * <p>Clears the configured revenue wallet from system_config. Use this if you need
@@ -216,6 +303,38 @@ public class RubiesAdminController {
                 "status",  true,
                 "message", "Revenue wallet cleared. Fees will track internally until re-configured."
         ));
+    }
+
+    /**
+     * Finds the internal revenue-wallet DB record (flagged {@code is_revenue_wallet = true})
+     * and sets its {@code providerWalletRef} and {@code accountNumber} to the given
+     * Rubies account number so it appears in admin wallet queries and reconciliation.
+     *
+     * <p>This does NOT create a new wallet — it only updates the existing revenue-wallet
+     * record that was seeded at platform setup time.
+     *
+     * @return {@code true} if the record was found and updated; {@code false} if no
+     *         revenue-wallet record exists yet (system_config still gets updated).
+     */
+    private boolean linkRevenueWalletRecord(String accountNumber, String accountName) {
+        return walletRepository.findByRevenueWalletTrue()
+                .map(revenueWallet -> {
+                    revenueWallet.setProviderWalletRef(accountNumber);
+                    revenueWallet.setAccountNumber(accountNumber);
+                    revenueWallet.setProviderName(RubiesGateway.PROVIDER_NAME);
+                    revenueWallet.setBankName("Rubies MFB");
+                    revenueWallet.setUpdatedAt(LocalDateTime.now());
+                    walletRepository.save(revenueWallet);
+                    logger.info("[Admin] Revenue wallet DB record linked: walletId={} acct={}",
+                            revenueWallet.getId(), accountNumber);
+                    return true;
+                })
+                .orElseGet(() -> {
+                    logger.warn("[Admin] findByRevenueWalletTrue() returned empty — " +
+                            "system_config updated but DB wallet record not linked. " +
+                            "Ensure a wallet row exists with is_revenue_wallet=true.");
+                    return false;
+                });
     }
 
     private boolean isBlank(String s) {

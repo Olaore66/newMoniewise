@@ -26,6 +26,14 @@ public enum TransactionType {
     WALLET_WITHDRAWAL_FEE,
     SAVINGS_DEPOSIT,
     ENVELOPE_EXTERNAL_TRANSFER_FEE,
-    P2P_RUBIES_SETTLEMENT
+    P2P_RUBIES_SETTLEMENT,
+    /**
+     * Internal Rubies-to-Rubies P2P used to physically move the Moniewise markup fee
+     * from the user's Rubies wallet into the Moniewise revenue wallet.
+     * These transactions are platform-internal and must NOT appear in user-facing
+     * transaction history (do not add to the findUserVisibleTransactions type set).
+     * Reference pattern: REV-{originalTransferRef}
+     */
+    MARKUP_FEE_COLLECTION
 
     }

@@ -117,7 +117,8 @@ public class ExternalTransferSettlementService {
                                 fee,
                                 userWallet.getProviderWalletRef(),
                                 "Moniewise User",
-                                txn.getReference()
+                                txn.getReference(),
+                                txn.getUserId()
                         );
                     }
                 });
