@@ -234,30 +234,20 @@ public class RubiesGateway implements PaymentGateway {
         logger.debug("[Rubies] Name enquiry: bank={} acct={}", bankCode, accountNumber);
 
         try {
-//            ResponseEntity<RubiesNameEnquiryResponse> response =
-//                    restTemplate.exchange(url, HttpMethod.POST,
-//                            new HttpEntity<>(req, authHeaders()),
-//                            RubiesNameEnquiryResponse.class);
-            ResponseEntity<String> response =
+            ResponseEntity<RubiesNameEnquiryResponse> response =
                     restTemplate.exchange(
                             url,
                             HttpMethod.POST,
                             new HttpEntity<>(req, authHeaders()),
-                            String.class
+                            RubiesNameEnquiryResponse.class
                     );
 
-            System.out.println("ENQUIRY ACCOUNT NAME:::: " + response);
+            RubiesNameEnquiryResponse body = response.getBody();
+            if (body == null || !"00".equals(body.getResponseCode())) {
+                throw new RuntimeException("Rubies failed: " + body.getResponseMessage());
+            }
 
-
-//            String body = response.getBody();
-////            RubiesNameEnquiryResponse body = response.getBody();
-//            if (body == null || !body.isSuccess() || body.getData() == null) {
-//                String msg = body != null ? body.getResponseMessage() : "null response";
-//                throw new RuntimeException("Rubies name enquiry failed: " + msg);
-//            }
-//
-            return null;
-//            return body.getData().getAccountName();
+            return body.getAccountName();
 
         } catch (RuntimeException e) {
             throw e;
