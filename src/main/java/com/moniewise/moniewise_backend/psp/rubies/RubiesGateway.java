@@ -246,7 +246,7 @@ public class RubiesGateway implements PaymentGateway {
                             String.class
                     );
 
-            System.out.println("ENQUIRY ACCOUNT NAME:::: ");
+            System.out.println("ENQUIRY ACCOUNT NAME:::: " + response);
 
 
 //            String body = response.getBody();
