@@ -458,16 +458,17 @@ public class AiInsightService {
     private List<ActionCandidate> rankCandidates(DashboardActionContext context) {
         List<ActionCandidate> candidates = new ArrayList<>();
 
-        if (context.hasBudgetHistory && context.walletBalance.compareTo(BigDecimal.ZERO) <= 0) {
-            candidates.add(baseCandidate(
-                "Boss, your wallet is empty 👀",
-                "Fund your wallet so your budget can actually do something. No money in = no plan running.",
-                "Fund wallet",
-                "fund_wallet",
-                "high",
-                "Wallet balance is zero while the user still has budget history.",
-                1000
-            ));
+        // Fund-wallet nudge fires for ALL users with zero balance — new users
+        // who haven't funded yet need this step before anything else makes sense.
+        if (context.walletBalance.compareTo(BigDecimal.ZERO) <= 0) {
+            String fundTitle  = context.hasBudgetHistory
+                    ? "Boss, your wallet is empty 👀"
+                    : "Step 1: fund your wallet first 💰";
+            String fundMsg    = context.hasBudgetHistory
+                    ? "Fund your wallet so your budget can actually do something. No money in = no plan running."
+                    : "Your wallet is empty. Add money using your unique account number — budgets, envelopes and smart spending all unlock the moment your first kobo lands.";
+            candidates.add(baseCandidate(fundTitle, fundMsg, "Fund wallet", "fund_wallet", "high",
+                    "Wallet balance is zero — the user cannot run a budget until the wallet is funded.", 1000));
         }
 
         List<ActionCandidate> spendableEnvelopeCandidates = buildSpendableEnvelopeCandidates(context.activeBudgets);
@@ -523,6 +524,26 @@ public class AiInsightService {
                 "The user has budget history but no active budget right now.",
                 700
             ));
+        }
+
+        // User has active budget(s) but hasn't added any envelopes yet — step 3 of the journey.
+        // Uses context.allEnvelopes (aggregated across ALL active budgets) so we never trigger
+        // this for users who have envelopes in a different budget.
+        if (!context.activeBudgets.isEmpty() && context.allEnvelopes.isEmpty()) {
+            Budget firstActive = context.activeBudgets.get(0);
+            String budgetLabel = firstActive.getName() != null ? firstActive.getName() : "your budget";
+            ActionCandidate addEnvelopes = baseCandidate(
+                "Split " + budgetLabel + " into envelopes ✉️",
+                "Budget created — now give each naira a specific job. Add envelopes like Rent, Food, Transport, Savings so your money knows exactly where to go.",
+                "Add envelopes",
+                "review_active_budget",
+                "high",
+                "User has an active budget but no envelopes yet — they must add envelopes before spending can begin.",
+                850
+            );
+            addEnvelopes.budgetId = firstActive.getId();
+            addEnvelopes.budgetName = firstActive.getName();
+            candidates.add(addEnvelopes);
         }
 
         // set_account is irrelevant for Rubies — users enter destination at transfer time
