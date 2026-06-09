@@ -161,15 +161,24 @@ public class WalletService {
     @PostConstruct
     @Transactional
     public void ensureRevenueWalletExists() {
-        if (walletRepository.findByRevenueWalletTrue().isPresent()) {
-            return;
+        Optional<User> revenueUserOpt =
+                userRepository.findByEmail("revenue@moniewise.com");
+
+        if (revenueUserOpt.isPresent()) {
+            Optional<Wallet> existingWallet =
+                    walletRepository.findByUser(revenueUserOpt.get());
+
+            if (existingWallet.isPresent()) {
+                return;
+            }
         }
 
-        User revenueUser = userRepository.findById(revenueWalletUserId)
+        User revenueUser = userRepository.findByEmail("revenue@moniewise.com")
                 .orElseGet(() -> {
                     logger.info("Creating System Revenue User...");
                     User sysUser = new User();
-                    sysUser.setId(revenueWalletUserId);
+//                    sysUser.setId(revenueWalletUserId);
+
                     sysUser.setEmail("revenue@moniewise.com");
 
                     Map<String, Object> profile = new HashMap<>();

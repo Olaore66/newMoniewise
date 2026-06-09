@@ -167,4 +167,6 @@ List<UserSummary> searchUsers(@Param("query") String query, Pageable pageable);
             ORDER BY u.created_at ASC
             """, nativeQuery = true)
     List<User> findIncompleteSignups();
+
+    Optional<User> findByEmail(String email);
 }
