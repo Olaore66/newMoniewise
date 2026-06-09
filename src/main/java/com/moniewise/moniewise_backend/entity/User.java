@@ -70,7 +70,7 @@ public class User {
     private Map<String, Object> profileData;
 
     // please remember to change to true --- NOtE this is testing and we switching to prod soon
-    @Column(unique = false)
+    @Column(unique = true)
     private String bvn;
 
     @Column(nullable = false)

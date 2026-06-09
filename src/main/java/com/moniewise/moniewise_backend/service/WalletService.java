@@ -644,7 +644,7 @@ public class WalletService {
             return;
         }
 
-        User user = userRepository.findByEmail(email)
+        User user = userRepository.findFirstByEmailOrderByCreatedAtAsc(email)
                 .orElseThrow(() -> new RuntimeException("User not found: " + email));
 
         Wallet wallet = walletRepository.findByUser(user)

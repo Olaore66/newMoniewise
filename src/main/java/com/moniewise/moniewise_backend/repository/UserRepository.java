@@ -17,7 +17,11 @@ import java.util.Optional;
 
 @Repository
 public interface UserRepository extends JpaRepository<User, Long> {
-    Optional<User> findByEmail(String email);
+    // Returns the OLDEST user with this email — safe if duplicates somehow exist.
+    // Using findFirst avoids NonUniqueResultException which would otherwise crash
+    // every request for any user who has a duplicate row (e.g. from a retried signup).
+    Optional<User> findFirstByEmailOrderByCreatedAtAsc(String email);
+
     Optional<User> findByPhone(String phone);
     Optional<User> findByEmailOrPhone(String email, String phone);
 
@@ -25,8 +29,9 @@ public interface UserRepository extends JpaRepository<User, Long> {
     @Query("SELECT u FROM User u WHERE u.id = :id")
     Optional<User> findByIdForUpdate(@Param("id") Long id);
 
-    // Custom query to find ANY user (Active or Deleted)
-    @Query(value = "SELECT * FROM users WHERE email = :email", nativeQuery = true)
+    // Custom query to find ANY user (Active or Deleted) — uses LIMIT 1 so it
+    // never throws NonUniqueResultException even if a duplicate slipped through.
+    @Query(value = "SELECT * FROM users WHERE email = :email ORDER BY created_at ASC LIMIT 1", nativeQuery = true)
     Optional<User> findGlobalByEmail(@Param("email") String email);
 
 //     ✅ FIXED: Native Query (Bypasses Hibernate HQL parser errors)

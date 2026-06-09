@@ -69,7 +69,7 @@ public class MonnieCacheInvalidationService {
             return;
         }
 
-        Optional<User> user = userRepository.findByEmail(trimmed);
+        Optional<User> user = userRepository.findFirstByEmailOrderByCreatedAtAsc(trimmed);
         if (user.isPresent()) {
             evictEmail(user.get().getEmail());
         } else {

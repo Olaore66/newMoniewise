@@ -41,7 +41,7 @@ public class KycService {
     public KycProfileResponseDto createOrUpdateProfile(Long userId, KycProfileRequestDto request) {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new IllegalArgumentException("User not found"));
-        Optional<KycProfile> existing = kycProfileRepository.findByUserId(userId);
+        Optional<KycProfile> existing = kycProfileRepository.findFirstByUserIdOrderByCreatedAtAsc(userId);
         KycProfile profile = existing.orElse(new KycProfile());
         profile.setUser(user);
         profile.setBvn(request.getBvn());
@@ -126,22 +126,37 @@ public class KycService {
     public BvnVerificationResultDto verifyBvnWithProvider(Long userId, String bvn) {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new IllegalArgumentException("User not found: " + userId));
-//
-//        // Idempotency guard — avoid redundant API calls if already VERIFIED
-//        Optional<KycProfile> existing = kycProfileRepository.findByUserId(userId);
-//        if (existing.isPresent() && existing.get().isBvnVerified()
-//                && KycProfile.KycStatus.VERIFIED.equals(existing.get().getKycStatus())) {
-//            log.info("[KYC] BVN already verified for userId={}, skipping SecureWave call", userId);
-//            return buildDtoFromProfile(existing.get());
-//        }
+
+        // ── Guard 1: idempotency — already fully verified for THIS user ──────────
+        // Skip the SecureWave round-trip and just return what we already know.
+        // This also prevents a second call from inserting a duplicate kyc_profiles row.
+        Optional<KycProfile> existing = kycProfileRepository.findFirstByUserIdOrderByCreatedAtAsc(userId);
+        if (existing.isPresent()
+                && Boolean.TRUE.equals(existing.get().isBvnVerified())
+                && KycProfile.KycStatus.VERIFIED.equals(existing.get().getKycStatus())) {
+            log.info("[KYC] BVN already verified for userId={} — returning cached result", userId);
+            BvnVerificationResultDto cached = buildDtoFromProfile(existing.get());
+            cached.setKycStatus(KycProfile.KycStatus.VERIFIED);
+            cached.setBvnVerified(true);
+            return cached;
+        }
+
+        // ── Guard 2: cross-user BVN uniqueness ───────────────────────────────────
+        // A BVN is a national ID — one person, one BVN. If any OTHER user has already
+        // verified this exact BVN, reject immediately (no SecureWave call, no new row).
+        if (kycProfileRepository.existsByBvnAndUserIdNot(bvn, userId)) {
+            log.warn("[KYC] BVN {} is already registered to a different user — rejecting for userId={}", bvn, userId);
+            throw new IllegalArgumentException(
+                    "This BVN is already linked to another account. " +
+                    "If you believe this is an error, please contact support.");
+        }
 
         // Delegate to SecureWave — email + phone come from the user's record
         BvnVerificationResultDto result = secureWavePaymentProvider.verifyBvn(
                 user.getEmail(), user.getPhone(), bvn);
 
-        // Persist to kyc_profiles
-//        KycProfile profile = existing.orElse(new KycProfile());
-        KycProfile profile = new KycProfile();
+        // ── Upsert: update existing row if one exists, never insert a second one ──
+        KycProfile profile = existing.orElse(new KycProfile());
 
         profile.setUser(user);
         profile.setBvn(bvn);
@@ -191,18 +206,18 @@ public class KycService {
     // ── Other helpers ─────────────────────────────────────────────────────────
 
     public Optional<KycProfileResponseDto> getProfile(Long userId) {
-        return kycProfileRepository.findByUserId(userId).map(this::mapToResponse);
+        return kycProfileRepository.findFirstByUserIdOrderByCreatedAtAsc(userId).map(this::mapToResponse);
     }
 
     public boolean isUserVerified(Long userId) {
-        return kycProfileRepository.findByUserId(userId)
+        return kycProfileRepository.findFirstByUserIdOrderByCreatedAtAsc(userId)
                 .map(profile -> profile.getKycStatus() == KycProfile.KycStatus.VERIFIED)
                 .orElse(false);
     }
 
     @Transactional
     public void markApproved(Long userId) {
-        kycProfileRepository.findByUserId(userId).ifPresent(profile -> {
+        kycProfileRepository.findFirstByUserIdOrderByCreatedAtAsc(userId).ifPresent(profile -> {
             profile.setKycStatus(KycProfile.KycStatus.VERIFIED);
             kycProfileRepository.save(profile);
         });
@@ -210,7 +225,7 @@ public class KycService {
 
     @Transactional
     public void markRejected(Long userId, String reason) {
-        kycProfileRepository.findByUserId(userId).ifPresent(profile -> {
+        kycProfileRepository.findFirstByUserIdOrderByCreatedAtAsc(userId).ifPresent(profile -> {
             profile.setKycStatus(KycProfile.KycStatus.REJECTED);
             kycProfileRepository.save(profile);
         });

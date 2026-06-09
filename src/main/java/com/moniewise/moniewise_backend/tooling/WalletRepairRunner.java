@@ -109,7 +109,7 @@ public class WalletRepairRunner implements ApplicationRunner {
 
     private List<User> resolveUsersToInspect() {
         if (!isBlank(targetEmail)) {
-            Optional<User> targetUser = userRepository.findByEmail(targetEmail.trim());
+            Optional<User> targetUser = userRepository.findFirstByEmailOrderByCreatedAtAsc(targetEmail.trim());
             return targetUser.map(List::of).orElseGet(List::of);
         }
 

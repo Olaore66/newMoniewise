@@ -61,7 +61,7 @@ public class PasswordResetService {
         PasswordResetToken resetToken = findValidToken(email, token)
                 .orElseThrow(() -> new IllegalArgumentException("Invalid or expired OTP"));
 
-        userRepository.findByEmail(resetToken.getEmail()).ifPresent(user -> {
+        userRepository.findFirstByEmailOrderByCreatedAtAsc(resetToken.getEmail()).ifPresent(user -> {
             user.setPassword(passwordEncoder.encode(newPassword));
             userRepository.save(user);
         });

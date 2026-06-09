@@ -165,7 +165,7 @@ public class NotificationController {
 
         String username = userDetails.getUsername();
 
-        return userRepository.findByEmail(username)
+        return userRepository.findFirstByEmailOrderByCreatedAtAsc(username)
                 .map(user -> user.getId())
                 .orElseThrow(() -> new IllegalArgumentException("User not found for email: " + username));
     }

@@ -288,7 +288,7 @@ public class AuthController {
         String throttleKey = abuseProtectionService.buildKey(email, httpRequest.getRemoteAddr());
         abuseProtectionService.checkAllowed(AbuseProtectionService.FORGOT_PASSWORD, throttleKey);
         try {
-            Optional<User> userOpt = userRepository.findByEmail(email);
+            Optional<User> userOpt = userRepository.findFirstByEmailOrderByCreatedAtAsc(email);
             if (userOpt.isPresent() && !userOpt.get().isDeleted()) {
                 User user = userOpt.get();
                 PasswordResetToken token = resetService.createResetToken(email);

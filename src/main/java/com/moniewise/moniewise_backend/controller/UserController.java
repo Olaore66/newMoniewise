@@ -42,7 +42,7 @@ public class UserController {
     @GetMapping("/me")
     public ResponseEntity<UserResponse> getCurrentUser() {
         String email = SecurityContextHolder.getContext().getAuthentication().getName();
-        User user = userRepository.findByEmail(email).orElseThrow(() -> new RuntimeException("User not found"));
+        User user = userRepository.findFirstByEmailOrderByCreatedAtAsc(email).orElseThrow(() -> new RuntimeException("User not found"));
         Wallet wallet = walletRepository.findByUser(user).orElse(null);
         return ResponseEntity.ok(new UserResponse(user, wallet));
     }
@@ -78,7 +78,7 @@ public class UserController {
     public ResponseEntity<OtpResponse> generateOtp(@Valid @RequestBody OtpGenerateRequest request, HttpServletRequest httpRequest) {
         String throttleKey = abuseProtectionService.buildKey(request.getEmailOrPhone(), httpRequest.getRemoteAddr());
         abuseProtectionService.checkAllowed(AbuseProtectionService.OTP_GENERATE, throttleKey);
-        Optional<User> userOpt = userRepository.findByEmail(request.getEmailOrPhone()).or(() -> userRepository.findByPhone(request.getEmailOrPhone()));
+        Optional<User> userOpt = userRepository.findFirstByEmailOrderByCreatedAtAsc(request.getEmailOrPhone()).or(() -> userRepository.findByPhone(request.getEmailOrPhone()));
         if (userOpt.isPresent()) {
             otpService.generateOtp(userOpt.get().getId());
         }
@@ -90,7 +90,7 @@ public class UserController {
     public ResponseEntity<?> verifyOtp(@Valid @RequestBody OtpVerifyRequest request, HttpServletRequest httpRequest) {
         String throttleKey = abuseProtectionService.buildKey(request.getEmailOrPhone(), httpRequest.getRemoteAddr());
         abuseProtectionService.checkAllowed(AbuseProtectionService.OTP_VERIFY, throttleKey);
-        Optional<User> userOpt = userRepository.findByEmail(request.getEmailOrPhone()).or(() -> userRepository.findByPhone(request.getEmailOrPhone()));
+        Optional<User> userOpt = userRepository.findFirstByEmailOrderByCreatedAtAsc(request.getEmailOrPhone()).or(() -> userRepository.findByPhone(request.getEmailOrPhone()));
         if (userOpt.isEmpty() || !otpService.verifyOtp(userOpt.get().getId(), request.getOtpCode())) {
             abuseProtectionService.recordFailure(AbuseProtectionService.OTP_VERIFY, throttleKey);
             return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of(

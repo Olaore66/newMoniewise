@@ -18,7 +18,7 @@ public class CustomUserDetailsService implements UserDetailsService {
 
     @Override
     public UserDetails loadUserByUsername(String email) throws UsernameNotFoundException {
-        User user = userRepository.findByEmail(email)
+        User user = userRepository.findFirstByEmailOrderByCreatedAtAsc(email)
                 .orElseThrow(() -> new UsernameNotFoundException("User not found: " + email));
         // Build the Spring Security authority from the User's actual Role enum.
         // Spring's hasRole('ADMIN') internally checks for the "ROLE_ADMIN" authority,

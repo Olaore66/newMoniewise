@@ -30,7 +30,6 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
-import java.net.URL;
 import java.security.SecureRandom;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -241,7 +240,7 @@ public class UserService implements UserDetailsService {
         }
 
         // 3. One final duplicate guard (handles race conditions) ──────────────────
-        if (userRepository.findByEmail(email).isPresent()) {
+        if (userRepository.findFirstByEmailOrderByCreatedAtAsc(email).isPresent()) {
             registrationCacheService.delete(email);
             throw new IllegalArgumentException("Email already registered: " + email);
         }
@@ -568,7 +567,7 @@ public class UserService implements UserDetailsService {
 
 
     public User login(String emailOrPhone, String password) {
-        User user = userRepository.findByEmail(emailOrPhone)
+        User user = userRepository.findFirstByEmailOrderByCreatedAtAsc(emailOrPhone)
                 .orElseGet(() -> userRepository.findByPhone(emailOrPhone)
                         .orElseThrow(() -> new RuntimeException("User not found")));
 
@@ -755,7 +754,7 @@ public class UserService implements UserDetailsService {
 
         final Map<String, Object> finalProfileData = profileData;
 
-        kycProfileRepository.findByUserId(user.getId()).ifPresent(kyc -> {
+        kycProfileRepository.findFirstByUserIdOrderByCreatedAtAsc(user.getId()).ifPresent(kyc -> {
             if (kyc.getDateOfBirth() != null) {
                 finalProfileData.put("dateOfBirth", kyc.getDateOfBirth().toString());
             }
@@ -912,7 +911,7 @@ public class UserService implements UserDetailsService {
 //        return savedUser;
 //    }
     public User findByEmail(String email) {
-        User user = userRepository.findByEmail(email)
+        User user = userRepository.findFirstByEmailOrderByCreatedAtAsc(email)
                 .orElseThrow(() -> new RuntimeException("User not found with email: " + email));
 
         if (user.isDeleted()) {
@@ -928,7 +927,7 @@ public class UserService implements UserDetailsService {
 
     @Override
     public UserDetails loadUserByUsername(String username) throws UsernameNotFoundException {
-        User user = userRepository.findByEmail(username)
+        User user = userRepository.findFirstByEmailOrderByCreatedAtAsc(username)
                 .orElseThrow(() -> new UsernameNotFoundException("User not found with email: " + username));
 
         // 2. ðŸ›¡ï¸ CRITICAL FIX: Handle NULL passwords
@@ -974,9 +973,9 @@ public class UserService implements UserDetailsService {
 
         // 3. Get user by email stored in the token
         String email = resetToken.getEmail();
-//        Optional<User> userOpt = userRepository.findByEmail(email);
+//        Optional<User> userOpt = userRepository.findFirstByEmailOrderByCreatedAtAsc(email);
         // Correct usage
-        Optional<User> userOpt = userRepository.findByEmail(resetToken.getEmail());
+        Optional<User> userOpt = userRepository.findFirstByEmailOrderByCreatedAtAsc(resetToken.getEmail());
 
 
         if (userOpt.isEmpty()) {
