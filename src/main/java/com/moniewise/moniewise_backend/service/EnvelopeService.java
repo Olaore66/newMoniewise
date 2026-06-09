@@ -833,19 +833,9 @@ public class EnvelopeService {
         BigDecimal periodRemaining = source.getRemainingAmount();
         if (totalDebit.compareTo(periodRemaining) > 0) {
             BigDecimal maxSendable = periodRemaining.subtract(totalFee).max(BigDecimal.ZERO);
-            if (isRubies) {
-                throw new IllegalStateException(String.format(
-                        "Insufficient balance. Your envelope allows ₦%,.2f for this period. " +
-                        "Bank charge ₦%,.2f + Moniewise fee ₦%,.2f = ₦%,.2f total charges. " +
-                        "The most you can send right now is ₦%,.2f. Please enter a lower amount.",
-                        periodRemaining, bankCharge, markupFee, totalFee, maxSendable));
-            } else {
-                throw new IllegalStateException(String.format(
-                        "Insufficient balance. Your envelope allows ₦%,.2f for this period. " +
-                        "The ₦%,.2f transfer fee means the most you can send right now is ₦%,.2f. " +
-                        "Please reduce your transfer amount.",
-                        periodRemaining, fee, maxSendable));
-            }
+            throw new IllegalStateException(String.format(
+                    "Insufficient balance. Tranx fee ₦%,.2f · Max sendable ₦%,.2f.",
+                    totalFee, maxSendable));
         }
 
         // Vault balance check — physical funds in the envelope minus what's already held.
@@ -855,18 +845,9 @@ public class EnvelopeService {
 
         if (totalDebit.compareTo(availableVaultBalance) > 0) {
             BigDecimal maxSendable = availableVaultBalance.subtract(totalFee).max(BigDecimal.ZERO);
-            if (isRubies) {
-                throw new IllegalStateException(String.format(
-                        "Insufficient funds. Your envelope has ₦%,.2f available (after pending transfers). " +
-                        "Bank charge ₦%,.2f + Moniewise fee ₦%,.2f = ₦%,.2f total charges. " +
-                        "The most you can send is ₦%,.2f. Please enter a lower amount.",
-                        availableVaultBalance, bankCharge, markupFee, totalFee, maxSendable));
-            } else {
-                throw new IllegalStateException(String.format(
-                        "Insufficient funds. Your envelope has ₦%,.2f available (after pending transfers). " +
-                        "With the ₦%,.2f transfer fee, the most you can send is ₦%,.2f.",
-                        availableVaultBalance, fee, maxSendable));
-            }
+            throw new IllegalStateException(String.format(
+                    "Insufficient funds. Tranx fee ₦%,.2f · Max sendable ₦%,.2f.",
+                    totalFee, maxSendable));
         }
 //        String resolvedName = resolveExternalRecipientName(externalAccount, linkedWallet);
 //        if (resolvedName == null) {
@@ -1775,10 +1756,8 @@ public class EnvelopeService {
             if (totalDebit.compareTo(availableLimit) > 0) {
                 BigDecimal maxSendable = availableLimit.subtract(totalFee).max(BigDecimal.ZERO);
                 throw new IllegalStateException(String.format(
-                        "Insufficient balance. Your envelope allows ₦%,.2f for this period. " +
-                        "Bank charge ₦%,.2f + Moniewise fee ₦%,.2f = ₦%,.2f total charges. " +
-                        "The most you can send right now is ₦%,.2f. Please enter a lower amount.",
-                        availableLimit, bankCharge, markupFee, totalFee, maxSendable));
+                        "Insufficient balance. Tranx fee ₦%,.2f · Max sendable ₦%,.2f.",
+                        totalFee, maxSendable));
             }
 
             BigDecimal availableVaultBalance =
@@ -1788,10 +1767,8 @@ public class EnvelopeService {
             if (totalDebit.compareTo(availableVaultBalance) > 0) {
                 BigDecimal maxSendable = availableVaultBalance.subtract(totalFee).max(BigDecimal.ZERO);
                 throw new IllegalStateException(String.format(
-                        "Insufficient funds. Your envelope has ₦%,.2f available (after pending transfers). " +
-                        "Bank charge ₦%,.2f + Moniewise fee ₦%,.2f = ₦%,.2f total charges. " +
-                        "The most you can send is ₦%,.2f. Please enter a lower amount.",
-                        availableVaultBalance, bankCharge, markupFee, totalFee, maxSendable));
+                        "Insufficient funds. Tranx fee ₦%,.2f · Max sendable ₦%,.2f.",
+                        totalFee, maxSendable));
             }
 
             return new ExternalTransferQuoteResponse(

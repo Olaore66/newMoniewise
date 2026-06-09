@@ -58,15 +58,29 @@ public class SystemConfigService {
      * / {@code RUBIES_API_KEY} on {@link RubiesGateway}).
      */
 
-    /** Tier 1 transfer upper bound (NGN) — transfers ≤ this value use tier1 fee */
+    /**
+     * Flat Moniewise markup fee (NGN) applied uniformly to every external transfer,
+     * regardless of amount.  Default: ₦2.25.
+     *
+     * <p>The old per-tier keys below are kept for backward-compat (they exist in the DB)
+     * but are no longer read by {@link MarkupCalculatorService}.
+     */
+    public static final String MARKUP_FLAT_FEE       = "transfer.markup.flat_fee";
+
+    /** @deprecated Replaced by {@link #MARKUP_FLAT_FEE} — markup is now a flat fee */
+    @Deprecated
     public static final String MARKUP_TIER1_MAX      = "transfer.markup.tier1.max_amount";
-    /** Markup fee applied to tier 1 transfers (NGN) */
+    /** @deprecated Replaced by {@link #MARKUP_FLAT_FEE} */
+    @Deprecated
     public static final String MARKUP_TIER1_FEE      = "transfer.markup.tier1.fee";
-    /** Tier 2 transfer upper bound (NGN) — transfers ≤ this value use tier2 fee */
+    /** @deprecated Replaced by {@link #MARKUP_FLAT_FEE} */
+    @Deprecated
     public static final String MARKUP_TIER2_MAX      = "transfer.markup.tier2.max_amount";
-    /** Markup fee applied to tier 2 transfers (NGN) */
+    /** @deprecated Replaced by {@link #MARKUP_FLAT_FEE} */
+    @Deprecated
     public static final String MARKUP_TIER2_FEE      = "transfer.markup.tier2.fee";
-    /** Markup fee applied to tier 3 transfers (NGN — above tier2 max) */
+    /** @deprecated Replaced by {@link #MARKUP_FLAT_FEE} */
+    @Deprecated
     public static final String MARKUP_TIER3_FEE      = "transfer.markup.tier3.fee";
 
     // ── NIBSS NIP interbank transfer fee tiers (charged by Rubies at BaaS level) ───────────

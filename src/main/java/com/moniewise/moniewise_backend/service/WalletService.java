@@ -867,10 +867,8 @@ public class WalletService {
                         .max(BigDecimal.ZERO);
                 BigDecimal totalFee = nipFee.add(transferFee);
                 throw new IllegalArgumentException(String.format(
-                        "Insufficient balance. You have ₦%,.2f available. " +
-                        "Bank charge ₦%,.2f + Moniewise fee ₦%,.2f = ₦%,.2f total charges. " +
-                        "The most you can send is ₦%,.2f. Please enter a lower amount.",
-                        wallet.getBalance(), nipFee, transferFee, totalFee, maxSendable));
+                        "Insufficient balance. Tranx fee ₦%,.2f · Max sendable ₦%,.2f.",
+                        totalFee, maxSendable));
             }
             throw new IllegalArgumentException(insufficientWithdrawalBalanceMessage(totalDebit, transferFee));
         }
@@ -991,6 +989,16 @@ public class WalletService {
                         formatMoney(fee),
                         formatMoney(totalDebit))
         );
+    }
+
+    /**
+     * Convenience overload — resolves by userId without requiring the caller to hold a UserRepository.
+     * Falls back to "ACCOUNT HOLDER" if the user is not found.
+     */
+    public String resolveDisplayNameByUserId(Long userId) {
+        if (userId == null) return "ACCOUNT HOLDER";
+        User user = userRepository.findById(userId).orElse(null);
+        return user != null ? resolveDisplayName(user) : "ACCOUNT HOLDER";
     }
 
     /** Resolves the user's display name from BVN profile fields, falling back to email prefix. */
@@ -1340,9 +1348,28 @@ public class WalletService {
         }
 
         if (revenueAccountNumber == null || revenueAccountNumber.isBlank()) {
-            logger.warn("[Rubies-Fee] Revenue wallet not configured — " +
-                    "markup fee ₦{} for ref={} tracked internally only. " +
-                    "Register via POST /admin/rubies/register-revenue-wallet",
+            // Write a FAILED log so there is a DB record of every skipped collection —
+            // without this, the only evidence is a server-log line which admins may miss.
+            String skipRef = "REV-" + originalRef;
+            try {
+                TransactionLog skipLog = TransactionLog.builder()
+                        .userId(userId)
+                        .reference(skipRef)
+                        .amount(feeAmount)
+                        .transactionType(TransactionType.MARKUP_FEE_COLLECTION)
+                        .status(TransactionStatus.FAILED)
+                        .providerName(RubiesGateway.PROVIDER_NAME)
+                        .description("Markup fee collection SKIPPED — Rubies revenue account not configured. "
+                                + "Call POST /admin/rubies/register-revenue-wallet to fix.")
+                        .createdAt(LocalDateTime.now())
+                        .build();
+                transactionLogRepository.save(skipLog);
+            } catch (Exception ex) {
+                logger.warn("[Rubies-Fee] Could not write SKIPPED fee log for ref={}: {}", skipRef, ex.getMessage());
+            }
+            logger.error("[Rubies-Fee] *** Revenue account NOT CONFIGURED *** — " +
+                    "₦{} markup fee for ref={} was NOT transferred to Moniewise revenue wallet. " +
+                    "Register the account via POST /admin/rubies/register-revenue-wallet",
                     feeAmount, originalRef);
             return;
         }

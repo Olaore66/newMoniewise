@@ -9,15 +9,12 @@ import java.math.BigDecimal;
 /**
  * Calculates the Wisemonie markup fee charged to a user on every external transfer.
  *
- * <h3>Tier logic (all values read from {@code system_config} — never hardcoded)</h3>
- * <pre>
- *   amount ≤ tier1.max_amount   →  tier1.fee   (default ₦50)
- *   amount ≤ tier2.max_amount   →  tier2.fee   (default ₦75)
- *   amount > tier2.max_amount   →  tier3.fee   (default ₦120)
- * </pre>
+ * <h3>Fee model</h3>
+ * <p>A single <strong>flat fee</strong> applies to every transfer regardless of amount,
+ * read from {@code system_config} key {@code transfer.markup.flat_fee} (default ₦2.25).
  *
  * <p>Users on a premium plan with {@code UNLIMITED_TRANSFERS} pay zero markup.
- * The PSP cost (Rubies' own fee) is still borne by Wisemonie in that case.
+ * The PSP cost (Rubies' own NIP fee) is still borne by Wisemonie in that case.
  *
  * <p>The pre-confirmation screen should call {@link #buildBreakdown} and display
  * the result to the user before they confirm the transfer.
@@ -70,7 +67,7 @@ public class MarkupCalculatorService {
      * AND the Moniewise markup fee so the user sees the full cost up-front.
      *
      * <p>Frontend should display: {@code breakdown.displayText()}
-     * e.g. "Send ₦5,000.00 · Bank fee ₦10.75 · Moniewise fee ₦50.00 · Total ₦5,060.75"
+     * e.g. "Send ₦5,000.00 · Tranx fee ₦13.00 · Total ₦5,013.00"
      *
      * <p><strong>Revenue rule:</strong> only {@code markupFee} enters the Moniewise
      * revenue wallet. {@code bankCharge} goes to Rubies/NIBSS automatically — we
@@ -111,18 +108,11 @@ public class MarkupCalculatorService {
         return tier3Fee;
     }
 
-    // ── Tier resolution ───────────────────────────────────────────────────────
+    // ── Fee resolution ────────────────────────────────────────────────────────
 
+    /** Returns the flat markup fee — same value for every transfer amount. */
     private BigDecimal tierFee(BigDecimal amount) {
-        BigDecimal tier1Max = systemConfig.getBigDecimal(SystemConfigService.MARKUP_TIER1_MAX, new BigDecimal("5000"));
-        BigDecimal tier2Max = systemConfig.getBigDecimal(SystemConfigService.MARKUP_TIER2_MAX, new BigDecimal("50000"));
-        BigDecimal tier1Fee = systemConfig.getBigDecimal(SystemConfigService.MARKUP_TIER1_FEE, new BigDecimal("50"));
-        BigDecimal tier2Fee = systemConfig.getBigDecimal(SystemConfigService.MARKUP_TIER2_FEE, new BigDecimal("75"));
-        BigDecimal tier3Fee = systemConfig.getBigDecimal(SystemConfigService.MARKUP_TIER3_FEE, new BigDecimal("120"));
-
-        if (amount.compareTo(tier1Max) <= 0) return tier1Fee;
-        if (amount.compareTo(tier2Max) <= 0) return tier2Fee;
-        return tier3Fee;
+        return systemConfig.getBigDecimal(SystemConfigService.MARKUP_FLAT_FEE, new BigDecimal("2.25"));
     }
 
     // ── Value object ──────────────────────────────────────────────────────────
@@ -147,9 +137,14 @@ public class MarkupCalculatorService {
     ) {
         /** Human-readable summary for the pre-confirmation screen. */
         public String displayText() {
-            return String.format(
-                    "Send ₦%,.2f · Bank fee ₦%,.2f · Moniewise fee ₦%,.2f · Total ₦%,.2f",
-                    transferAmount, bankCharge, markupFee, totalFromEnvelope);
+            BigDecimal totalFee = bankCharge.add(markupFee);
+            if (totalFee.compareTo(BigDecimal.ZERO) > 0) {
+                return String.format(
+                        "Send ₦%,.2f · Tranx fee ₦%,.2f · Total ₦%,.2f",
+                        transferAmount, totalFee, totalFromEnvelope);
+            }
+            return String.format("Send ₦%,.2f · No fee · Total ₦%,.2f",
+                    transferAmount, totalFromEnvelope);
         }
     }
 }

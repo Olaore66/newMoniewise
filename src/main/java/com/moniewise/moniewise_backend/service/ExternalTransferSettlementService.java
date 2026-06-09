@@ -113,10 +113,14 @@ public class ExternalTransferSettlementService {
                 walletRepository.findByUserId(txn.getUserId()).ifPresent(userWallet -> {
                     if (userWallet.getProviderWalletRef() != null
                             && RubiesGateway.PROVIDER_NAME.equalsIgnoreCase(userWallet.getProviderName())) {
+                        // Resolve the actual Rubies-registered account holder name.
+                        // Rubies validates debitAccountName against BVN records —
+                        // using a hardcoded placeholder causes a name-mismatch rejection.
+                        String debitName = walletService.resolveDisplayNameByUserId(txn.getUserId());
                         walletService.collectRubiesMarkupFeeAsync(
                                 fee,
                                 userWallet.getProviderWalletRef(),
-                                "Moniewise User",
+                                debitName,
                                 txn.getReference(),
                                 txn.getUserId()
                         );
