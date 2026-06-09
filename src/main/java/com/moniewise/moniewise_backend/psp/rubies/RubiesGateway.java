@@ -239,7 +239,11 @@ public class RubiesGateway implements PaymentGateway {
                             new HttpEntity<>(req, authHeaders()),
                             RubiesNameEnquiryResponse.class);
 
-            System.out.println("THIS IS THE ACCOUNT NAME RESPONSE ENQUIRY  " + response.toString());
+            ObjectMapper mapper = new ObjectMapper();
+            System.out.println("THIS IS RESPONSE FOR NAME ENQUIRY: " +
+                            mapper.writerWithDefaultPrettyPrinter()
+                                    .writeValueAsString(response.getBody()));
+
 
             RubiesNameEnquiryResponse body = response.getBody();
 
