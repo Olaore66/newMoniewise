@@ -1,8 +1,12 @@
 package com.moniewise.moniewise_backend.controller;
 
+import com.moniewise.moniewise_backend.entity.TransactionLog;
 import com.moniewise.moniewise_backend.entity.Wallet;
+import com.moniewise.moniewise_backend.enums.TransactionStatus;
 import com.moniewise.moniewise_backend.psp.rubies.RubiesGateway;
+import com.moniewise.moniewise_backend.repository.TransactionLogRepository;
 import com.moniewise.moniewise_backend.repository.WalletRepository;
+import com.moniewise.moniewise_backend.service.ExternalTransferSettlementService;
 import com.moniewise.moniewise_backend.service.SystemConfigService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -37,13 +41,19 @@ public class RubiesAdminController {
     private final RubiesGateway rubiesGateway;
     private final SystemConfigService systemConfig;
     private final WalletRepository walletRepository;
+    private final TransactionLogRepository transactionLogRepository;
+    private final ExternalTransferSettlementService settlementService;
 
     public RubiesAdminController(RubiesGateway rubiesGateway,
                                  SystemConfigService systemConfig,
-                                 WalletRepository walletRepository) {
-        this.rubiesGateway    = rubiesGateway;
-        this.systemConfig     = systemConfig;
-        this.walletRepository = walletRepository;
+                                 WalletRepository walletRepository,
+                                 TransactionLogRepository transactionLogRepository,
+                                 ExternalTransferSettlementService settlementService) {
+        this.rubiesGateway            = rubiesGateway;
+        this.systemConfig             = systemConfig;
+        this.walletRepository         = walletRepository;
+        this.transactionLogRepository = transactionLogRepository;
+        this.settlementService        = settlementService;
     }
 
     /**
@@ -336,6 +346,112 @@ public class RubiesAdminController {
                     return false;
                 });
     }
+
+    // ── Manual settlement endpoints ────────────────────────────────────────────
+
+    /**
+     * POST /admin/rubies/settle/{reference}
+     *
+     * <p>Manually settles a single envelope external transfer that is stuck in
+     * {@code PROCESSING} status — typically because the Rubies DR webhook was
+     * rejected (HTTP 500) due to the duplicate {@code provider_reference} bug
+     * and Rubies stopped retrying.
+     *
+     * <p>Safe to call multiple times — settlement is idempotent (already-COMPLETED
+     * or already-FAILED records are skipped).
+     *
+     * <p>Example: {@code POST /admin/rubies/settle/EXT-414693cd-5d01-44b9-b4eb-86c5acf23bc8}
+     */
+    @PostMapping("/settle/{reference}")
+    public ResponseEntity<?> settleTransfer(@PathVariable String reference) {
+        if (isBlank(reference)) {
+            return ResponseEntity.badRequest().body(Map.of("error", "reference is required"));
+        }
+
+        TransactionLog txn = transactionLogRepository.findByReference(reference).orElse(null);
+        if (txn == null) {
+            return ResponseEntity.notFound().build();
+        }
+
+        if (txn.getSourceEnvelopeId() == null) {
+            return ResponseEntity.badRequest().body(Map.of(
+                    "error", "Transaction is not an envelope external transfer (sourceEnvelopeId is null)"
+            ));
+        }
+
+        String previousStatus = txn.getStatus().name();
+        settlementService.settleExternalTransfer(reference, "SUCCESS");
+
+        // Re-load to get updated status
+        TransactionLog updated = transactionLogRepository.findByReference(reference).orElse(txn);
+        logger.info("[Admin] Manual settlement: ref={} {} → {}", reference, previousStatus, updated.getStatus());
+
+        return ResponseEntity.ok(Map.of(
+                "reference",     reference,
+                "previousStatus", previousStatus,
+                "newStatus",     updated.getStatus().name(),
+                "message",       previousStatus.equals(updated.getStatus().name())
+                                 ? "Already settled — no change."
+                                 : "Settled successfully."
+        ));
+    }
+
+    /**
+     * POST /admin/rubies/settle-stuck
+     *
+     * <p>Batch-settles ALL envelope external transfers that are stuck in
+     * {@code PROCESSING} status.  Calls {@code settleExternalTransfer(ref, "SUCCESS")}
+     * for each one.
+     *
+     * <p>Use this after deploying the provider_reference duplicate-fix to clean up
+     * all the EXT- records that were left stuck because the DR webhook kept returning
+     * HTTP 500 (IncorrectResultSizeDataAccessException on the FEE companion log) and
+     * Rubies eventually stopped retrying.
+     *
+     * <p>Only settles transfers confirmed on the Rubies dashboard (i.e. call this
+     * after you have visually confirmed the transfers succeeded on Rubies' side).
+     */
+    @PostMapping("/settle-stuck")
+    public ResponseEntity<?> settleStuckTransfers() {
+        // Find all PROCESSING envelope external transfers
+        java.util.List<TransactionLog> stuck = transactionLogRepository
+                .findAll()
+                .stream()
+                .filter(t -> t.getStatus() == TransactionStatus.PROCESSING
+                        && t.getSourceEnvelopeId() != null
+                        && t.getReference() != null
+                        && !t.getReference().endsWith("-FEE"))
+                .collect(java.util.stream.Collectors.toList());
+
+        int settled = 0;
+        int skipped = 0;
+        java.util.List<String> settledRefs = new java.util.ArrayList<>();
+        java.util.List<String> errorRefs   = new java.util.ArrayList<>();
+
+        for (TransactionLog txn : stuck) {
+            try {
+                settlementService.settleExternalTransfer(txn.getReference(), "SUCCESS");
+                settledRefs.add(txn.getReference());
+                settled++;
+                logger.info("[Admin] Batch-settled stuck transfer: ref={}", txn.getReference());
+            } catch (Exception e) {
+                errorRefs.add(txn.getReference() + " (" + e.getMessage() + ")");
+                skipped++;
+                logger.warn("[Admin] Could not settle ref={}: {}", txn.getReference(), e.getMessage());
+            }
+        }
+
+        return ResponseEntity.ok(Map.of(
+                "totalFound",  stuck.size(),
+                "settled",     settled,
+                "errors",      skipped,
+                "settledRefs", settledRefs,
+                "errorRefs",   errorRefs,
+                "message",     settled + " transfer(s) settled, " + skipped + " error(s)."
+        ));
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
 
     private boolean isBlank(String s) {
         return s == null || s.isBlank();

@@ -117,6 +117,25 @@ public interface TransactionLogRepository extends JpaRepository<TransactionLog, 
 
     Optional<TransactionLog> findByProviderReference(String providerReference);
 
+    /**
+     * Finds an envelope external transfer (sourceEnvelopeId IS NOT NULL) by provider reference.
+     *
+     * <p>Used by {@code settleExternalTransferIfExists} as a safe fallback when the Rubies
+     * DR webhook carries the NIP session ID as {@code paymentReference}.  The companion
+     * {@code -FEE} TransactionLog previously shared the same {@code provider_reference},
+     * which caused {@link #findByProviderReference} to throw
+     * {@code IncorrectResultSizeDataAccessException} (2 rows, 1 expected).
+     * This query filters to rows that have a {@code sourceEnvelopeId}, which uniquely
+     * identifies the main EXT- record and skips the FEE companion.
+     */
+    @Query("""
+        SELECT t FROM TransactionLog t
+        WHERE t.providerReference = :ref
+          AND t.sourceEnvelopeId IS NOT NULL
+        ORDER BY t.createdAt ASC
+        """)
+    Optional<TransactionLog> findEnvelopeTransferByProviderReference(@Param("ref") String ref);
+
     Optional<TransactionLog> findFirstByUserIdAndTransactionTypeAndReferenceInOrderByCreatedAtDesc(
             Long userId,
             TransactionType transactionType,

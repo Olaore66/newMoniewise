@@ -1030,7 +1030,15 @@ public class EnvelopeService {
 
             if (feeTxn != null) {
                 feeTxn.setStatus(TransactionStatus.PROCESSING);
-                feeTxn.setProviderReference(providerRef);
+                // NOTE: do NOT set providerReference on the FEE companion log.
+                // Both the main EXT- log and this FEE log would end up with the same
+                // provider_reference (Rubies session ID), causing
+                // IncorrectResultSizeDataAccessException when settleExternalTransferIfExists
+                // calls findByProviderReference(sessionId) — it finds 2 rows, not 1,
+                // and Spring Data throws. That exception causes the webhook to return 500,
+                // Rubies retries, same error, eventually stops — leaving EXT- records
+                // stuck in PROCESSING forever. The FEE record's status is updated by
+                // reference ("EXT-UUID-FEE") inside settleExternalTransfer anyway.
                 transactionLogRepository.save(feeTxn);
             }
 

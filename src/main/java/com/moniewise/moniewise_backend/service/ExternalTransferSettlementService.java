@@ -187,9 +187,16 @@ public class ExternalTransferSettlementService {
     public boolean settleExternalTransferIfExists(String reference, String status) {
         if (reference == null || reference.isBlank()) return false;
 
+        // Primary lookup: by our own EXT- reference (exact match — always unique).
+        // Fallback: by Rubies session ID (NIP session ID returned as paymentReference in
+        // the DR webhook).  We use the envelope-safe variant that filters by
+        // sourceEnvelopeId IS NOT NULL to avoid IncorrectResultSizeDataAccessException —
+        // both the main EXT- log and the companion EXT-...-FEE log were previously stored
+        // with the same provider_reference (session ID), which caused the generic
+        // findByProviderReference to find 2 rows and throw.
         Optional<TransactionLog> txnOpt =
                 transactionLogRepository.findByReference(reference)
-                        .or(() -> transactionLogRepository.findByProviderReference(reference));
+                        .or(() -> transactionLogRepository.findEnvelopeTransferByProviderReference(reference));
 
         if (txnOpt.isEmpty()) {
             // Reference not found — belongs to a wallet withdrawal or P2P, not an envelope
