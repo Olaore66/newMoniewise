@@ -234,25 +234,30 @@ public class RubiesGateway implements PaymentGateway {
         logger.debug("[Rubies] Name enquiry: bank={} acct={}", bankCode, accountNumber);
 
         try {
-            ResponseEntity<RubiesNameEnquiryResponse> response =
-                    restTemplate.exchange(url, HttpMethod.POST,
+//            ResponseEntity<RubiesNameEnquiryResponse> response =
+//                    restTemplate.exchange(url, HttpMethod.POST,
+//                            new HttpEntity<>(req, authHeaders()),
+//                            RubiesNameEnquiryResponse.class);
+            ResponseEntity<String> response =
+                    restTemplate.exchange(
+                            url,
+                            HttpMethod.POST,
                             new HttpEntity<>(req, authHeaders()),
-                            RubiesNameEnquiryResponse.class);
+                            String.class
+                    );
 
-            ObjectMapper mapper = new ObjectMapper();
-            System.out.println("THIS IS RESPONSE FOR NAME ENQUIRY: " +
-                            mapper.writerWithDefaultPrettyPrinter()
-                                    .writeValueAsString(response.getBody()));
+            System.out.println("ENQUIRY ACCOUNT NAME:::: ");
 
 
-            RubiesNameEnquiryResponse body = response.getBody();
-
-            if (body == null || !body.isSuccess() || body.getData() == null) {
-                String msg = body != null ? body.getResponseMessage() : "null response";
-                throw new RuntimeException("Rubies name enquiry failed: " + msg);
-            }
-
-            return body.getData().getAccountName();
+//            String body = response.getBody();
+////            RubiesNameEnquiryResponse body = response.getBody();
+//            if (body == null || !body.isSuccess() || body.getData() == null) {
+//                String msg = body != null ? body.getResponseMessage() : "null response";
+//                throw new RuntimeException("Rubies name enquiry failed: " + msg);
+//            }
+//
+            return null;
+//            return body.getData().getAccountName();
 
         } catch (RuntimeException e) {
             throw e;
