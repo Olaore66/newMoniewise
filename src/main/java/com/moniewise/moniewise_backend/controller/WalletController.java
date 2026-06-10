@@ -19,6 +19,8 @@ import org.springframework.web.bind.annotation.*;
 
 import javax.servlet.http.HttpServletRequest;
 import javax.validation.Valid;
+
+import java.math.BigDecimal;
 import java.security.Principal;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -263,13 +265,20 @@ public class WalletController {
             Withdrawal withdrawal = walletService.processWithdrawal(user.getId(), request);
             abuseProtectionService.recordSuccess(AbuseProtectionService.WALLET_WITHDRAW, throttleKey);
             Map<String, Object> withdrawalData = new LinkedHashMap<>();
+            BigDecimal bankCharge = withdrawal.getTotalDebit()
+                    .subtract(withdrawal.getAmount())
+                    .subtract(withdrawal.getFeeAmount());
+            BigDecimal remainingBalance = walletService.getWalletByUserId(user.getId()).getBalance();
+
             withdrawalData.put("withdrawalId",     withdrawal.getId());
             withdrawalData.put("clientReference",  withdrawal.getClientReference());
             withdrawalData.put("reference",        withdrawal.getProviderReference());
             withdrawalData.put("amount",           withdrawal.getAmount());
             withdrawalData.put("fee",              withdrawal.getFeeAmount());
+            withdrawalData.put("bankCharge",       bankCharge);
             withdrawalData.put("totalDebit",       withdrawal.getTotalDebit());
             withdrawalData.put("recipientReceives", withdrawal.getRecipientReceives());
+            withdrawalData.put("remainingBalance", remainingBalance);
             withdrawalData.put("narration",        withdrawal.getNarration());
             withdrawalData.put("status",           withdrawal.getStatus().name());
             return ResponseEntity.ok(Map.of(

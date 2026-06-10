@@ -155,14 +155,21 @@ public class TransactionService {
                     request.getAmount(),
                     request.getAmount(),
                     BigDecimal.ZERO,
+                    BigDecimal.ZERO,
                     request.getAmount(),
-                    request.getAmount()
+                    BigDecimal.ZERO,
+                    BigDecimal.ZERO
             );
         }
 
         Withdrawal withdrawal = walletService.processWithdrawal(userId, request);
         txRequest.setStatus(TransactionRequest.Status.COMPLETED);
         transactionRequestRepository.save(txRequest);
+
+        BigDecimal bankCharge = withdrawal.getTotalDebit()
+                .subtract(withdrawal.getAmount())
+                .subtract(withdrawal.getFeeAmount());
+        BigDecimal remainingBalance = walletService.getWalletByUserId(userId).getBalance();
 
         return new WithdrawalInitiationResponseDto(
                 true,
@@ -174,8 +181,10 @@ public class TransactionService {
                 withdrawal.getAmount(),
                 withdrawal.getAmount(),
                 withdrawal.getFeeAmount(),
+                bankCharge,
                 withdrawal.getTotalDebit(),
-                withdrawal.getRecipientReceives()
+                withdrawal.getRecipientReceives(),
+                remainingBalance
         );
     }
 

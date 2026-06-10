@@ -20,6 +20,8 @@ public class WithdrawalInitiationResponseDto {
     private BigDecimal amount;
     private BigDecimal withdrawalAmount;
     private BigDecimal fee;
+    private BigDecimal bankCharge;
     private BigDecimal totalDebit;
     private BigDecimal recipientReceives;
+    private BigDecimal remainingBalance;
 }
