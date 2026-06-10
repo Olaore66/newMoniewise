@@ -1067,7 +1067,7 @@ public class WalletService {
      */
     @Transactional(readOnly = true)
     public List<Map<String, Object>> getRecentRecipients(Long userId) {
-        // Ordered map keyed by "bankCode|accountNumber" — first entry for each key wins
+        // Primary dedup map keyed by "bankCode|accountNumber" — first entry for each key wins
         // (both sources are newest-first, so the most-recent transfer to a given account
         // is naturally preferred).
         LinkedHashMap<String, Map<String, Object>> deduped = new LinkedHashMap<>();
@@ -1079,13 +1079,16 @@ public class WalletService {
             if (deduped.size() >= 10) break;
             if (w.getBankCode() == null || w.getAccountNumber() == null) continue;
 
-            String key = w.getBankCode().trim() + "|" + w.getAccountNumber().trim();
+            String acc = w.getAccountNumber().trim();
+            String key = w.getBankCode().trim() + "|" + acc;
             if (deduped.containsKey(key)) continue;
+            // Secondary dedup: same account number at a different-coded bank
+            if (accountNumberAlreadyPresent(deduped, acc)) continue;
 
             Map<String, Object> recipient = new LinkedHashMap<>();
             recipient.put("bankCode", w.getBankCode());
             recipient.put("bankName", w.getBankName());
-            recipient.put("accountNumber", w.getAccountNumber());
+            recipient.put("accountNumber", acc);
             recipient.put("accountName", w.getAccountName());
             deduped.put(key, recipient);
         }
@@ -1105,12 +1108,15 @@ public class WalletService {
                 if (t.getExternalAccountNumber() == null) continue;
 
                 // bankCode may be null for historical records (before V19 migration).
-                // Use bankName as the dedup key suffix when bankCode is absent so we
-                // still surface the recipient without risking a spurious duplicate.
+                // Use bankName as the primary-key suffix when bankCode is absent.
                 String bc  = t.getExternalBankCode()  != null ? t.getExternalBankCode().trim()  : "";
                 String acc = t.getExternalAccountNumber().trim();
                 String key = (bc.isEmpty() ? t.getExternalBankName() : bc) + "|" + acc;
                 if (deduped.containsKey(key)) continue;
+                // Secondary dedup: catches the case where Source 1 stored this account
+                // under a bankCode key while this EXT- record has an empty bankCode —
+                // e.g. "100004|8060214037" vs "OPAY|8060214037" for the same account.
+                if (accountNumberAlreadyPresent(deduped, acc)) continue;
 
                 Map<String, Object> recipient = new LinkedHashMap<>();
                 recipient.put("bankCode",      bc);
@@ -1122,6 +1128,15 @@ public class WalletService {
         }
 
         return new ArrayList<>(deduped.values());
+    }
+
+    /** Returns true if any entry in the dedup map already carries this account number. */
+    private boolean accountNumberAlreadyPresent(
+            LinkedHashMap<String, Map<String, Object>> deduped, String accountNumber) {
+        for (Map<String, Object> r : deduped.values()) {
+            if (accountNumber.equals(r.get("accountNumber"))) return true;
+        }
+        return false;
     }
 
     @Transactional
