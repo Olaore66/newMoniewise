@@ -411,9 +411,12 @@ public class TransactionService {
             case WALLET_WITHDRAWAL:
             case ENVELOPE_TO_EXTERNAL:
                 sender = transaction.getTransactionType() == WALLET_WITHDRAWAL ? "Main Wallet" : sourceName;
-                recipient = transaction.getExternalAccountId() != null
-                        ? "Bank: " + transaction.getExternalAccountId()
-                        : "External Bank";
+                // Prefer the resolved account name (V19+); fall back to legacy externalAccountId.
+                String extAccName = transaction.getExternalAccountName();
+                String extAccId   = transaction.getExternalAccountId();
+                recipient = (extAccName != null && !extAccName.isBlank()) ? extAccName
+                          : (extAccId  != null && !extAccId.isBlank())   ? extAccId
+                          : "External Account";
                 break;
             case ENVELOPE_TO_ENVELOPE:
                 sender = sourceName;
@@ -449,6 +452,24 @@ public class TransactionService {
         String reference = transaction.getReference() != null ? transaction.getReference() : "N/A";
         String status = transaction.getStatus() != null ? transaction.getStatus().name() : "COMPLETED";
 
+        // For external bank transfers, surface the bank name as targetEnvelopeName so the
+        // hero card's "To" field shows the bank rather than "System".
+        boolean isExternalTransfer =
+                transaction.getTransactionType() == ENVELOPE_TO_EXTERNAL
+                || transaction.getTransactionType() == WALLET_WITHDRAWAL;
+        String effectiveTargetName = (isExternalTransfer
+                && transaction.getExternalBankName() != null
+                && !transaction.getExternalBankName().isBlank())
+                ? transaction.getExternalBankName()
+                : targetName;
+
+        // Resolve account number: prefer explicit externalAccountNumber (V19+),
+        // fall back to the legacy externalAccountId column.
+        String resolvedAccountNumber = (transaction.getExternalAccountNumber() != null
+                && !transaction.getExternalAccountNumber().isBlank())
+                ? transaction.getExternalAccountNumber()
+                : transaction.getExternalAccountId();
+
         return new TransactionDetailResponse(
                 transaction.getId(),
                 reference,
@@ -467,9 +488,11 @@ public class TransactionService {
                 budgetName,
                 sourceName,
                 transaction.getSourceEnvelopeId(),
-                targetName,
+                effectiveTargetName,
                 transaction.getTargetEnvelopeId(),
-                transaction.getExternalAccountId()
+                transaction.getExternalAccountId(),
+                transaction.getExternalBankName(),
+                resolvedAccountNumber
         );
     }
 
