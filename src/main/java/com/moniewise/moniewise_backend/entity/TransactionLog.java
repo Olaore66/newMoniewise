@@ -341,6 +341,9 @@ public class TransactionLog {
     @Column(name = "external_bank_name")
     private String externalBankName;
 
+    @Column(name = "external_bank_code", length = 20)
+    private String externalBankCode;
+
     @Column(name = "external_account_number")
     private String externalAccountNumber;
 
@@ -482,6 +485,14 @@ public class TransactionLog {
         this.externalBankName = externalBankName;
     }
 
+    public String getExternalBankCode() {
+        return externalBankCode;
+    }
+
+    public void setExternalBankCode(String externalBankCode) {
+        this.externalBankCode = externalBankCode;
+    }
+
     public String getExternalAccountNumber() {
         return externalAccountNumber;
     }
@@ -586,6 +597,7 @@ public class TransactionLog {
         private Long targetEnvelopeId;
         private String externalAccountId;
         private String externalBankName;
+        private String externalBankCode;
         private String externalAccountNumber;
         private String externalAccountName;
         private Long counterpartyUserId;
@@ -629,6 +641,11 @@ public class TransactionLog {
 
         public TransactionLogBuilder externalBankName(String externalBankName) {
             this.externalBankName = externalBankName;
+            return this;
+        }
+
+        public TransactionLogBuilder externalBankCode(String externalBankCode) {
+            this.externalBankCode = externalBankCode;
             return this;
         }
 
@@ -701,6 +718,7 @@ public class TransactionLog {
             log.setTargetEnvelopeId(this.targetEnvelopeId);
             log.setExternalAccountId(this.externalAccountId);
             log.setExternalBankName(this.externalBankName);
+            log.setExternalBankCode(this.externalBankCode);
             log.setExternalAccountNumber(this.externalAccountNumber);
             log.setExternalAccountName(this.externalAccountName);
             log.setCounterpartyUserId(this.counterpartyUserId);

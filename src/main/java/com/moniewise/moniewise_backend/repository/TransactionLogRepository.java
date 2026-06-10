@@ -193,4 +193,23 @@ public interface TransactionLogRepository extends JpaRepository<TransactionLog, 
             @Param("statuses") List<TransactionStatus> statuses
     );
 
+    /**
+     * Recent COMPLETED envelope-to-bank transfers for a given user, newest first.
+     * Used by {@code WalletService.getRecentRecipients()} to power the "transferred
+     * before" auto-suggest dropdown — supplement to the Withdrawal-table query so
+     * EXT- envelope transfers also appear as suggestions.
+     */
+    @Query("""
+        SELECT t FROM TransactionLog t
+        WHERE t.userId = :userId
+          AND t.status = com.moniewise.moniewise_backend.enums.TransactionStatus.COMPLETED
+          AND t.sourceEnvelopeId IS NOT NULL
+          AND t.externalAccountNumber IS NOT NULL
+        ORDER BY t.createdAt DESC
+        """)
+    List<TransactionLog> findRecentCompletedEnvelopeExternalTransfers(
+            @Param("userId") Long userId,
+            org.springframework.data.domain.Pageable pageable
+    );
+
 }

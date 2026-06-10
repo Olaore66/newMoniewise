@@ -856,6 +856,7 @@ public class EnvelopeService {
 
         String resolvedName;
         String bankName;
+        String bankCode;
         String accountNumber;
 
         if (isRubies) {
@@ -867,11 +868,12 @@ public class EnvelopeService {
                 throw new IllegalArgumentException("Account number is required for Rubies transfers");
             }
             accountNumber = externalAccount.getAccountNumber().trim();
+            bankCode      = externalAccount.getBankCode().trim();
             bankName      = isBlank(externalAccount.getBankName())
-                            ? externalAccount.getBankCode()
+                            ? bankCode
                             : externalAccount.getBankName().trim();
             // Name-enquiry against the destination bank via the Rubies gateway
-            resolvedName = walletService.resolveBankAccount(user.getId(), externalAccount.getBankCode(), accountNumber);
+            resolvedName = walletService.resolveBankAccount(user.getId(), bankCode, accountNumber);
             if (isBlank(resolvedName)) {
                 throw new IllegalArgumentException("Could not resolve account name — please verify the bank code and account number.");
             }
@@ -879,6 +881,7 @@ public class EnvelopeService {
         } else if (providusExpressGateway.isEnabled()) {
             resolvedName = resolveExternalRecipientName(externalAccount, linkedWallet);
             bankName = externalAccount.getBankName();
+            bankCode = externalAccount.getBankCode() != null ? externalAccount.getBankCode().trim() : null;
             accountNumber = externalAccount.getAccountNumber();
 
             if (resolvedName == null) {
@@ -897,6 +900,8 @@ public class EnvelopeService {
             accountNumber = String.valueOf(
                     secureWaveBankInfo.getOrDefault("account_number", "")
             );
+
+            bankCode = null; // Not available for legacy SecureWave/Providus path
 
             if (resolvedName.isBlank() || accountNumber.isBlank()) {
                 throw new IllegalStateException("Withdrawal bank info is incomplete. Please update your withdrawal bank.");
@@ -940,6 +945,7 @@ public class EnvelopeService {
                     .sourceEnvelopeId(sourceId)
                     .externalAccountId(null)
                     .externalBankName(bankName)
+                    .externalBankCode(bankCode)
                     .externalAccountNumber(accountNumber)
                     .externalAccountName(resolvedName)
                     .amount(fee.negate())
@@ -961,6 +967,7 @@ public class EnvelopeService {
                 .sourceEnvelopeId(sourceId)
                 .externalAccountId(null)
                 .externalBankName(bankName)
+                .externalBankCode(bankCode)
                 .externalAccountNumber(accountNumber)
                 .externalAccountName(resolvedName)
                 .amount(amount.negate())

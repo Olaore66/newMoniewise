@@ -1067,11 +1067,16 @@ public class WalletService {
      */
     @Transactional(readOnly = true)
     public List<Map<String, Object>> getRecentRecipients(Long userId) {
-        List<Withdrawal> recent = withdrawalRepository
-                .findTop50ByUserIdAndStatusOrderByCreatedAtDesc(userId, WithdrawalStatus.COMPLETED);
-
+        // Ordered map keyed by "bankCode|accountNumber" — first entry for each key wins
+        // (both sources are newest-first, so the most-recent transfer to a given account
+        // is naturally preferred).
         LinkedHashMap<String, Map<String, Object>> deduped = new LinkedHashMap<>();
-        for (Withdrawal w : recent) {
+
+        // ── Source 1: wallet withdrawals (WD- / legacy path) ─────────────────
+        List<Withdrawal> recentWithdrawals = withdrawalRepository
+                .findTop50ByUserIdAndStatusOrderByCreatedAtDesc(userId, WithdrawalStatus.COMPLETED);
+        for (Withdrawal w : recentWithdrawals) {
+            if (deduped.size() >= 10) break;
             if (w.getBankCode() == null || w.getAccountNumber() == null) continue;
 
             String key = w.getBankCode().trim() + "|" + w.getAccountNumber().trim();
@@ -1083,9 +1088,39 @@ public class WalletService {
             recipient.put("accountNumber", w.getAccountNumber());
             recipient.put("accountName", w.getAccountName());
             deduped.put(key, recipient);
-
-            if (deduped.size() >= 10) break;
         }
+
+        // ── Source 2: envelope external transfers (EXT- / Rubies path) ───────
+        // These are stored on TransactionLog (not the Withdrawal table), so they
+        // were previously invisible to this method — the dropdown would show empty
+        // even if the user had many successful envelope-to-bank transfers.
+        if (deduped.size() < 10) {
+            List<TransactionLog> recentExt = transactionLogRepository
+                    .findRecentCompletedEnvelopeExternalTransfers(
+                            userId,
+                            org.springframework.data.domain.PageRequest.of(0, 50)
+                    );
+            for (TransactionLog t : recentExt) {
+                if (deduped.size() >= 10) break;
+                if (t.getExternalAccountNumber() == null) continue;
+
+                // bankCode may be null for historical records (before V19 migration).
+                // Use bankName as the dedup key suffix when bankCode is absent so we
+                // still surface the recipient without risking a spurious duplicate.
+                String bc  = t.getExternalBankCode()  != null ? t.getExternalBankCode().trim()  : "";
+                String acc = t.getExternalAccountNumber().trim();
+                String key = (bc.isEmpty() ? t.getExternalBankName() : bc) + "|" + acc;
+                if (deduped.containsKey(key)) continue;
+
+                Map<String, Object> recipient = new LinkedHashMap<>();
+                recipient.put("bankCode",      bc);
+                recipient.put("bankName",      t.getExternalBankName() != null ? t.getExternalBankName() : "");
+                recipient.put("accountNumber", acc);
+                recipient.put("accountName",   t.getExternalAccountName() != null ? t.getExternalAccountName() : "");
+                deduped.put(key, recipient);
+            }
+        }
+
         return new ArrayList<>(deduped.values());
     }
 
