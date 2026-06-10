@@ -86,7 +86,7 @@ public class EnvelopeController {
                             "message", "Transfer request has been received and is being processed",
                             "data", Map.of(
                                     "clientReference", transfer.getClientReference(),
-                                    "reference", transfer.getProviderReference(),
+                                    "providerReference", transfer.getProviderReference(),
                                     "amount", transfer.getAmount(),
                                     "recipientName", transfer.getRecipientName(),
                                     "bankName", transfer.getBankName(),
@@ -237,7 +237,7 @@ public class EnvelopeController {
                         "message", "Transfer request has been received and is being processed",
                         "data", Map.of(
                                 "clientReference", transfer.getClientReference(),
-                                "reference", transfer.getProviderReference(),
+                                "providerReference", transfer.getProviderReference(),
                                 "amount", transfer.getAmount(),
                                 "recipientName", transfer.getRecipientName(),
                                 "bankName", transfer.getBankName(),
