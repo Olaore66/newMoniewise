@@ -1,5 +1,6 @@
 package com.moniewise.moniewise_backend.service;
 
+import com.moniewise.moniewise_backend.entity.Budget;
 import com.moniewise.moniewise_backend.entity.Envelope;
 import com.moniewise.moniewise_backend.entity.RevenueLog;
 import com.moniewise.moniewise_backend.entity.TransactionLog;
@@ -7,6 +8,7 @@ import com.moniewise.moniewise_backend.entity.Wallet;
 import com.moniewise.moniewise_backend.enums.TransactionStatus;
 import com.moniewise.moniewise_backend.exception.EntityNotFoundException;
 import com.moniewise.moniewise_backend.psp.rubies.RubiesGateway;
+import com.moniewise.moniewise_backend.repository.BudgetRepository;
 import com.moniewise.moniewise_backend.repository.EnvelopeRepository;
 import com.moniewise.moniewise_backend.repository.RevenueLogRepository;
 import com.moniewise.moniewise_backend.repository.TransactionLogRepository;
@@ -28,6 +30,7 @@ public class ExternalTransferSettlementService {
 
     private final TransactionLogRepository transactionLogRepository;
     private final EnvelopeRepository envelopeRepository;
+    private final BudgetRepository budgetRepository;
     private final WalletRepository walletRepository;
     private final RevenueLogRepository revenueLogRepository;
     private final WalletService walletService;
@@ -37,6 +40,7 @@ public class ExternalTransferSettlementService {
     public ExternalTransferSettlementService(
             TransactionLogRepository transactionLogRepository,
             EnvelopeRepository envelopeRepository,
+            BudgetRepository budgetRepository,
             WalletRepository walletRepository,
             RevenueLogRepository revenueLogRepository,
             @Lazy WalletService walletService,
@@ -45,6 +49,7 @@ public class ExternalTransferSettlementService {
     ) {
         this.transactionLogRepository = transactionLogRepository;
         this.envelopeRepository = envelopeRepository;
+        this.budgetRepository = budgetRepository;
         this.walletRepository = walletRepository;
         this.revenueLogRepository = revenueLogRepository;
         this.walletService = walletService;
@@ -83,6 +88,21 @@ public class ExternalTransferSettlementService {
             source.setHeldAmount(source.getHeldAmount().subtract(totalDebit).max(BigDecimal.ZERO));
             source.setTotalRemainingAmount(source.getTotalRemainingAmount().subtract(totalDebit).max(BigDecimal.ZERO));
             txn.setStatus(TransactionStatus.COMPLETED);
+
+            // Propagate the spend to the parent budget's remaining_amount.
+            // At initiation time only the envelope's remainingAmount (period pocket) and
+            // heldAmount were touched — budget.remainingAmount was never reduced.
+            // We reduce it here at confirmed-success time, mirroring the
+            // totalRemainingAmount deduction above.
+            Budget parentBudget = source.getBudget();
+            if (parentBudget != null) {
+                parentBudget.setRemainingAmount(
+                        parentBudget.getRemainingAmount().subtract(totalDebit).max(BigDecimal.ZERO)
+                );
+                budgetRepository.save(parentBudget);
+                logger.info("[ExternalTransfer] Budget {} remaining_amount reduced by ₦{} for ref={}",
+                        parentBudget.getId(), totalDebit, txn.getReference());
+            }
 
             // Bug-fix: credit the markup fee to the platform revenue wallet (was never done
             // for envelope external transfers, only for wallet withdrawals).
@@ -213,5 +233,91 @@ public class ExternalTransferSettlementService {
         // envelope balance adjustments.
         settleExternalTransfer(reference, status);
         return true;
+    }
+
+    /**
+     * Scans all COMPLETED envelope external transfers that carry a markup fee and
+     * re-fires {@code collectRubiesMarkupFeeAsync} for any whose corresponding
+     * {@code REV-EXT-…} TransactionLog is missing or not COMPLETED.
+     *
+     * <h3>When this is needed</h3>
+     * <p>The normal happy path is:
+     * <pre>
+     *   DR webhook → settleExternalTransfer() → collectRubiesMarkupFeeAsync()
+     * </pre>
+     * <p>If the Rubies API call inside {@code collectRubiesMarkupFeeAsync} fails
+     * (network blip, Rubies outage, revenue account not yet configured at that moment),
+     * the REV- log is written as FAILED but the main EXT- log is already COMPLETED —
+     * so {@link #settleExternalTransfer} will never touch it again.  This method
+     * catches those cases and retries the P2P.
+     *
+     * <p>{@code collectRubiesMarkupFeeAsync} is itself idempotent: it will skip
+     * attempts whose REV- log is already COMPLETED, and will reset FAILED logs to
+     * PENDING rather than inserting a duplicate row.
+     *
+     * @return number of fee-collection retries fired
+     */
+    public int retryFailedFeeCollections() {
+        // Candidate set: COMPLETED EXT- transfers that had a markup fee
+        java.util.List<TransactionLog> candidates = transactionLogRepository
+                .findAll()
+                .stream()
+                .filter(t -> t.getStatus() == TransactionStatus.COMPLETED
+                        && t.getSourceEnvelopeId() != null
+                        && t.getReference() != null
+                        && !t.getReference().endsWith("-FEE")
+                        && t.getFee() != null
+                        && t.getFee().compareTo(java.math.BigDecimal.ZERO) > 0)
+                .collect(java.util.stream.Collectors.toList());
+
+        int retried = 0;
+
+        for (TransactionLog txn : candidates) {
+            String revRef = "REV-" + txn.getReference();
+
+            // Check if the Rubies P2P already succeeded
+            boolean alreadyCollected = transactionLogRepository
+                    .findByReference(revRef)
+                    .map(rev -> rev.getStatus() == TransactionStatus.COMPLETED)
+                    .orElse(false);
+
+            if (alreadyCollected) {
+                // Nothing to do — fee was collected successfully
+                continue;
+            }
+
+            // REV- log is missing, FAILED, or stuck PENDING — retry
+            logger.info("[FeeRetry] REV- log missing/failed for ref={} — retrying fee collection", txn.getReference());
+
+            try {
+                walletRepository.findByUserId(txn.getUserId()).ifPresent(userWallet -> {
+                    if (userWallet.getProviderWalletRef() != null
+                            && RubiesGateway.PROVIDER_NAME.equalsIgnoreCase(userWallet.getProviderName())) {
+                        String debitName = walletService.resolveDisplayNameByUserId(txn.getUserId());
+                        walletService.collectRubiesMarkupFeeAsync(
+                                txn.getFee(),
+                                userWallet.getProviderWalletRef(),
+                                debitName,
+                                txn.getReference(),
+                                txn.getUserId()
+                        );
+                    } else {
+                        logger.warn("[FeeRetry] User {} has no Rubies wallet — cannot retry fee for ref={}",
+                                txn.getUserId(), txn.getReference());
+                    }
+                });
+                retried++;
+            } catch (Exception e) {
+                logger.warn("[FeeRetry] Error retrying fee collection for ref={}: {}",
+                        txn.getReference(), e.getMessage());
+            }
+        }
+
+        if (retried > 0) {
+            logger.info("[FeeRetry] Fired {} fee-collection retry(ies).", retried);
+        } else {
+            logger.info("[FeeRetry] All fee collections already complete — nothing to retry.");
+        }
+        return retried;
     }
 }

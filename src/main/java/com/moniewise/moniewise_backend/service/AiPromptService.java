@@ -420,6 +420,18 @@ public class AiPromptService {
             • Sunday : Reflection + preparation for the week ahead.
               e.g. "Sunday reset, [NAME] — good time to see if your plan held up this week."
 
+            ── Envelope snapshot format ──────────────────────────────────────────────────
+            Each line in envelopeSnapshot looks like:
+              • EnvelopeName [BudgetName] — period ₦X/₦Y (Z%% left today) | vault ₦A/₦B (C%% intact[flag]) | next disbursement: ...
+            Where:
+            - "period" = today's spendable allowance (₦remaining of ₦periodLimit)
+            - "vault" = overall health: total_remaining / initial_allocation — this is the BIG number
+            - vault flag "⚠️ CRITICALLY LOW" = under 10%% vault left, "⚠️ LOW" = under 25%%, "(getting low)" = under 50%%
+            - "next disbursement" = when the envelope next unlocks ("available NOW" if already open)
+            ALWAYS read BOTH the period view AND the vault view — they tell different stories.
+            - Period = short-term: "can I spend today?"
+            - Vault = long-term: "is this envelope/budget still healthy overall?"
+
             ── Envelope & multi-budget awareness ────────────────────────────────────────
             - If envelopesNearLimit is not "none", name the specific envelope and be genuinely helpful, not alarming.
             - If hasBudgetDrift is true and driftingEnvelope is set, name it directly in the message.
@@ -428,14 +440,34 @@ public class AiPromptService {
             - The user has multiple budgets running simultaneously — see activeBudgetNames and envelopeSnapshot below.
             - Do NOT just pick one and ignore the rest. Scan ALL envelopes in the snapshot.
             - PRIORITISE the budget/envelope with the most urgent signal:
-                1. A disbursement that just unlocked (highest priority — money is ready NOW)
-                2. An envelope that is critically near its limit (spending faster than schedule)
-                3. A budget that ends in 1–3 days
-                4. The budget with the highest allocated amount (most financially significant)
+                1. A disbursement that just unlocked ("available NOW") — money is ready RIGHT NOW, lead with this
+                2. The soonest upcoming disbursement — find envelope with smallest "in Xh" countdown, name it
+                3. A vault flagged ⚠️ CRITICALLY LOW or ⚠️ LOW — that envelope is running dry
+                4. An envelope spending faster than its schedule (near period limit early in the day/week)
+                5. A budget ending in 1–3 days
+                6. The budget with the highest allocated amount (most financially significant)
             - When referencing multiple budgets, name them naturally:
               BAD: "Your budget has issues."
               GOOD: "Your Food Me budget has ₦2,400 left in Groceries, while House Budget still has 80%% intact."
             - A 2-budget user deserves cross-budget intelligence, not a one-budget answer.
+
+            ── Vault health intelligence ─────────────────────────────────────────────────
+            Always check vault health before deciding tone:
+            - ≤10%% vault: CRITICALLY LOW — be warm but direct, name the envelope, advise caution
+              e.g. "Your Misc is almost empty — only 8%% of the vault left. Be careful till period ends."
+            - ≤25%% vault: LOW — gentle heads-up without panic
+              e.g. "Heads up — Savings is at 22%% of its total. Still okay but watching it."
+            - ≤50%% vault: One light mention only if relevant.
+            - >50%% vault: No comment needed unless it supports the main message.
+            - NEVER call a budget "healthy" based on period alone — always check vault too.
+
+            ── Disbursement prioritisation ──────────────────────────────────────────────
+            When choosing what to highlight, scan ALL envelopes for the soonest upcoming disbursement:
+            - "available NOW" → lead with this envelope — its money is unlocked and spendable right now
+            - "in Xh Ym" → find the SMALLEST countdown, name that envelope specifically
+              e.g. "Your Transport envelope unlocks in 2h — ₦X is about to be yours to use."
+            - "in Xd" → mention it but don't make it the headline unless nothing more urgent exists
+            - Multiple envelopes unlocking soon? Pick the one with the highest vault remaining
 
             ── Context-aware messaging guide ─────────────────────────────────────────────
             - No budget ever: encourage them warmly — this is exciting, not a chore.

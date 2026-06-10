@@ -1381,31 +1381,53 @@ public class WalletService {
 
         CompletableFuture.runAsync(() -> {
 
-            // ── 1. Write PENDING transaction log (our DB record of this Rubies P2P) ──
-            // Written first so the record exists even if the Rubies call hangs or
-            // the JVM crashes before we get a chance to update to COMPLETED.
-            // Runs in its own transaction (SimpleJpaRepository.save is @Transactional).
-            TransactionLog feeLog = TransactionLog.builder()
-                    .userId(revUserId)
-                    .reference(revRef)
-                    .amount(feeAmount)
-                    .transactionType(TransactionType.MARKUP_FEE_COLLECTION)
-                    .status(TransactionStatus.PENDING)
-                    .externalAccountNumber(revAccount)
-                    .externalAccountName(revName)
-                    .externalBankName("Rubies MFB")
-                    .providerName(RubiesGateway.PROVIDER_NAME)
-                    .description("Markup fee ₦" + feeAmount + " collected via Rubies P2P for " + originalRef)
-                    .createdAt(LocalDateTime.now())
-                    .build();
+            // ── Idempotency guard ─────────────────────────────────────────────────
+            // Check the current DB state at the time this async task actually runs.
+            // If a previous attempt already landed (COMPLETED), there is nothing to do.
+            // If a previous attempt FAILED or is stuck PENDING, reuse the existing row
+            // instead of inserting a new one (which would hit the unique reference constraint).
+            TransactionLog feeLog;
             try {
-                transactionLogRepository.save(feeLog);
+                TransactionLog existing = transactionLogRepository.findByReference(revRef).orElse(null);
+                if (existing != null && existing.getStatus() == TransactionStatus.COMPLETED) {
+                    logger.info("[Rubies-Fee] Fee already collected for ref={} — skipping duplicate attempt.", revRef);
+                    return;
+                }
+                if (existing != null) {
+                    // FAILED or stuck PENDING — reset for retry rather than creating a duplicate
+                    existing.setStatus(TransactionStatus.PENDING);
+                    existing.setDescription("Markup fee ₦" + feeAmount + " retry for " + originalRef);
+                    existing.setCreatedAt(LocalDateTime.now());
+                    feeLog = transactionLogRepository.save(existing);
+                    logger.info("[Rubies-Fee] Resetting {} fee log to PENDING for retry. ref={}",
+                            existing.getStatus(), revRef);
+                } else {
+                    // ── 1. Write PENDING transaction log (first attempt) ──────────
+                    // Written first so the record exists even if the Rubies call hangs
+                    // or the JVM crashes before we get a response.
+                    feeLog = transactionLogRepository.save(TransactionLog.builder()
+                            .userId(revUserId)
+                            .reference(revRef)
+                            .amount(feeAmount)
+                            .transactionType(TransactionType.MARKUP_FEE_COLLECTION)
+                            .status(TransactionStatus.PENDING)
+                            .externalAccountNumber(revAccount)
+                            .externalAccountName(revName)
+                            .externalBankName("Rubies MFB")
+                            .providerName(RubiesGateway.PROVIDER_NAME)
+                            .description("Markup fee ₦" + feeAmount + " collected via Rubies P2P for " + originalRef)
+                            .createdAt(LocalDateTime.now())
+                            .build());
+                }
             } catch (Exception ex) {
-                logger.warn("[Rubies-Fee] Could not write PENDING fee log for ref={}: {}",
+                logger.warn("[Rubies-Fee] Could not write/reset PENDING fee log for ref={}: {}",
                         revRef, ex.getMessage());
+                // Proceed anyway — we still want to attempt the transfer even if the log write failed
+                feeLog = null;
             }
 
             // ── 2. Fire Rubies-to-Rubies P2P ─────────────────────────────────────
+            final TransactionLog logRef = feeLog;
             try {
                 PaymentGateway rubies = paymentGatewayResolver
                         .resolveByProviderName(RubiesGateway.PROVIDER_NAME);

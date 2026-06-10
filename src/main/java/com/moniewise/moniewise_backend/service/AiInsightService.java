@@ -330,25 +330,29 @@ public class AiInsightService {
             if (budget.getEnvelopes() == null) continue;
             String budgetLabel = budget.getName() != null ? budget.getName() : "Budget";
             for (Envelope envelope : budget.getEnvelopes()) {
-                BigDecimal allocated = resolveReferenceAmount(envelope);
-                if (allocated == null || allocated.compareTo(BigDecimal.ZERO) <= 0) {
-                    allocated = envelope.getAmount();
+                // ── Period view (today's spendable pocket vs daily/weekly limit) ──
+                BigDecimal periodLimit = resolveReferenceAmount(envelope);
+                if (periodLimit == null || periodLimit.compareTo(BigDecimal.ZERO) <= 0) {
+                    periodLimit = envelope.getAmount() != null ? envelope.getAmount() : BigDecimal.ZERO;
                 }
-                if (allocated == null || allocated.compareTo(BigDecimal.ZERO) <= 0) continue;
-                BigDecimal remaining = resolveSpendableAmount(envelope);
-                BigDecimal spent = isEnvelopeSpendable(envelope)
-                        ? allocated.subtract(remaining)
-                        : BigDecimal.ZERO;
-                int pctSpent = spent.max(BigDecimal.ZERO)
-                        .divide(allocated, 2, RoundingMode.HALF_UP)
-                        .multiply(new BigDecimal("100"))
-                        .intValue();
+                if (periodLimit.compareTo(BigDecimal.ZERO) <= 0) continue;
+                BigDecimal periodRemaining = resolveSpendableAmount(envelope);
+
+                // ── Vault view (total_remaining_amount vs initial_amount) ─────────
+                BigDecimal vaultRemaining = envelope.getTotalRemainingAmount() != null
+                        ? envelope.getTotalRemainingAmount() : BigDecimal.ZERO;
+                BigDecimal vaultInitial = envelope.getInitialAmount() != null
+                        && envelope.getInitialAmount().compareTo(BigDecimal.ZERO) > 0
+                        ? envelope.getInitialAmount()
+                        : (envelope.getAmount() != null ? envelope.getAmount() : periodLimit);
+
                 allEnvelopes.add(new EnvelopeSummaryDto(
                         envelope.getName() != null ? envelope.getName() : "Unnamed",
                         budgetLabel,
-                        allocated.doubleValue(),
-                        remaining.doubleValue(),
-                        pctSpent,
+                        periodRemaining.doubleValue(),
+                        periodLimit.doubleValue(),
+                        vaultRemaining.doubleValue(),
+                        vaultInitial.doubleValue(),
                         buildDisbursementText(envelope, nowWat)));
             }
         }
@@ -1509,30 +1513,55 @@ public class AiInsightService {
     private static class EnvelopeSummaryDto {
         final String name;
         final String budgetName;
-        final double allocated;
-        final double remaining;
-        final int    pctSpent;
+        // Period view — today's spendable pocket vs period limit
+        final double periodRemaining;
+        final double periodLimit;
+        final int    periodPctLeft;
+        // Vault view — total_remaining_amount vs initial_amount (overall budget health)
+        final double vaultRemaining;
+        final double vaultInitial;
+        final int    vaultPctRemaining;
         /** Human-readable availability text, e.g. "locked until in 2d 4h (Mon, 8 Jun - 8:00 am)" or "available NOW". Null if none. */
         final String nextDisbursementText;
 
         EnvelopeSummaryDto(String name, String budgetName,
-                           double allocated, double remaining, int pctSpent,
+                           double periodRemaining, double periodLimit,
+                           double vaultRemaining, double vaultInitial,
                            String nextDisbursementText) {
-            this.name                  = name;
-            this.budgetName            = budgetName;
-            this.allocated             = allocated;
-            this.remaining             = remaining;
-            this.pctSpent              = pctSpent;
-            this.nextDisbursementText  = nextDisbursementText;
+            this.name               = name;
+            this.budgetName         = budgetName;
+            this.periodRemaining    = periodRemaining;
+            this.periodLimit        = periodLimit;
+            this.periodPctLeft      = periodLimit > 0
+                    ? (int) Math.round((periodRemaining / periodLimit) * 100.0)
+                    : 100;
+            this.vaultRemaining     = vaultRemaining;
+            this.vaultInitial       = vaultInitial;
+            this.vaultPctRemaining  = vaultInitial > 0
+                    ? (int) Math.round((vaultRemaining / vaultInitial) * 100.0)
+                    : 100;
+            this.nextDisbursementText = nextDisbursementText;
         }
 
         @Override
         public String toString() {
+            String periodStr = periodLimit > 0
+                    ? String.format("period ₦%.0f/₦%.0f (%d%% left today)", periodRemaining, periodLimit, periodPctLeft)
+                    : String.format("period ₦%.0f available", periodRemaining);
+
+            String vaultFlag = vaultPctRemaining <= 10  ? " ⚠️ CRITICALLY LOW"
+                             : vaultPctRemaining <= 25  ? " ⚠️ LOW"
+                             : vaultPctRemaining <= 50  ? " (getting low)"
+                             : "";
+            String vaultStr = String.format("vault ₦%.0f/₦%.0f (%d%% intact%s)",
+                    vaultRemaining, vaultInitial, vaultPctRemaining, vaultFlag);
+
             String disbText = nextDisbursementText != null && !nextDisbursementText.isBlank()
-                    ? " | availability: " + nextDisbursementText
+                    ? " | next disbursement: " + nextDisbursementText
                     : "";
-            return String.format("  • %s [%s] — ₦%.0f allocated, ₦%.0f remaining (%d%% spent)%s",
-                    name, budgetName, allocated, remaining, pctSpent, disbText);
+
+            return String.format("  • %s [%s] — %s | %s%s",
+                    name, budgetName, periodStr, vaultStr, disbText);
         }
     }
 
