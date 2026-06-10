@@ -194,15 +194,23 @@ public interface TransactionLogRepository extends JpaRepository<TransactionLog, 
     );
 
     /**
-     * Recent COMPLETED envelope-to-bank transfers for a given user, newest first.
-     * Used by {@code WalletService.getRecentRecipients()} to power the "transferred
+     * Recent envelope-to-bank transfers for a given user, newest first.
+     * Includes both COMPLETED and PROCESSING records — PROCESSING means the Rubies
+     * NIP transfer went through but our webhook hasn't confirmed it yet; the account
+     * number was verified at initiation time, so it is still a valid auto-suggest entry.
+     * FAILED / REVERSED records are excluded to avoid surfacing mistyped accounts.
+     *
+     * <p>Used by {@code WalletService.getRecentRecipients()} to power the "transferred
      * before" auto-suggest dropdown — supplement to the Withdrawal-table query so
      * EXT- envelope transfers also appear as suggestions.
      */
     @Query("""
         SELECT t FROM TransactionLog t
         WHERE t.userId = :userId
-          AND t.status = com.moniewise.moniewise_backend.enums.TransactionStatus.COMPLETED
+          AND t.status IN (
+              com.moniewise.moniewise_backend.enums.TransactionStatus.COMPLETED,
+              com.moniewise.moniewise_backend.enums.TransactionStatus.PROCESSING
+          )
           AND t.sourceEnvelopeId IS NOT NULL
           AND t.externalAccountNumber IS NOT NULL
         ORDER BY t.createdAt DESC
@@ -210,6 +218,28 @@ public interface TransactionLogRepository extends JpaRepository<TransactionLog, 
     List<TransactionLog> findRecentCompletedEnvelopeExternalTransfers(
             @Param("userId") Long userId,
             org.springframework.data.domain.Pageable pageable
+    );
+
+    /**
+     * Finds envelope-to-external transfers that have been stuck in PROCESSING
+     * longer than the given cutoff time.  Used by the TSQ recovery scheduler to
+     * poll Rubies for a final status when the DR webhook is delayed or missing.
+     *
+     * <p>Only the main transfer log (ENVELOPE_TO_EXTERNAL, not the FEE companion)
+     * is returned, and only rows that have a {@code providerReference} (i.e. the
+     * Rubies NIP session ID) so the TSQ call has something to query against.
+     */
+    @Query("""
+        SELECT t FROM TransactionLog t
+        WHERE t.status = com.moniewise.moniewise_backend.enums.TransactionStatus.PROCESSING
+          AND t.transactionType = com.moniewise.moniewise_backend.enums.TransactionType.ENVELOPE_TO_EXTERNAL
+          AND t.sourceEnvelopeId IS NOT NULL
+          AND t.providerReference IS NOT NULL
+          AND t.createdAt < :cutoff
+        ORDER BY t.createdAt ASC
+        """)
+    List<TransactionLog> findProcessingEnvelopeExternalTransfers(
+            @Param("cutoff") java.time.LocalDateTime cutoff
     );
 
 }

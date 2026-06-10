@@ -72,6 +72,7 @@ public class EnvelopeService {
 
     private final TransferFeeService transferFeeService;
     private final MonnieCacheInvalidationService monnieCacheInvalidationService;
+    private final ProcessingTransferRecoveryScheduler transferRecoveryScheduler;
 
     @Value("${moniewise.revenue.wallet.user-id}")
     private Long revenueWalletUserId;
@@ -90,7 +91,8 @@ public class EnvelopeService {
             JdbcTemplate jdbcTemplate, BeneficiaryService beneficiaryService, PaymentProvider paymentProvider,
             ProvidusExpressGateway providusExpressGateway, PaymentGatewayResolver paymentGatewayResolver,
             TransferFeeService transferFeeService,
-            MonnieCacheInvalidationService monnieCacheInvalidationService) {
+            MonnieCacheInvalidationService monnieCacheInvalidationService,
+            @Lazy ProcessingTransferRecoveryScheduler transferRecoveryScheduler) {
         this.envelopeRepository = envelopeRepository;
         this.budgetRepository = budgetRepository;
         this.revenueLogRepository = revenueLogRepository;
@@ -110,6 +112,7 @@ public class EnvelopeService {
         this.paymentGatewayResolver = paymentGatewayResolver;
         this.transferFeeService = transferFeeService;
         this.monnieCacheInvalidationService = monnieCacheInvalidationService;
+        this.transferRecoveryScheduler = transferRecoveryScheduler;
     }
 
     @PostConstruct
@@ -1033,6 +1036,14 @@ public class EnvelopeService {
                 txn.setProviderReference(providerRef);
                 txn.setStatus(TransactionStatus.PROCESSING);
                 transactionLogRepository.save(txn);
+
+                // Rubies does NOT send DR webhooks for outbound NIP transfers.
+                // Fire an async TSQ poll immediately (at 5s / 15s / 35s) so the transfer
+                // settles within seconds rather than waiting for the 3-min scheduler cycle.
+                if (isRubies) {
+                    transferRecoveryScheduler.scheduleImmediateRecovery(
+                            txn.getReference(), providerRef);
+                }
             }
 
             if (feeTxn != null) {
