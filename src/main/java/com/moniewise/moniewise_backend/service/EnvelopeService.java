@@ -832,13 +832,13 @@ public class EnvelopeService {
         final BigDecimal fee      = markupFee;  // alias kept for downstream uses (txn log, FEE log)
         final BigDecimal totalFee = bankCharge.add(markupFee);
 
-        // Period-limit check — the disbursement rule for this period (e.g. daily/monthly cap).
+        // Period-limit check — only the send amount counts against the envelope limit.
+        // Fees come from the main wallet, not the envelope.
         BigDecimal periodRemaining = source.getRemainingAmount();
-        if (totalDebit.compareTo(periodRemaining) > 0) {
-            BigDecimal maxSendable = periodRemaining.subtract(totalFee).max(BigDecimal.ZERO);
+        if (amount.compareTo(periodRemaining) > 0) {
             throw new IllegalStateException(String.format(
-                    "Insufficient balance. Tranx fee ₦%,.2f · Max sendable ₦%,.2f.",
-                    totalFee, maxSendable));
+                    "Insufficient envelope balance. Max sendable: ₦%,.2f.",
+                    periodRemaining));
         }
 
         // Vault balance check — physical funds in the envelope minus what's already held.
@@ -846,12 +846,16 @@ public class EnvelopeService {
                 safeAmount(source.getTotalRemainingAmount())
                         .subtract(safeAmount(source.getHeldAmount()));
 
-        if (totalDebit.compareTo(availableVaultBalance) > 0) {
-            BigDecimal maxSendable = availableVaultBalance.subtract(totalFee).max(BigDecimal.ZERO);
+        if (amount.compareTo(availableVaultBalance) > 0) {
             throw new IllegalStateException(String.format(
-                    "Insufficient funds. Tranx fee ₦%,.2f · Max sendable ₦%,.2f.",
-                    totalFee, maxSendable));
+                    "Insufficient funds. Max sendable: ₦%,.2f.",
+                    availableVaultBalance));
         }
+
+        // Wallet fee check — deduct fees (NIP + markup) from the main wallet now.
+        // If the wallet can't cover them, this throws with a user-friendly message
+        // before any envelope state is touched.
+        walletService.deductTransferFee(user.getId(), totalFee, bankCharge, markupFee);
 //        String resolvedName = resolveExternalRecipientName(externalAccount, linkedWallet);
 //        if (resolvedName == null) {
 //            throw new IllegalArgumentException("Invalid Account Number");
@@ -931,12 +935,9 @@ public class EnvelopeService {
 //      source.setRemainingAmount(source.getRemainingAmount().subtract(amount));
 //      envelopeRepository.save(source);
 
-        source.setRemainingAmount(source.getRemainingAmount().subtract(totalDebit));
-        source.setHeldAmount(safeAmount(source.getHeldAmount()).add(totalDebit));
-
-//      source.setRemainingAmount(source.getRemainingAmount().subtract(totalDebit));
-//      source.setHeldAmount(safeAmount(source.getHeldAmount()).add(totalDebit));
-
+        // Only hold the send amount against the envelope — fees came from the wallet.
+        source.setRemainingAmount(source.getRemainingAmount().subtract(amount));
+        source.setHeldAmount(safeAmount(source.getHeldAmount()).add(amount));
         envelopeRepository.save(source);
 
         TransactionLog feeTxn = null;
@@ -1030,7 +1031,7 @@ public class EnvelopeService {
                         source.getId(),
                         txn.getReference(),
                         providerRef,
-                        totalDebit
+                        amount   // fees already came from wallet; only envelope amount settles here
                 );
             } else {
                 txn.setProviderReference(providerRef);
@@ -1081,9 +1082,10 @@ public class EnvelopeService {
 //            source.setRemainingAmount(source.getRemainingAmount().add(amount));
 //            envelopeRepository.save(source);
 
-//            source.setHeldAmount(source.getHeldAmount().subtract(amount));
-            source.setHeldAmount(safeAmount(source.getHeldAmount()).subtract(totalDebit));
-            source.setRemainingAmount(source.getRemainingAmount().add(totalDebit));
+            // Restore envelope: only `amount` was held (fees came from wallet).
+            // The @Transactional rollback will also undo the wallet fee deduction automatically.
+            source.setHeldAmount(safeAmount(source.getHeldAmount()).subtract(amount));
+            source.setRemainingAmount(source.getRemainingAmount().add(amount));
 
             envelopeRepository.save(source);
 
@@ -1779,22 +1781,31 @@ public class EnvelopeService {
             BigDecimal totalFee    = bankCharge.add(markupFee);
             BigDecimal totalDebit  = quote.getTotalDebit();
 
-            if (totalDebit.compareTo(availableLimit) > 0) {
-                BigDecimal maxSendable = availableLimit.subtract(totalFee).max(BigDecimal.ZERO);
+            // Fees come from the wallet — only check the send amount against the envelope limit.
+            if (amount.compareTo(availableLimit) > 0) {
                 throw new IllegalStateException(String.format(
-                        "Insufficient balance. Tranx fee ₦%,.2f · Max sendable ₦%,.2f.",
-                        totalFee, maxSendable));
+                        "Insufficient envelope balance. Max sendable: ₦%,.2f.",
+                        availableLimit));
             }
 
             BigDecimal availableVaultBalance =
                     safeAmount(source.getTotalRemainingAmount())
                             .subtract(safeAmount(source.getHeldAmount()));
 
-            if (totalDebit.compareTo(availableVaultBalance) > 0) {
-                BigDecimal maxSendable = availableVaultBalance.subtract(totalFee).max(BigDecimal.ZERO);
+            if (amount.compareTo(availableVaultBalance) > 0) {
                 throw new IllegalStateException(String.format(
-                        "Insufficient funds. Tranx fee ₦%,.2f · Max sendable ₦%,.2f.",
-                        totalFee, maxSendable));
+                        "Insufficient funds. Max sendable: ₦%,.2f.",
+                        availableVaultBalance));
+            }
+
+            // Check wallet can cover the fees (show user now, before reaching review → PIN).
+            BigDecimal walletBalance = safeAmount(wallet != null ? wallet.getBalance() : null);
+            if (walletBalance.compareTo(totalFee) < 0) {
+                throw new IllegalStateException(String.format(
+                        "Insufficient wallet balance to cover transfer charges. " +
+                        "You need ₦%,.2f in your wallet (NIP fee: ₦%,.2f + Service fee: ₦%,.2f). " +
+                        "Please top up your wallet.",
+                        totalFee, bankCharge, markupFee));
             }
 
             return new ExternalTransferQuoteResponse(
@@ -1828,25 +1839,30 @@ public class EnvelopeService {
         BigDecimal fee = feeQuote.getFee();
         BigDecimal totalDebit = feeQuote.getTotalDebit();
 
-        if (totalDebit.compareTo(availableLimit) > 0) {
-            BigDecimal maxSendable = availableLimit.subtract(fee).max(BigDecimal.ZERO);
+        // Fees come from the wallet — only check the send amount against the envelope limit.
+        if (amount.compareTo(availableLimit) > 0) {
             throw new IllegalStateException(String.format(
-                    "Insufficient balance. Your envelope allows ₦%,.2f for this period. " +
-                    "The ₦%,.2f transfer fee means the most you can send right now is ₦%,.2f. " +
-                    "Please reduce your transfer amount.",
-                    availableLimit, fee, maxSendable));
+                    "Insufficient envelope balance. Max sendable: ₦%,.2f.",
+                    availableLimit));
         }
 
         BigDecimal availableVaultBalance =
                 safeAmount(source.getTotalRemainingAmount())
                         .subtract(safeAmount(source.getHeldAmount()));
 
-        if (totalDebit.compareTo(availableVaultBalance) > 0) {
-            BigDecimal maxSendable = availableVaultBalance.subtract(fee).max(BigDecimal.ZERO);
+        if (amount.compareTo(availableVaultBalance) > 0) {
             throw new IllegalStateException(String.format(
-                    "Insufficient funds. Your envelope has ₦%,.2f available (after pending transfers). " +
-                    "With the ₦%,.2f transfer fee, the most you can send is ₦%,.2f.",
-                    availableVaultBalance, fee, maxSendable));
+                    "Insufficient funds. Max sendable: ₦%,.2f.",
+                    availableVaultBalance));
+        }
+
+        // Check wallet covers the service fee.
+        BigDecimal legacyWalletBalance = safeAmount(wallet != null ? wallet.getBalance() : null);
+        if (legacyWalletBalance.compareTo(fee) < 0) {
+            throw new IllegalStateException(String.format(
+                    "Insufficient wallet balance to cover the ₦%,.2f service fee. " +
+                    "Please top up your wallet.",
+                    fee));
         }
 
         if (wallet.getSettlementAccountNumber() == null || wallet.getSettlementAccountNumber().isBlank()) {
@@ -1875,8 +1891,9 @@ public class EnvelopeService {
             return "No transfer fee applies. ₦" + formatMoney(amount) + " will be sent.";
         }
 
-        return "A ₦" + formatMoney(fee) + " transfer fee applies. ₦"
-                + formatMoney(totalDebit) + " will be deducted from this envelope.";
+        // Fee is deducted from the main wallet — only the send amount leaves the envelope.
+        return "A ₦" + formatMoney(fee) + " service fee will be charged to your wallet. "
+                + "₦" + formatMoney(amount) + " will be deducted from this envelope.";
     }
 
     private String formatMoney(BigDecimal amount) {

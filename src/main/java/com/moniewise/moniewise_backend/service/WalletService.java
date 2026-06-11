@@ -257,6 +257,55 @@ public class WalletService {
         monnieCacheInvalidationService.evictUserAfterCommit(userId);
     }
 
+    /**
+     * Deducts transfer fees (NIP bank charge + Wisemonie markup) from the user's
+     * main wallet balance. Fees for envelope-to-external transfers are sourced from
+     * the wallet so that the envelope's period limit only reflects the actual send
+     * amount — not the platform charges.
+     *
+     * <p>Throws {@link IllegalStateException} with a user-facing breakdown message
+     * when the wallet balance is insufficient; callers should surface this directly.
+     */
+    @Transactional
+    public void deductTransferFee(Long userId, BigDecimal totalFee,
+                                   BigDecimal bankCharge, BigDecimal markupFee) {
+        Wallet wallet = walletRepository.findByUserId(userId)
+                .orElseThrow(() -> new IllegalArgumentException("Wallet not found for user " + userId));
+        BigDecimal balance = wallet.getBalance() != null ? wallet.getBalance() : BigDecimal.ZERO;
+        if (balance.compareTo(totalFee) < 0) {
+            throw new IllegalStateException(String.format(
+                "Insufficient wallet balance to cover transfer charges. " +
+                "You need ₦%,.2f in your wallet (NIP fee: ₦%,.2f + Service fee: ₦%,.2f). " +
+                "Please top up your wallet to proceed.",
+                totalFee, bankCharge, markupFee));
+        }
+        wallet.setBalance(balance.subtract(totalFee));
+        wallet.setUpdatedAt(LocalDateTime.now());
+        walletRepository.save(wallet);
+        monnieCacheInvalidationService.evictUserAfterCommit(userId);
+        logger.info("[FeeDeduct] ₦{} transfer fee deducted from wallet for user {} (NIP: ₦{}, markup: ₦{})",
+                totalFee, userId, bankCharge, markupFee);
+    }
+
+    /**
+     * Refunds transfer fees back to the user's wallet when an external transfer fails.
+     * Called by the settlement service upon confirmed Rubies failure so the user is
+     * not charged fees for a transfer that never completed.
+     */
+    @Transactional
+    public void refundTransferFee(Long userId, BigDecimal totalFee) {
+        if (totalFee == null || totalFee.compareTo(BigDecimal.ZERO) <= 0) return;
+        Wallet wallet = walletRepository.findByUserId(userId)
+                .orElseThrow(() -> new IllegalArgumentException("Wallet not found for user " + userId));
+        BigDecimal balance = wallet.getBalance() != null ? wallet.getBalance() : BigDecimal.ZERO;
+        wallet.setBalance(balance.add(totalFee));
+        wallet.setUpdatedAt(LocalDateTime.now());
+        walletRepository.save(wallet);
+        monnieCacheInvalidationService.evictUserAfterCommit(userId);
+        logger.info("[FeeRefund] ₦{} transfer fee refunded to wallet for user {} (transfer failed)",
+                totalFee, userId);
+    }
+
 //    @Transactional
 //    public Wallet createWalletForUser(User user) {
 //        if (user.getId() == null) {

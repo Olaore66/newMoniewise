@@ -183,6 +183,9 @@ public class AiInsightService {
                 context.firstName,
                 context.gender,
                 context.occupation,
+                context.age,
+                context.ageGroup,
+                context.demographicContext,
                 context.dayOfWeek,
                 context.currentTimeFormatted,
                 context.isUsualTransferTime,
@@ -264,6 +267,14 @@ public class AiInsightService {
             Object occObj = user.getProfileData().get("occupation");
             if (occObj != null && !occObj.toString().isBlank()) {
                 context.occupation = occObj.toString().trim();
+            }
+
+            // ── Age / demographic ─────────────────────────────────────────────
+            LocalDate dob = extractDateOfBirth(user.getProfileData());
+            if (dob != null) {
+                context.age = (int) ChronoUnit.YEARS.between(dob, LocalDate.now(LAGOS_ZONE));
+                context.ageGroup         = classifyAgeGroup(context.age);
+                context.demographicContext = buildDemographicContext(context.age);
             }
         } else {
             context.firstName = context.userName;
@@ -446,6 +457,94 @@ public class AiInsightService {
         if (hour >= 12 && hour < 17) return "afternoons";
         if (hour >= 17 && hour < 21) return "evenings";
         return "nights";
+    }
+
+    // ── Demographic helpers ───────────────────────────────────────────────────
+
+    /**
+     * Extracts the user's date of birth from profileData.
+     *
+     * <p>Two storage formats are supported (both may exist simultaneously):
+     * <ul>
+     *   <li>{@code "dateOfBirth"} → String {@code "YYYY-MM-DD"} (set during KYC / profile update)</li>
+     *   <li>{@code "dob"} → {@code List<Integer>} {@code [year, month, day]} (set during onboarding)</li>
+     * </ul>
+     * Returns {@code null} when neither key is present or parseable.
+     */
+    private LocalDate extractDateOfBirth(java.util.Map<String, Object> profileData) {
+        // Prefer the ISO string form written by KYC / profile-update path
+        Object dobStr = profileData.get("dateOfBirth");
+        if (dobStr != null && !dobStr.toString().isBlank()) {
+            try {
+                return LocalDate.parse(dobStr.toString().trim());
+            } catch (Exception ignored) { /* fall through */ }
+        }
+        // Fallback: onboarding stores DOB as a 3-element list [year, month, day]
+        Object dobList = profileData.get("dob");
+        if (dobList instanceof java.util.List<?> list && list.size() >= 3) {
+            try {
+                int year  = ((Number) list.get(0)).intValue();
+                int month = ((Number) list.get(1)).intValue();
+                int day   = ((Number) list.get(2)).intValue();
+                return LocalDate.of(year, month, day);
+            } catch (Exception ignored) { /* fall through */ }
+        }
+        return null;
+    }
+
+    /** Maps an age in years to a short, labelled age-group string. */
+    private String classifyAgeGroup(int age) {
+        if (age < 18) return "under 18";
+        if (age < 25) return "18–24 (young adult)";
+        if (age < 33) return "25–32 (young professional)";
+        if (age < 43) return "33–42 (family stage)";
+        if (age < 56) return "43–55 (peak earner)";
+        return "56+ (senior)";
+    }
+
+    /**
+     * Returns a concise Nigerian-context life-stage description for the given age.
+     * This is injected verbatim into the Gemini prompt so Monnie can tailor both
+     * tone and advice without needing to infer demographics from indirect signals.
+     */
+    private String buildDemographicContext(int age) {
+        if (age < 18) {
+            return "Under 18 — student or dependent. Light, encouraging tone. "
+                 + "Focus on building saving habits and setting small goals. Keep language simple and supportive.";
+        }
+        if (age < 25) {
+            return "18–24 young adult — likely first job or still in school in Nigeria. "
+                 + "May have irregular or entry-level income. Common spend pressures: airtime/data, social outings, "
+                 + "sending money home to family, peer lifestyle FOMO. "
+                 + "Use a casual, energetic, peer-friendly tone — this is a discovery and independence phase. "
+                 + "Celebrate small wins; don't lecture.";
+        }
+        if (age < 33) {
+            return "25–32 young professional — career building phase. "
+                 + "Typical Nigerian priorities at this stage: saving for rent (especially in Lagos/Abuja), "
+                 + "buying a car, funding a wedding, starting a side hustle. "
+                 + "FOMO lifestyle spending (owambe parties, weekend trips, fashion) is real but manageable. "
+                 + "Tone: aspirational yet grounded — affirm their ambition while anchoring them to the plan.";
+        }
+        if (age < 43) {
+            return "33–42 family stage — Nigeria's sandwich generation. "
+                 + "Most people at this age are simultaneously supporting young children AND aging parents. "
+                 + "Major spend categories: school fees, spouse expenses, family medical bills, rent or mortgage. "
+                 + "Financial pressure is often high; budget discipline is genuinely hard. "
+                 + "Tone: warm, empathetic, and practical — acknowledge the load, celebrate discipline, "
+                 + "and offer realistic tips rather than idealised advice.";
+        }
+        if (age < 56) {
+            return "43–55 peak earner — more financially established but often stretched. "
+                 + "Children may be in secondary school or university. Health spending starts rising. "
+                 + "Investment-consciousness increases but retirement planning is often delayed in Nigeria. "
+                 + "Tone: professional and forward-thinking — surface long-term implications of near-term spend choices. "
+                 + "Treat them as financially mature; skip the basics.";
+        }
+        return "56+ senior / pre-retirement — fixed or declining income, health is the top priority. "
+             + "May still be supporting adult children or grandchildren (common in Nigeria). "
+             + "Conservative financial stance; every naira must work harder. "
+             + "Tone: respectful, calm, and clear — avoid jargon, prioritise stability over growth narratives.";
     }
 
     /** Formats a LocalDateTime as 12-hour time (e.g. "5pm", "9:30am"). */
@@ -1471,6 +1570,12 @@ public class AiInsightService {
         private String firstName  = "there";
         private String gender     = "unknown";   // "male" | "female" | "other" | "unknown"
         private String occupation = "";
+        // ── Demographics ──────────────────────────────────────────────────────
+        /** Computed age in years. -1 = not available (DOB not on profile). */
+        private int    age              = -1;
+        private String ageGroup         = "unknown";
+        /** Nigerian-context life-stage description fed directly to Gemini. */
+        private String demographicContext = "Age unknown — use a universally warm, professional tone.";
 
         // ── Time / day ────────────────────────────────────────────────────────
         private String currentTimeFormatted = "";  // "5pm", "9:30am"

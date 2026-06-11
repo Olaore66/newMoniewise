@@ -324,6 +324,9 @@ public class AiPromptService {
         String firstName,
         String gender,
         String occupation,
+        int age,
+        String ageGroup,
+        String demographicContext,
         String dayOfWeek,
         String currentTime,
         boolean isUsualTransferTime,
@@ -347,6 +350,10 @@ public class AiPromptService {
         String envelopesNearLimitStr = (envelopesNearLimit == null || envelopesNearLimit.isEmpty())
             ? "none" : String.join(", ", envelopesNearLimit);
         String occupationStr = (occupation == null || occupation.isBlank()) ? "not provided" : occupation;
+        String ageStr        = age >= 0 ? String.valueOf(age) : "unknown";
+        String ageGroupStr   = (ageGroup == null || ageGroup.isBlank()) ? "unknown" : ageGroup;
+        String demographicContextStr = (demographicContext == null || demographicContext.isBlank())
+            ? "Age unknown — use a universally warm, professional tone." : demographicContext;
         String patternStr = (transferPatternDesc == null || transferPatternDesc.isBlank())
             ? "no clear pattern detected" : transferPatternDesc;
         String budgetNamesStr = (activeBudgetNames == null || activeBudgetNames.isEmpty())
@@ -419,6 +426,20 @@ public class AiPromptService {
               e.g. "Weekend is here — your [Envelope] has ₦X ready if you need it."
             • Sunday : Reflection + preparation for the week ahead.
               e.g. "Sunday reset, [NAME] — good time to see if your plan held up this week."
+
+            ── Demographic intelligence (Nigerian life-stage context) ─────────────────────
+            The user is %s years old (age group: %s).
+            Life-stage context:
+            %s
+
+            Use this to calibrate:
+            - Your tone and register (casual vs professional, emoji-heavy vs restrained)
+            - The financial concerns most likely on their mind right now
+            - How to frame advice — e.g. "school fees" for family stage, "wedding savings" for young professional,
+              "retirement prep" for peak earners, "health budget" for seniors
+            - What behaviour patterns to anticipate (impulse spending, family obligations, investment interest)
+            IMPORTANT: never state the user's age in your message. Absorb the context invisibly —
+            the user should simply feel understood, not profiled.
 
             ── Envelope snapshot format ──────────────────────────────────────────────────
             Each line in envelopeSnapshot looks like:
@@ -515,6 +536,7 @@ public class AiPromptService {
             - firstName: %s
             - gender: %s  (male/female/other/unknown — use naturally for address)
             - occupation: %s
+            - age: %s  |  ageGroup: %s  (absorb invisibly — never state it in your message)
             - currentDateTime: It is %s %s WAT
             - walletBalance: %.2f NGN
             - activeBudgetCount: %d
@@ -577,10 +599,16 @@ public class AiPromptService {
                 firstName,           // voice rule — title example "Hey %s, ..."
                 dayOfWeek,           // time awareness — "It is currently %s %s WAT"
                 currentTime,
+                // ── demographic intelligence block ──
+                ageStr,
+                ageGroupStr,
+                demographicContextStr,
                 // ── user snapshot ──
                 firstName,
                 gender,
                 occupationStr,
+                ageStr,              // age (absorb invisibly)
+                ageGroupStr,         // ageGroup
                 dayOfWeek,
                 currentTime,
                 walletBalance,

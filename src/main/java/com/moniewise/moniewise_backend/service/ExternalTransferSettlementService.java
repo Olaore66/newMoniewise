@@ -85,23 +85,21 @@ public class ExternalTransferSettlementService {
         BigDecimal totalDebit = transferAmount.add(nipFee).add(markupFee);
 
         if (isSuccessful(status)) {
-            source.setHeldAmount(source.getHeldAmount().subtract(totalDebit).max(BigDecimal.ZERO));
-            source.setTotalRemainingAmount(source.getTotalRemainingAmount().subtract(totalDebit).max(BigDecimal.ZERO));
+            // Fees were already deducted from the wallet at initiation — only release the
+            // envelope hold for the send amount (totalDebit is NOT used here any more).
+            source.setHeldAmount(source.getHeldAmount().subtract(transferAmount).max(BigDecimal.ZERO));
+            source.setTotalRemainingAmount(source.getTotalRemainingAmount().subtract(transferAmount).max(BigDecimal.ZERO));
             txn.setStatus(TransactionStatus.COMPLETED);
 
             // Propagate the spend to the parent budget's remaining_amount.
-            // At initiation time only the envelope's remainingAmount (period pocket) and
-            // heldAmount were touched — budget.remainingAmount was never reduced.
-            // We reduce it here at confirmed-success time, mirroring the
-            // totalRemainingAmount deduction above.
             Budget parentBudget = source.getBudget();
             if (parentBudget != null) {
                 parentBudget.setRemainingAmount(
-                        parentBudget.getRemainingAmount().subtract(totalDebit).max(BigDecimal.ZERO)
+                        parentBudget.getRemainingAmount().subtract(transferAmount).max(BigDecimal.ZERO)
                 );
                 budgetRepository.save(parentBudget);
-                logger.info("[ExternalTransfer] Budget {} remaining_amount reduced by ₦{} for ref={}",
-                        parentBudget.getId(), totalDebit, txn.getReference());
+                logger.info("[ExternalTransfer] Budget {} remaining_amount reduced by ₦{} (send amount) for ref={}",
+                        parentBudget.getId(), transferAmount, txn.getReference());
             }
 
             // Bug-fix: credit the markup fee to the platform revenue wallet (was never done
@@ -149,10 +147,16 @@ public class ExternalTransferSettlementService {
             }
 
         } else if (isFailed(status)) {
-            // On failure the full debit (amount + fee) is returned to the envelope.
-            source.setHeldAmount(source.getHeldAmount().subtract(totalDebit).max(BigDecimal.ZERO));
-            source.setRemainingAmount(source.getRemainingAmount().add(totalDebit));
+            // On failure: restore envelope hold (send amount only) and refund fees to wallet.
+            source.setHeldAmount(source.getHeldAmount().subtract(transferAmount).max(BigDecimal.ZERO));
+            source.setRemainingAmount(source.getRemainingAmount().add(transferAmount));
             txn.setStatus(TransactionStatus.FAILED);
+
+            // Refund the fees (NIP + markup) that were pre-deducted from the wallet at initiation.
+            BigDecimal totalFeeToRefund = nipFee.add(markupFee);
+            walletService.refundTransferFee(txn.getUserId(), totalFeeToRefund);
+            logger.info("[ExternalTransfer] Fee ₦{} refunded to wallet for user {} — transfer failed, ref={}",
+                    totalFeeToRefund, txn.getUserId(), txn.getReference());
 
         } else {
             return;
