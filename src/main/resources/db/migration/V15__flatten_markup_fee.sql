@@ -9,7 +9,7 @@ INSERT INTO system_config (config_key, config_value, description)
 VALUES (
     'transfer.markup.flat_fee',
     '2.25',
-    'Wisemonie markup fee (NGN) charged on every external transfer, regardless of amount. Default ₦2.25.'
+    'Moniewise markup fee (NGN) charged on every external transfer, regardless of amount. Default ₦2.25.'
 )
 ON CONFLICT (config_key) DO UPDATE
     SET config_value = '2.25',
