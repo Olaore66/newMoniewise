@@ -624,13 +624,17 @@ public class EnvelopeService {
                 throw new IllegalArgumentException("Unsupported envelope type: " + type);
         }
 
-        // 3. Ã°Å¸â€ºâ€˜ THE FIX: DEFINE WHAT COUNTS AS SPENDING Ã°Å¸â€ºâ€˜
+        // 3. THE FIX: DEFINE WHAT COUNTS AS SPENDING
         // We strictly define: "Money leaving the envelope".
         // We do NOT include refunds or deposits here.
+        // NOTE: ENVELOPE_EXTERNAL_TRANSFER_FEE is intentionally excluded — fees are
+        // now deducted from the wallet, NOT from the envelope.  Including the FEE
+        // companion log here would cause getRemainingLimit to overstate spending by
+        // the markup fee amount and write an incorrectly low remainingAmount back to
+        // the DB every time this method is called.
         List<TransactionType> spendingTypes = List.of(
                 TransactionType.ENVELOPE_TO_ENVELOPE, // Moving money out
                 TransactionType.ENVELOPE_TO_EXTERNAL, // Sending to Bank
-                TransactionType.ENVELOPE_EXTERNAL_TRANSFER_FEE,
                 TransactionType.ENVELOPE_TO_USER      // P2P Transfer
         );
 
@@ -984,6 +988,16 @@ public class EnvelopeService {
                 .build();
         transactionLogRepository.save(txn);
 
+        // Create the wallet-side fee debit log so users can see why their wallet
+        // balance dropped.  This is placed before the provider call so that if the
+        // provider fails the @Transactional rollback removes the log automatically.
+        // Reference: WFT-{myReference}  |  Status: PROCESSING → COMPLETED / FAILED
+        if (totalFee.compareTo(BigDecimal.ZERO) > 0) {
+            walletService.logTransferFeeDebit(
+                    user.getId(), totalFee, bankCharge, markupFee,
+                    myReference, amount, resolvedName, bankName);
+        }
+
         String providerRef;
         try {
             String providerNarration = narration != null && !narration.trim().isEmpty()
@@ -1033,6 +1047,12 @@ public class EnvelopeService {
                         providerRef,
                         amount   // fees already came from wallet; only envelope amount settles here
                 );
+                // SecureWave auto-settles immediately — mark the wallet fee log COMPLETED now.
+                // (For Rubies the settlement service handles this when TSQ confirms.)
+                transactionLogRepository.findByReference("WFT-" + myReference).ifPresent(wftLog -> {
+                    wftLog.setStatus(TransactionStatus.COMPLETED);
+                    transactionLogRepository.save(wftLog);
+                });
             } else {
                 txn.setProviderReference(providerRef);
                 txn.setStatus(TransactionStatus.PROCESSING);

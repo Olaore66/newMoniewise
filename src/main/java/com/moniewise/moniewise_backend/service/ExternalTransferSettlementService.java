@@ -165,11 +165,21 @@ public class ExternalTransferSettlementService {
         envelopeRepository.save(source);
         transactionLogRepository.save(txn);
 
-        // Keep the companion FEE log in sync with the main transaction status.
+        // Keep the envelope-side FEE companion log in sync with the main txn status.
         transactionLogRepository.findByReference(txn.getReference() + "-FEE").ifPresent(feeTxn -> {
             feeTxn.setStatus(txn.getStatus());
             transactionLogRepository.save(feeTxn);
         });
+
+        // Keep the wallet-side fee debit log (WFT-) in sync so the user-facing
+        // transaction history reflects the final outcome.
+        // COMPLETED → fee was rightfully charged.
+        // FAILED    → fee was reversed; the wallet has already been refunded.
+        transactionLogRepository.findByReference("WFT-" + txn.getReference()).ifPresent(wftLog -> {
+            wftLog.setStatus(txn.getStatus());
+            transactionLogRepository.save(wftLog);
+        });
+
         monnieCacheInvalidationService.evictUserAfterCommit(txn.getUserId());
     }
     private boolean isSuccessful(String status) {

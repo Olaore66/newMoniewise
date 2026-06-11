@@ -5,20 +5,9 @@ import com.moniewise.moniewise_backend.dto.WithdrawalInitiationResponseDto;
 import com.moniewise.moniewise_backend.dto.request.WithdrawalRequest;
 import com.moniewise.moniewise_backend.dto.response.TransactionDetailResponse;
 import com.moniewise.moniewise_backend.dto.response.TransactionListResponse;
-import com.moniewise.moniewise_backend.entity.Budget;
-import com.moniewise.moniewise_backend.entity.Envelope;
-import com.moniewise.moniewise_backend.entity.TransactionDecision;
-import com.moniewise.moniewise_backend.entity.TransactionLog;
-import com.moniewise.moniewise_backend.entity.TransactionRequest;
-import com.moniewise.moniewise_backend.entity.User;
-import com.moniewise.moniewise_backend.entity.Withdrawal;
+import com.moniewise.moniewise_backend.entity.*;
 import com.moniewise.moniewise_backend.enums.TransactionType;
-import com.moniewise.moniewise_backend.repository.BudgetRepository;
-import com.moniewise.moniewise_backend.repository.EnvelopeRepository;
-import com.moniewise.moniewise_backend.repository.TransactionDecisionRepository;
-import com.moniewise.moniewise_backend.repository.TransactionLogRepository;
-import com.moniewise.moniewise_backend.repository.TransactionRequestRepository;
-import com.moniewise.moniewise_backend.repository.UserRepository;
+import com.moniewise.moniewise_backend.repository.*;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -28,29 +17,9 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.time.YearMonth;
-import java.util.EnumSet;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.Map;
-import java.util.Set;
-import java.util.UUID;
+import java.util.*;
 
-import static com.moniewise.moniewise_backend.enums.TransactionType.BUDGET_ALLOCATION;
-import static com.moniewise.moniewise_backend.enums.TransactionType.BUDGET_CREATION_FEE;
-import static com.moniewise.moniewise_backend.enums.TransactionType.BUDGET_UNALLOCATED_REFUNDED;
-import static com.moniewise.moniewise_backend.enums.TransactionType.DISBURSEMENT_REFUNDED;
-import static com.moniewise.moniewise_backend.enums.TransactionType.ENVELOPE_DISBURSEMENT;
-import static com.moniewise.moniewise_backend.enums.TransactionType.ENVELOPE_TO_ENVELOPE;
-import static com.moniewise.moniewise_backend.enums.TransactionType.ENVELOPE_TO_EXTERNAL;
-import static com.moniewise.moniewise_backend.enums.TransactionType.ENVELOPE_TO_USER;
-import static com.moniewise.moniewise_backend.enums.TransactionType.STRICT_LOCK_ROLLBACK;
-import static com.moniewise.moniewise_backend.enums.TransactionType.USER_TO_ENVELOPE;
-import static com.moniewise.moniewise_backend.enums.TransactionType.USER_TO_USER;
-import static com.moniewise.moniewise_backend.enums.TransactionType.WALLET_DEDUCTION;
-import static com.moniewise.moniewise_backend.enums.TransactionType.WALLET_DEPOSIT;
-import static com.moniewise.moniewise_backend.enums.TransactionType.WALLET_TO_BUDGET;
-import static com.moniewise.moniewise_backend.enums.TransactionType.WALLET_WITHDRAWAL;
-import static com.moniewise.moniewise_backend.enums.TransactionType.WALLET_WITHDRAWAL_FEE;
+import static com.moniewise.moniewise_backend.enums.TransactionType.*;
 
 @Service
 @Transactional(readOnly = true)
@@ -77,7 +46,10 @@ public class TransactionService {
             BUDGET_UNALLOCATED_REFUNDED,
             STRICT_LOCK_ROLLBACK,
             DISBURSEMENT_REFUNDED,
-            WALLET_WITHDRAWAL
+            WALLET_WITHDRAWAL,
+            // Wallet-side fee debit for envelope-to-bank transfers.
+            // Shown so users understand why their wallet balance dropped.
+            WALLET_ENVELOPE_TRANSFER_FEE
     );
 
     private static final Set<TransactionType> USER_VISIBLE_OUTGOING_TYPES = EnumSet.of(
@@ -90,6 +62,7 @@ public class TransactionService {
             BUDGET_ALLOCATION,
             WALLET_WITHDRAWAL,
             WALLET_WITHDRAWAL_FEE,
+            WALLET_ENVELOPE_TRANSFER_FEE,
             WALLET_TO_BUDGET
     );
 
@@ -312,6 +285,14 @@ public class TransactionService {
                 subtitle = "Bank Transfer";
                 iconType = "BANK";
                 break;
+            case WALLET_ENVELOPE_TRANSFER_FEE:
+                String feeRecipient = transaction.getExternalAccountName();
+                title = (feeRecipient != null && !feeRecipient.isBlank())
+                        ? "Transfer fee — " + feeRecipient
+                        : "Transfer fee";
+                subtitle = "Bank transfer fee";
+                iconType = "FEE";
+                break;
             case ENVELOPE_TO_ENVELOPE:
                 title = "Moved to " + targetName;
                 subtitle = "From " + sourceName;
@@ -406,8 +387,9 @@ public class TransactionService {
                 break;
             case BUDGET_CREATION_FEE:
             case WALLET_WITHDRAWAL_FEE:
+            case WALLET_ENVELOPE_TRANSFER_FEE:
                 sender = "Main Wallet";
-                recipient = "MonieWise Fee";
+                recipient = "Wisemonie Fee";
                 break;
             case BUDGET_UNALLOCATED_REFUNDED:
                 sender = "Unallocated Funds";
@@ -453,6 +435,7 @@ public class TransactionService {
             case USER_TO_ENVELOPE -> "Received from " + getCounterpartyName(transaction);
             case BUDGET_CREATION_FEE -> "Budget creation fee";
             case WALLET_WITHDRAWAL_FEE -> "Withdrawal fee";
+            case WALLET_ENVELOPE_TRANSFER_FEE -> "Transfer fee";
             case BUDGET_ALLOCATION -> "Allocated to budget";
             case BUDGET_UNALLOCATED_REFUNDED -> "Refunded to wallet";
             default -> formatEnumName(transaction.getTransactionType());
@@ -534,6 +517,7 @@ public class TransactionService {
                     ENVELOPE_TO_USER,
                     WALLET_DEDUCTION,
                     WALLET_WITHDRAWAL_FEE,
+                    WALLET_ENVELOPE_TRANSFER_FEE,
                     BUDGET_CREATION_FEE,
                     BUDGET_ALLOCATION,
                     WALLET_WITHDRAWAL -> true;

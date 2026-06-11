@@ -288,6 +288,66 @@ public class WalletService {
     }
 
     /**
+     * Creates a wallet-side transaction-log entry for the NIP + service fee charged
+     * at envelope-to-bank transfer initiation.  This is the record that appears in
+     * the user's transaction history explaining the wallet balance drop that
+     * accompanies an envelope transfer.
+     *
+     * <p>Reference pattern: {@code WFT-{transferRef}}.  The settlement service
+     * looks up this reference to flip the status to COMPLETED (success) or FAILED
+     * (transfer reversed, fee already refunded by {@link #refundTransferFee}).
+     *
+     * <p>Call this INSIDE the provider try-block, AFTER the provider accepts the
+     * transfer, so it is rolled back atomically if the provider call fails.
+     */
+    @Transactional
+    public void logTransferFeeDebit(Long userId,
+                                     BigDecimal totalFee,
+                                     BigDecimal bankCharge,
+                                     BigDecimal markupFee,
+                                     String transferRef,
+                                     BigDecimal transferAmount,
+                                     String recipientName,
+                                     String bankName) {
+        if (totalFee == null || totalFee.compareTo(BigDecimal.ZERO) <= 0) return;
+        String feeRef = "WFT-" + transferRef;
+        if (transactionLogRepository.findByReference(feeRef).isPresent()) return; // idempotent
+
+        String recipientDisplay = (recipientName != null && !recipientName.isBlank()) ? recipientName : "recipient";
+        String bankDisplay      = (bankName != null && !bankName.isBlank()) ? " — " + bankName : "";
+
+        BigDecimal safeNip    = bankCharge  != null ? bankCharge  : BigDecimal.ZERO;
+        BigDecimal safeMarkup = markupFee   != null ? markupFee   : BigDecimal.ZERO;
+        String breakdown;
+        if (safeNip.compareTo(BigDecimal.ZERO) > 0 && safeMarkup.compareTo(BigDecimal.ZERO) > 0) {
+            breakdown = String.format(" (NIP: ₦%,.2f + service: ₦%,.2f)", safeNip, safeMarkup);
+        } else if (safeMarkup.compareTo(BigDecimal.ZERO) > 0) {
+            breakdown = String.format(" (service: ₦%,.2f)", safeMarkup);
+        } else {
+            breakdown = "";
+        }
+
+        String desc = String.format(
+                "Transfer fee for ₦%,.2f to %s%s%s",
+                transferAmount, recipientDisplay, bankDisplay, breakdown);
+
+        TransactionLog feeLog = TransactionLog.builder()
+                .userId(userId)
+                .amount(totalFee)      // positive — isOutgoing() returns true via type-switch
+                .fee(BigDecimal.ZERO)
+                .reference(feeRef)
+                .status(TransactionStatus.PROCESSING)
+                .transactionType(TransactionType.WALLET_ENVELOPE_TRANSFER_FEE)
+                .externalAccountName(recipientName)
+                .externalBankName(bankName)
+                .description(desc)
+                .createdAt(LocalDateTime.now())
+                .build();
+        transactionLogRepository.save(feeLog);
+        logger.info("[FeeLog] Wallet fee debit log created: ref={} totalFee=₦{}", feeRef, totalFee);
+    }
+
+    /**
      * Refunds transfer fees back to the user's wallet when an external transfer fails.
      * Called by the settlement service upon confirmed Rubies failure so the user is
      * not charged fees for a transfer that never completed.

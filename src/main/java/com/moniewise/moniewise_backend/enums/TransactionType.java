@@ -28,6 +28,17 @@ public enum TransactionType {
     ENVELOPE_EXTERNAL_TRANSFER_FEE,
     P2P_RUBIES_SETTLEMENT,
     /**
+     * Wallet-side debit log for the NIP + service fee charged at envelope-to-bank
+     * transfer initiation.  Unlike the envelope-side {@link #ENVELOPE_EXTERNAL_TRANSFER_FEE}
+     * (which is an internal accounting entry), this type IS user-visible — it
+     * explains the wallet balance drop that accompanies an envelope transfer.
+     *
+     * <p>Reference pattern: {@code WFT-{envelopeTransferRef}}
+     * Status lifecycle: PROCESSING (on initiation) → COMPLETED (on TSQ/webhook success)
+     *                                              → FAILED    (on TSQ/webhook failure, fee refunded)
+     */
+    WALLET_ENVELOPE_TRANSFER_FEE,
+    /**
      * Internal Rubies-to-Rubies P2P used to physically move the Moniewise markup fee
      * from the user's Rubies wallet into the Moniewise revenue wallet.
      * These transactions are platform-internal and must NOT appear in user-facing

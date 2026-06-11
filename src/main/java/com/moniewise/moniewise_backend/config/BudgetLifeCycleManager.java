@@ -1376,12 +1376,15 @@ public class BudgetLifeCycleManager {
                         activeStatuses
                 );
 
+        // NOTE: ENVELOPE_EXTERNAL_TRANSFER_FEE is intentionally excluded — transfer
+        // fees are deducted from the wallet, not the envelope.  Including the FEE
+        // companion log would understate the ledger balance and therefore reduce the
+        // refundable amount at budget completion by the fee value.
         BigDecimal moneyThatLeftBudget =
                 transactionLogRepository.sumAbsAmountBySourceEnvelopeAndTypesAndStatuses(
                         envelope.getId(),
                         List.of(
                                 TransactionType.ENVELOPE_TO_EXTERNAL,
-                                TransactionType.ENVELOPE_EXTERNAL_TRANSFER_FEE,
                                 TransactionType.ENVELOPE_TO_USER
                         ),
                         activeStatuses

@@ -41,7 +41,7 @@ import java.util.stream.Collectors;
  *         <li>Reduces the parent budget's remaining_amount (V18 fix)</li>
  *         <li>Credits the ₦2.25 markup fee to the revenue wallet DB record</li>
  *         <li>Fires {@code collectRubiesMarkupFeeAsync} — the Rubies P2P to transfer
- *             the markup fee to the Moniewise Rubies revenue account</li>
+ *             the markup fee to the Wisemonie Rubies revenue account</li>
  *       </ul>
  *   </li>
  * </ol>
