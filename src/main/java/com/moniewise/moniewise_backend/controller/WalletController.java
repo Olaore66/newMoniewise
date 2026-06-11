@@ -8,6 +8,7 @@ import com.moniewise.moniewise_backend.dto.response.WalletResponse;
 import com.moniewise.moniewise_backend.entity.User;
 import com.moniewise.moniewise_backend.entity.Wallet;
 import com.moniewise.moniewise_backend.entity.Withdrawal;
+import com.moniewise.moniewise_backend.security.AuthenticatedUserHolder;
 import com.moniewise.moniewise_backend.service.AbuseProtectionService;
 import com.moniewise.moniewise_backend.service.UserService;
 import com.moniewise.moniewise_backend.service.WalletService;
@@ -34,19 +35,27 @@ public class WalletController {
     private final WalletService walletService;
     private final UserService userService;
     private final AbuseProtectionService abuseProtectionService;
+    private final AuthenticatedUserHolder userHolder;
 
     public WalletController(WalletService walletService,
                             UserService userService,
-                            AbuseProtectionService abuseProtectionService) {
+                            AbuseProtectionService abuseProtectionService,
+                            AuthenticatedUserHolder userHolder) {
         this.walletService = walletService;
         this.userService = userService;
         this.abuseProtectionService = abuseProtectionService;
+        this.userHolder = userHolder;
+    }
+
+    /** Returns the current user from the request-scoped holder (populated by the JWT filter).
+     *  Falls back to a DB lookup for edge cases (e.g. tests, public endpoints with auth). */
+    private User currentUser(String email) {
+        return userHolder.isPresent() ? userHolder.getUser() : userService.findByEmail(email);
     }
 
     @GetMapping
     public ResponseEntity<?> getMyWallet(Authentication authentication) {
-        String email = authentication.getName();
-        Long userId = userService.findByEmail(email).getId();
+        Long userId = currentUser(authentication.getName()).getId();
 
         Wallet wallet = walletService.getWalletByUserId(userId);
 
@@ -64,7 +73,7 @@ public class WalletController {
     @GetMapping("/bank-info")
     public ResponseEntity<?> getLinkedBankInfo(Principal principal) {
         try {
-            User user = userService.findByEmail(principal.getName());
+            User user = currentUser(principal.getName());
             Map<String, Object> linkedBankInfo = walletService.getLinkedBankInfo(user.getId(), user.getEmail());
 
             if (linkedBankInfo == null || linkedBankInfo.isEmpty()) {
@@ -98,7 +107,7 @@ public class WalletController {
     @GetMapping("/banks")
     public ResponseEntity<?> getSupportedBanks(Authentication authentication) {
         try {
-            Long userId = userService.findByEmail(authentication.getName()).getId();
+            Long userId = currentUser(authentication.getName()).getId();
             List<Map<String, Object>> banks = walletService.getSupportedBanks(userId);
 
             if (banks.isEmpty()) {
@@ -136,7 +145,7 @@ public class WalletController {
     @GetMapping("/recent-recipients")
     public ResponseEntity<?> getRecentRecipients(Authentication authentication) {
         try {
-            Long userId = userService.findByEmail(authentication.getName()).getId();
+            Long userId = currentUser(authentication.getName()).getId();
             return ResponseEntity.ok(walletService.getRecentRecipients(userId));
         } catch (Exception e) {
             log.error("getRecentRecipients error: {}", e.getMessage());
@@ -167,7 +176,7 @@ public class WalletController {
         abuseProtectionService.checkAllowed(AbuseProtectionService.WALLET_RESOLVE_ACCOUNT, throttleKey);
 
         try {
-            Long userId = userService.findByEmail(authentication.getName()).getId();
+            Long userId = currentUser(authentication.getName()).getId();
             String accountName = walletService.resolveBankAccount(userId, bankCode, accountNumber);
             // Count every lookup (success or failure) — prevents bulk account enumeration
             abuseProtectionService.recordRequest(AbuseProtectionService.WALLET_RESOLVE_ACCOUNT, throttleKey);
@@ -189,7 +198,7 @@ public class WalletController {
         String throttleKey = abuseProtectionService.buildKey(principal.getName(), httpRequest.getRemoteAddr());
         abuseProtectionService.checkAllowed(AbuseProtectionService.WALLET_BANK_INFO, throttleKey);
         try {
-            User user = userService.findByEmail(principal.getName());
+            User user = currentUser(principal.getName());
             Wallet updatedWallet = walletService.updateSettlementAccount(user.getId(), request);
             abuseProtectionService.recordSuccess(AbuseProtectionService.WALLET_BANK_INFO, throttleKey);
             return ResponseEntity.ok(Map.of(
@@ -220,7 +229,7 @@ public class WalletController {
     @PostMapping("/withdraw/quote")
     public ResponseEntity<?> quoteWithdrawal(@Valid @RequestBody WithdrawalQuoteRequest request,
                                              Principal principal) {
-        User user = userService.findByEmail(principal.getName());
+        User user = currentUser(principal.getName());
         WithdrawalQuoteResponse quote = walletService.quoteWithdrawal(request.getAmount(), user.getId());
         return ResponseEntity.ok(Map.of(
                 "status", true,
@@ -238,7 +247,7 @@ public class WalletController {
     @GetMapping("/transfer/fee-preview")
     public ResponseEntity<?> transferFeePreview(@RequestParam java.math.BigDecimal amount,
                                                 Principal principal) {
-        User user = userService.findByEmail(principal.getName());
+        User user = currentUser(principal.getName());
         WithdrawalQuoteResponse quote = walletService.quoteWithdrawal(amount, user.getId());
         return ResponseEntity.ok(Map.of(
                 "status", true,
@@ -261,7 +270,7 @@ public class WalletController {
         String throttleKey = abuseProtectionService.buildKey(principal.getName(), httpRequest.getRemoteAddr());
         abuseProtectionService.checkAllowed(AbuseProtectionService.WALLET_WITHDRAW, throttleKey);
         try {
-            User user = userService.findByEmail(principal.getName());
+            User user = currentUser(principal.getName());
             Withdrawal withdrawal = walletService.processWithdrawal(user.getId(), request);
             abuseProtectionService.recordSuccess(AbuseProtectionService.WALLET_WITHDRAW, throttleKey);
             Map<String, Object> withdrawalData = new LinkedHashMap<>();

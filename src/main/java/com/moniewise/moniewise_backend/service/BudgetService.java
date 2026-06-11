@@ -1011,6 +1011,11 @@ public class BudgetService {
             LocalDate endDate = (LocalDate) row[4];
             BigDecimal allocatedAmount = (BigDecimal) row[5];
             int envelopeCount = ((Number) row[6]).intValue();
+            BigDecimal remainingAmount = row[7] != null
+                    ? (BigDecimal) row[7]
+                    : allocatedAmount; // default: nothing spent yet
+            BigDecimal spentAmount = allocatedAmount.subtract(remainingAmount)
+                    .max(BigDecimal.ZERO);
 
             Map<String, Object> budgetSummary = new HashMap<>();
             budgetSummary.put("id", budgetId);
@@ -1020,6 +1025,8 @@ public class BudgetService {
             budgetSummary.put("endDate", endDate != null ? endDate.toString() : startDate.toString());
             budgetSummary.put("allocatedAmount", allocatedAmount);
             budgetSummary.put("envelopeCount", envelopeCount);
+            budgetSummary.put("remainingAmount", remainingAmount);
+            budgetSummary.put("spentAmount", spentAmount);
 
             if (status == BudgetStatus.ACTIVE && endDate != null && endDate.isAfter(today)) {
                 budgetMap.get("active").add(budgetSummary);

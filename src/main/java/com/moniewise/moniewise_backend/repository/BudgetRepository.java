@@ -34,10 +34,10 @@ public interface BudgetRepository extends JpaRepository<Budget, Long> {
     @Query("SELECT DISTINCT b FROM Budget b LEFT JOIN FETCH b.envelopes WHERE b.user.id = :userId")
     List<Budget> findByUserIdWithEnvelopes(@Param("userId") Long userId);
 
-    @Query("SELECT b.id, b.name, b.status, b.startDate, b.endDate, b.allocatedAmount, COUNT(e.id) " +
+    @Query("SELECT b.id, b.name, b.status, b.startDate, b.endDate, b.allocatedAmount, COUNT(e.id), b.remainingAmount " +
             "FROM Budget b LEFT JOIN b.envelopes e " +
             "WHERE b.user.id = :userId " +
-            "GROUP BY b.id, b.name, b.status, b.startDate, b.endDate, b.allocatedAmount, b.createdAt " +
+            "GROUP BY b.id, b.name, b.status, b.startDate, b.endDate, b.allocatedAmount, b.remainingAmount, b.createdAt " +
             "ORDER BY b.createdAt DESC")
     List<Object[]> findDashboardSummariesByUserId(@Param("userId") Long userId);
 

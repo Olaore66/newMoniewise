@@ -1823,7 +1823,7 @@ public class EnvelopeService {
             if (walletBalance.compareTo(totalFee) < 0) {
                 throw new IllegalStateException(String.format(
                         "Insufficient wallet balance to cover transfer charges. " +
-                        "You need ₦%,.2f in your wallet (NIP fee: ₦%,.2f + Service fee: ₦%,.2f). " +
+                        "You need ₦%,.2f in your wallet. " +
                         "Please top up your wallet.",
                         totalFee, bankCharge, markupFee));
             }

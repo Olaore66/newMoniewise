@@ -26,11 +26,16 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     private final JwtUtil jwtUtil;
     private final UserService userService;
     private final AuthSessionService authSessionService;
+    private final AuthenticatedUserHolder userHolder;
 
-    public JwtAuthenticationFilter(JwtUtil jwtUtil, UserService userService, AuthSessionService authSessionService) {
+    public JwtAuthenticationFilter(JwtUtil jwtUtil,
+                                   UserService userService,
+                                   AuthSessionService authSessionService,
+                                   AuthenticatedUserHolder userHolder) {
         this.jwtUtil = jwtUtil;
         this.userService = userService;
         this.authSessionService = authSessionService;
+        this.userHolder = userHolder;
     }
 
     @Override
@@ -60,13 +65,16 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         }
 
         if (email != null && SecurityContextHolder.getContext().getAuthentication() == null) {
-            // 1. Load your custom User entity first so deactivated accounts are blocked
+            // 1. Single DB call: findByEmail checks isDeleted() and returns the full entity.
+            //    buildUserDetails converts it to Spring's UserDetails in-memory — no second query.
             User user = userService.findByEmail(email);
+            UserDetails userDetails = userService.buildUserDetails(user);
 
-            // 2. Load standard UserDetails (for Spring Security)
-            UserDetails userDetails = userService.loadUserByUsername(email);
+            // Store the entity in the request-scoped holder so controllers can
+            // access the User object without issuing another DB query.
+            userHolder.setUser(user);
 
-            // 3. Extract Session ID from the incoming Token
+            // 2. Extract Session ID from the incoming Token
             String tokenSessionId = jwtUtil.extractSessionId(token);
 
             boolean isSessionValid = tokenSessionId != null &&

@@ -947,6 +947,23 @@ public class UserService implements UserDetailsService {
         );
     }
 
+    /**
+     * Converts an already-loaded {@link User} entity into a Spring {@link UserDetails}
+     * object without touching the database.  Use this in the JWT filter after
+     * {@link #findByEmail} so the filter makes exactly ONE DB query (not two).
+     */
+    public UserDetails buildUserDetails(User user) {
+        String password = user.getPassword();
+        if (password == null || password.isEmpty()) {
+            password = "GOOGLE_LOGIN_NO_PASSWORD_NEEDED";
+        }
+        return new org.springframework.security.core.userdetails.User(
+                user.getEmail(),
+                password,
+                Collections.singletonList(new SimpleGrantedAuthority("ROLE_" + user.getRole().name()))
+        );
+    }
+
     public void acceptTnc(String email, boolean accepted) {
         User user = findByEmail(email);
         Map<String, Object> profileData = user.getProfileData();

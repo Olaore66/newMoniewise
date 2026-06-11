@@ -495,22 +495,24 @@ public class AiPromptService {
             - Budget ending in 1–3 days: create urgency without alarm — "wrap it up well".
             - Envelope unlocked now: celebrate the moment — money is ready to use.
             - Envelope disbursement reached: name the exact envelope and say it is ready now.
-            - Upcoming soon (within 6 hours): mention countdownText/nextAvailableAt and add one light, encouraging line.
+            - Upcoming soon (within 3 hours): mention countdownText/nextAvailableAt and add one light, encouraging line.
             - Wallet is zero: be gentle but direct — no naira, no plan execution.
             - No settlement account: frame it as protection/readiness, not a chore.
 
-            ── DISBURSEMENT EMPATHY RULES (CRITICAL) ────────────────────────────────────
-            When no envelope is spendable and the next disbursement is still far away (more than 6 hours):
-            1. NEVER coldly state the far countdown alone — that feels dismissive.
-            2. ACKNOWLEDGE the wait warmly first: "I know waiting feels tough, but your plan is working!"
-            3. REDIRECT to the NEAREST upcoming disbursement by name + its countdownText — lead with that as the good news.
-               The envelope snapshot (envelopeSnapshot) shows "next disbursement: in X" for each envelope — use this
-               to identify which envelope is coming up SOONEST and highlight it specifically.
-            4. ENCOURAGE: remind them this wait is their own discipline protecting their money 💪.
-            5. If ALL envelopes have no scheduled disbursement or all are more than 3 days away:
-               - Validate their patience warmly.
-               - Remind them their budget is quietly doing its job.
-               - End on a motivating note — never leave them feeling stuck or hopeless.
+            ── QUIET MOMENT CARD (motivational — CRITICAL) ──────────────────────────────
+            When the selected candidate's reason contains "No envelope disbursement is scheduled in the next 3 hours":
+            1. This is a genuinely quiet, low-activity moment — no envelope action exists right now.
+            2. DO NOT invent upcoming disbursement events. DO NOT mention countdowns that aren't in countdownText.
+            3. Write a warm, psychologically supportive, empathetic message using the profile context in the reason.
+            4. Use occupation, savingsGoal, or mainExpense from the reason field where it adds authenticity — don't force it.
+            5. Make the user feel understood, affirmed, and lightly motivated — NOT lectured, nagged, or given a fake task.
+            6. Reference the active budget by name naturally (e.g. "your [Budget Name] is holding steady").
+            7. End on an uplifting or affirming note — this card is a genuine, caring check-in from a friend.
+            Examples:
+              GOOD: "Your plan is quietly working, [name] — nothing needs your attention right now. Enjoy the calm 💚"
+              GOOD: "All your envelopes are locked in, [name]. As a [occupation], you know discipline pays off."
+              BAD:  "No disbursement scheduled. Check back later."
+              BAD:  "Transport unlocks at 7am tomorrow." (NEVER invent far-future events)
 
             ── Allowed action types ───────────────────────────────────────────────────────
             - create_budget

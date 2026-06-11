@@ -36,6 +36,8 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
@@ -46,8 +48,9 @@ public class AiInsightService {
     private static final ZoneId LAGOS_ZONE = ZoneId.of("Africa/Lagos");
     private static final DateTimeFormatter NEXT_AVAILABLE_FORMATTER =
         DateTimeFormatter.ofPattern("EEE, d MMM - h:mm a");
-    private static final Duration SOON_DISBURSEMENT_WINDOW = Duration.ofHours(6);
-    private static final Duration RECENT_RELEASE_WINDOW = Duration.ofHours(24);
+    private static final Duration SOON_DISBURSEMENT_WINDOW     = Duration.ofHours(2);  // "releases soon" label — within 2 h
+    private static final Duration IMMINENT_DISBURSEMENT_WINDOW = Duration.ofHours(3);  // hard gate — events beyond 3 h are never surfaced
+    private static final Duration RECENT_RELEASE_WINDOW        = Duration.ofHours(24);
 
     // ── MONNIE card Redis cache ────────────────────────────────────────────────
     private static final String MONNIE_CACHE_PREFIX    = "monnie:action:";
@@ -233,15 +236,42 @@ public class AiInsightService {
 
     private DashboardActionContext buildContext(String email) {
         User user = userService.findByEmail(email);
-        Optional<Wallet> walletOpt = walletRepository.findByUserId(user.getId());
-        Budget activeBudget = budgetRepository
-            .findTopByUserIdAndStatusOrderByCreatedAtDesc(user.getId(), BudgetStatus.ACTIVE)
-            .orElse(null);
-        Budget completedBudget = budgetRepository
-            .findTopByUserIdAndStatusOrderByCreatedAtDesc(user.getId(), BudgetStatus.COMPLETED)
-            .orElse(null);
+        Long userId = user.getId();
 
-        List<Budget> budgetsWithEnvelopes = budgetRepository.findByUserIdWithEnvelopes(user.getId());
+        // Fire all 4 independent DB queries in parallel — reduces sequential latency
+        // from ~(T1 + T2 + T3 + T4) to ~max(T1, T2, T3, T4).
+        // Each CompletableFuture opens its own JPA session/connection; no shared
+        // transaction is needed because all four are read-only lookups.
+        CompletableFuture<Optional<Wallet>>  walletFuture =
+            CompletableFuture.supplyAsync(() -> walletRepository.findByUserId(userId));
+        CompletableFuture<Optional<Budget>>  activeBudgetFuture =
+            CompletableFuture.supplyAsync(() ->
+                budgetRepository.findTopByUserIdAndStatusOrderByCreatedAtDesc(userId, BudgetStatus.ACTIVE));
+        CompletableFuture<Optional<Budget>>  completedBudgetFuture =
+            CompletableFuture.supplyAsync(() ->
+                budgetRepository.findTopByUserIdAndStatusOrderByCreatedAtDesc(userId, BudgetStatus.COMPLETED));
+        CompletableFuture<List<Budget>>      budgetsWithEnvelopesFuture =
+            CompletableFuture.supplyAsync(() ->
+                budgetRepository.findByUserIdWithEnvelopes(userId));
+
+        final Optional<Wallet> walletOpt;
+        final Budget activeBudget;
+        final Budget completedBudget;
+        final List<Budget> budgetsWithEnvelopes;
+        try {
+            walletOpt             = walletFuture.get();
+            activeBudget          = activeBudgetFuture.get().orElse(null);
+            completedBudget       = completedBudgetFuture.get().orElse(null);
+            budgetsWithEnvelopes  = budgetsWithEnvelopesFuture.get();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("buildContext interrupted while fetching user data", e);
+        } catch (ExecutionException e) {
+            Throwable cause = e.getCause();
+            throw cause instanceof RuntimeException ? (RuntimeException) cause
+                    : new RuntimeException("buildContext DB query failed", cause);
+        }
+
         List<Budget> activeBudgets = budgetsWithEnvelopes.stream()
             .filter(budget -> budget.getStatus() == BudgetStatus.ACTIVE)
             .toList();
@@ -267,6 +297,14 @@ public class AiInsightService {
             Object occObj = user.getProfileData().get("occupation");
             if (occObj != null && !occObj.toString().isBlank()) {
                 context.occupation = occObj.toString().trim();
+            }
+            Object expObj = user.getProfileData().get("mainExpense");
+            if (expObj != null && !expObj.toString().isBlank()) {
+                context.mainExpense = expObj.toString().trim();
+            }
+            Object goalObj = user.getProfileData().get("savingsGoal");
+            if (goalObj != null && !goalObj.toString().isBlank()) {
+                context.savingsGoal = goalObj.toString().trim();
             }
 
             // ── Age / demographic ─────────────────────────────────────────────
@@ -616,7 +654,7 @@ public class AiInsightService {
         if (spendableEnvelopeCandidates.isEmpty()) {
             List<ActionCandidate> dueDisbursementCandidates = buildDueDisbursementCandidates(context.activeBudgets);
             candidates.addAll(dueDisbursementCandidates.isEmpty()
-                ? buildNoSpendableEnvelopeCandidates(context.activeBudgets)
+                ? buildNoSpendableEnvelopeCandidates(context)
                 : dueDisbursementCandidates);
         } else {
             candidates.addAll(buildUpcomingEnvelopeCandidates(context.activeBudgets));
@@ -848,6 +886,10 @@ public class AiInsightService {
                 if (nextDisbursementAt == null || !nextDisbursementAt.isAfter(now) || !hasFutureValue(envelope)) {
                     continue;
                 }
+                // Hard gate: only surface disbursements within the next 3 hours — skip everything further away
+                if (Duration.between(now, nextDisbursementAt).compareTo(IMMINENT_DISBURSEMENT_WINDOW) > 0) {
+                    continue;
+                }
 
                 BigDecimal upcomingAmount = resolveUpcomingAmount(envelope);
                 candidates.add(buildUpcomingEnvelopeCandidate(budget, envelope, upcomingAmount, now, false));
@@ -897,30 +939,144 @@ public class AiInsightService {
         return candidates.size() > 2 ? candidates.subList(0, 2) : candidates;
     }
 
-    private List<ActionCandidate> buildNoSpendableEnvelopeCandidates(List<Budget> activeBudgets) {
-        List<ActionCandidate> upcoming = buildUpcomingEnvelopeCandidates(activeBudgets, true);
+    private List<ActionCandidate> buildNoSpendableEnvelopeCandidates(DashboardActionContext context) {
+        // buildUpcomingEnvelopeCandidates already gates on IMMINENT_DISBURSEMENT_WINDOW (3 h),
+        // so this list only contains truly imminent events.
+        List<ActionCandidate> upcoming = buildUpcomingEnvelopeCandidates(context.activeBudgets, true);
         if (!upcoming.isEmpty()) {
             return List.of(upcoming.get(0));
         }
 
-        Optional<Budget> firstActiveBudget = activeBudgets.stream().findFirst();
-        if (firstActiveBudget.isEmpty()) {
-            return List.of();
+        // Nothing imminent in the next 3 hours — return a personalised, empathetic motivational card
+        return List.of(buildPersonalizedMotivationalCandidate(context));
+    }
+
+    /**
+     * Builds a warm, profile-aware motivational card for when there are no active envelopes
+     * to spend from and no disbursement is scheduled within the next 3 hours.
+     *
+     * <p>Uses the user's name, occupation, age, savings goal, and main expense to make the
+     * message feel like it comes from a real personal finance assistant who knows them.
+     * The {@code reason} string is detailed enough that Gemini can produce richer, even more
+     * empathetic copy when it rewrites the card.
+     */
+    private ActionCandidate buildPersonalizedMotivationalCandidate(DashboardActionContext context) {
+        int hour = LocalDateTime.now(LAGOS_ZONE).getHour();
+        String timeOfDay = hour < 12 ? "morning" : hour < 17 ? "afternoon" : hour < 21 ? "evening" : "night";
+        boolean isWeekend = "Saturday".equals(context.dayOfWeek) || "Sunday".equals(context.dayOfWeek);
+
+        String activeBudgetName = context.activeBudget != null && context.activeBudget.getName() != null
+                ? context.activeBudget.getName() : null;
+        String actionType = activeBudgetName != null ? "review_active_budget" : "create_budget";
+        String ctaLabel   = activeBudgetName != null ? "View budget" : "Start a budget";
+
+        String title   = buildMotivationalTitle(context.firstName, timeOfDay, isWeekend, context.occupation);
+        String message = buildMotivationalMessage(
+                context.firstName, activeBudgetName, timeOfDay, isWeekend,
+                context.occupation, context.savingsGoal, context.mainExpense, context.age
+        );
+
+        // Rich reason string — Gemini reads this to know what kind of card to produce
+        StringBuilder reason = new StringBuilder();
+        reason.append("No envelope disbursement is scheduled in the next 3 hours — this is a quiet, low-activity moment. ")
+              .append("Write a warm, empathetic, psychologically supportive message that feels like a real personal finance ")
+              .append("assistant who genuinely knows this user. Profile context: name=").append(context.firstName);
+        if (!context.occupation.isBlank())  reason.append(", occupation=").append(context.occupation);
+        if (context.age > 0)                reason.append(", age=").append(context.age);
+        if (!context.savingsGoal.isBlank()) reason.append(", savingsGoal=").append(context.savingsGoal);
+        if (!context.mainExpense.isBlank()) reason.append(", mainExpense=").append(context.mainExpense);
+        reason.append(", time=").append(context.currentTimeFormatted)
+              .append(", day=").append(context.dayOfWeek).append(". ");
+        if (activeBudgetName != null) reason.append("Active budget: ").append(activeBudgetName).append(". ");
+        reason.append("DO NOT invent disbursement events that do not exist. Keep the message warm, grounding, and human — ")
+              .append("reference the budget or occupation naturally where it makes the message feel personal.");
+
+        ActionCandidate candidate = baseCandidate(title, message, ctaLabel, actionType, "normal", reason.toString(), 420);
+        if (context.activeBudget != null) {
+            candidate.budgetId   = context.activeBudget.getId();
+            candidate.budgetName = context.activeBudget.getName();
+        }
+        return candidate;
+    }
+
+    /** Builds a time-of-day / occupation-aware title for the motivational card. */
+    private String buildMotivationalTitle(String name, String timeOfDay, boolean isWeekend, String occupation) {
+        if (!occupation.isBlank()) {
+            if ("morning".equals(timeOfDay)) {
+                return "Good morning, " + name + " — your plan is ready 🌅";
+            } else if ("evening".equals(timeOfDay)) {
+                return "Evening check-in, " + name + " — budget held up today 🌙";
+            } else if ("night".equals(timeOfDay)) {
+                return "Winding down, " + name + "? Budget stayed strong tonight 🌙";
+            } else if (isWeekend) {
+                return "Weekend mode, " + name + " — money's still working 💪";
+            } else {
+                return "Steady as you go, " + name + " 🎯";
+            }
+        }
+        if (isWeekend) {
+            return "Enjoy your " + timeOfDay + ", " + name + " 🙌";
+        }
+        if ("morning".equals(timeOfDay)) {
+            return "Morning, " + name + " — all quiet and on track ☀️";
+        } else if ("afternoon".equals(timeOfDay)) {
+            return "Midday check, " + name + " — your money is steady 💚";
+        } else if ("evening".equals(timeOfDay)) {
+            return "Good evening, " + name + " — budget's holding strong 🌙";
+        } else {
+            return "All quiet, " + name + " — your plan is doing its job ✅";
+        }
+    }
+
+    /**
+     * Builds the motivational card's supporting message.
+     * Uses occupation, savings goal, main expense, and age-tier wisdom
+     * to give Gemini something genuinely personal to improve upon.
+     */
+    private String buildMotivationalMessage(
+            String name, String activeBudgetName, String timeOfDay,
+            boolean isWeekend, String occupation, String savingsGoal,
+            String mainExpense, int age
+    ) {
+        StringBuilder msg = new StringBuilder();
+
+        // Ground the message in the active budget
+        if (activeBudgetName != null) {
+            msg.append(activeBudgetName).append(" is on track");
+            if ("night".equals(timeOfDay)) {
+                msg.append(" through the night");
+            } else if (isWeekend) {
+                msg.append(" this ").append("morning".equals(timeOfDay) ? "weekend morning" : "weekend");
+            }
+            msg.append(".");
+        } else {
+            msg.append("No active budget yet — a great moment to start one.");
         }
 
-        Budget budget = firstActiveBudget.get();
-        ActionCandidate candidate = baseCandidate(
-            "No envelope is ready yet",
-            "No disbursement has reached yet. Tiny patience flex: your budget is keeping your naira in line.",
-            "View budget",
-            "review_active_budget",
-            "normal",
-            "No active envelope currently has spendable balance or a scheduled release to surface.",
-            520
-        );
-        candidate.budgetId = budget.getId();
-        candidate.budgetName = budget.getName();
-        return List.of(candidate);
+        // Occupation context
+        if (!occupation.isBlank()) {
+            msg.append(" As a ").append(occupation.toLowerCase()).append(", staying consistent is how you win.");
+        }
+
+        // Savings goal (keep brief)
+        if (!savingsGoal.isBlank() && msg.length() < 90) {
+            msg.append(" Your ").append(savingsGoal.toLowerCase()).append(" goal is still in motion.");
+        }
+
+        // Age-tier wisdom — invisible (no numeric mention)
+        if (msg.length() < 100) {
+            if (age > 0 && age < 25) {
+                msg.append(" Building this habit early is the real edge.");
+            } else if (age >= 25 && age < 35) {
+                msg.append(" This discipline adds up faster than you think.");
+            } else if (age >= 35 && age < 45) {
+                msg.append(" Staying consistent now protects what matters later.");
+            }
+        }
+
+        String result = msg.toString().trim();
+        // Gemini rewrites this; just ensure it's within the 130-char limit for the fallback path
+        return result.length() > 130 ? result.substring(0, 127) + "…" : result;
     }
 
     private List<ActionCandidate> buildUpcomingEnvelopeCandidates(
@@ -937,6 +1093,10 @@ public class AiInsightService {
             for (Envelope envelope : budget.getEnvelopes()) {
                 LocalDateTime nextDisbursementAt = envelope.getNextDisbursementAt();
                 if (nextDisbursementAt == null || !nextDisbursementAt.isAfter(now) || !hasFutureValue(envelope)) {
+                    continue;
+                }
+                // Hard gate: only surface disbursements within the next 3 hours — skip everything further away
+                if (Duration.between(now, nextDisbursementAt).compareTo(IMMINENT_DISBURSEMENT_WINDOW) > 0) {
                     continue;
                 }
 
@@ -1206,7 +1366,11 @@ public class AiInsightService {
 
     private AiDashboardNextActionResponse buildFallback(DashboardActionContext context) {
         AiDashboardNextActionResponse response = new AiDashboardNextActionResponse();
-        response.setTitle("New cycle, new plan — let's go 📅");
+        boolean hasName = context.firstName != null && !context.firstName.isBlank()
+                && !"there".equals(context.firstName);
+        response.setTitle(hasName
+                ? context.firstName + ", let's set your money in motion 📅"
+                : "New cycle, new plan — let's go 📅");
         response.setMessage("Set up a fresh budget so your money has direction this month — not just vibes.");
         response.setCtaLabel("Create budget");
         response.setActionType("create_budget");
@@ -1569,7 +1733,9 @@ public class AiInsightService {
         private String userName   = "there";
         private String firstName  = "there";
         private String gender     = "unknown";   // "male" | "female" | "other" | "unknown"
-        private String occupation = "";
+        private String occupation  = "";
+        private String mainExpense = "";   // user's stated biggest spending category
+        private String savingsGoal = "";   // user's stated savings goal
         // ── Demographics ──────────────────────────────────────────────────────
         /** Computed age in years. -1 = not available (DOB not on profile). */
         private int    age              = -1;

@@ -72,8 +72,13 @@ public class WalletService {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    private static final String BANK_LIST_CACHE_PREFIX = "bank_list:";
-    private static final long   BANK_LIST_TTL_HOURS    = 24;
+    private static final String BANK_LIST_CACHE_PREFIX  = "bank_list:";
+    private static final long   BANK_LIST_TTL_HOURS     = 24;
+
+    /** Short-lived cache for read-heavy GET /wallets calls (dashboard load etc.).
+     *  Only scalar response fields are cached — no JPA proxies, no lazy loading. */
+    private static final String WALLET_CACHE_PREFIX     = "wallet:snapshot:";
+    private static final long   WALLET_CACHE_TTL_SECS   = 30;
     private static final String RUBIES_P2P_CREDIT_REF_PREFIX = "P2P-RB-CR-";
     private static final String RUBIES_P2P_SETTLEMENT_MARKER_PREFIX = "P2P-RB-WH-";
 
@@ -114,9 +119,76 @@ public class WalletService {
         this.monnieCacheInvalidationService = monnieCacheInvalidationService;
     }
 
+    /**
+     * Fetches the wallet for a user, with a 30-second Redis cache.
+     *
+     * <p>Only scalar fields (balance, currency, account details, status, provider)
+     * are cached as a plain JSON map — no JPA proxies, no lazy-loading risk.
+     * A full entity is reconstructed from the cached values on hit, so callers
+     * that need {@code wallet.getId()} or JPA relationships should call
+     * {@link #getWalletByUserIdUncached(Long)} directly (e.g. before mutations).
+     */
     public Wallet getWalletByUserId(Long userId) {
+        String cacheKey = WALLET_CACHE_PREFIX + userId;
+        try {
+            String cached = redisTemplate.opsForValue().get(cacheKey);
+            if (cached != null) {
+                Map<String, Object> snap = objectMapper.readValue(cached,
+                        objectMapper.getTypeFactory().constructMapType(Map.class, String.class, Object.class));
+                Wallet w = new Wallet();
+                Object bal = snap.get("balance");
+                w.setBalance(bal != null ? new java.math.BigDecimal(bal.toString()) : java.math.BigDecimal.ZERO);
+                Object cur = snap.get("currency");
+                w.setCurrency(cur != null ? cur.toString() : "NGN");
+                Object acct = snap.get("accountNumber");
+                w.setAccountNumber(acct != null ? acct.toString() : null);
+                Object bank = snap.get("bankName");
+                w.setBankName(bank != null ? bank.toString() : null);
+                Object st = snap.get("status");
+                if (st != null) {
+                    try { w.setStatus(com.moniewise.moniewise_backend.enums.WalletStatus.valueOf(st.toString())); }
+                    catch (IllegalArgumentException ignored) {}
+                }
+                Object prov = snap.get("providerName");
+                w.setProviderName(prov != null ? prov.toString() : null);
+                return w;
+            }
+        } catch (Exception e) {
+            logger.debug("[WalletCache] Cache miss or read error for userId={}: {}", userId, e.getMessage());
+        }
+
+        Wallet wallet = getWalletByUserIdUncached(userId);
+
+        try {
+            Map<String, Object> snap = new java.util.LinkedHashMap<>();
+            snap.put("balance",        wallet.getBalance() != null ? wallet.getBalance().toPlainString() : "0");
+            snap.put("currency",       wallet.getCurrency() != null ? wallet.getCurrency() : "NGN");
+            snap.put("accountNumber",  wallet.getAccountNumber());
+            snap.put("bankName",       wallet.getBankName());
+            snap.put("status",         wallet.getStatus() != null ? wallet.getStatus().name() : "ACTIVE");
+            snap.put("providerName",   wallet.getProviderName());
+            redisTemplate.opsForValue().set(cacheKey, objectMapper.writeValueAsString(snap),
+                    WALLET_CACHE_TTL_SECS, TimeUnit.SECONDS);
+        } catch (Exception e) {
+            logger.debug("[WalletCache] Failed to write cache for userId={}: {}", userId, e.getMessage());
+        }
+
+        return wallet;
+    }
+
+    /** Direct DB fetch — use before any mutation or when you need wallet.getId(). */
+    public Wallet getWalletByUserIdUncached(Long userId) {
         return walletRepository.findByUserId(userId)
                 .orElseThrow(() -> new IllegalArgumentException("Wallet not found for user ID: " + userId));
+    }
+
+    /** Evict the wallet snapshot from Redis after balance-affecting operations. */
+    private void evictWalletCache(Long userId) {
+        try {
+            redisTemplate.delete(WALLET_CACHE_PREFIX + userId);
+        } catch (Exception e) {
+            logger.debug("[WalletCache] Failed to evict cache for userId={}: {}", userId, e.getMessage());
+        }
     }
     public Map<String, Object> getLinkedBankInfo(Long userId, String email) {
         Wallet wallet = walletRepository.findByUserId(userId)
@@ -255,6 +327,7 @@ public class WalletService {
 
         logger.info("Deducted ₦{} from wallet for user {}", amount, userId);
         monnieCacheInvalidationService.evictUserAfterCommit(userId);
+        evictWalletCache(userId);
     }
 
     /**
@@ -283,6 +356,7 @@ public class WalletService {
         wallet.setUpdatedAt(LocalDateTime.now());
         walletRepository.save(wallet);
         monnieCacheInvalidationService.evictUserAfterCommit(userId);
+        evictWalletCache(userId);
         logger.info("[FeeDeduct] ₦{} transfer fee deducted from wallet for user {} (NIP: ₦{}, markup: ₦{})",
                 totalFee, userId, bankCharge, markupFee);
     }
@@ -362,6 +436,7 @@ public class WalletService {
         wallet.setUpdatedAt(LocalDateTime.now());
         walletRepository.save(wallet);
         monnieCacheInvalidationService.evictUserAfterCommit(userId);
+        evictWalletCache(userId);
         logger.info("[FeeRefund] ₦{} transfer fee refunded to wallet for user {} (transfer failed)",
                 totalFee, userId);
     }
@@ -448,6 +523,7 @@ public class WalletService {
 
             logger.info("Internal wallet balance-only funding applied for user {}", userId);
             monnieCacheInvalidationService.evictUserAfterCommit(userId);
+        evictWalletCache(userId);
             return;
         }
 
@@ -465,6 +541,7 @@ public class WalletService {
 
         logger.info("Internal Wallet Funding triggered for user {}", userId);
         monnieCacheInvalidationService.evictUserAfterCommit(userId);
+        evictWalletCache(userId);
     }
 
     public void fundWallet(Long userId, BigDecimal amount, String notificationMessage) {
@@ -773,6 +850,7 @@ public class WalletService {
         wallet.setLastBalanceSyncAt(LocalDateTime.now());
         walletRepository.save(wallet);
         monnieCacheInvalidationService.evictUserAfterCommit(user.getId());
+        evictWalletCache(user.getId());
 
         TransactionLog log = new TransactionLog();
         log.setUserId(user.getId());
@@ -1141,6 +1219,7 @@ public class WalletService {
         wallet.setBalance(wallet.getBalance().subtract(amount));
         walletRepository.save(wallet);
         monnieCacheInvalidationService.evictUserAfterCommit(userId);
+        evictWalletCache(userId);
     }
 
     @Transactional(readOnly = true)
@@ -1284,6 +1363,7 @@ public class WalletService {
             wallet.setUpdatedAt(LocalDateTime.now());
             walletRepository.save(wallet);
             monnieCacheInvalidationService.evictUserAfterCommit(withdrawal.getUserId());
+        evictWalletCache(withdrawal.getUserId());
 
             transactionLogRepository.findByReference(withdrawal.getClientReference()).ifPresent(logEntry -> {
                 logEntry.setStatus(TransactionStatus.FAILED);
@@ -1344,6 +1424,7 @@ public class WalletService {
         wallet.setLastBalanceSyncAt(LocalDateTime.now());
         walletRepository.save(wallet);
         monnieCacheInvalidationService.evictUserAfterCommit(withdrawal.getUserId());
+        evictWalletCache(withdrawal.getUserId());
 
         if (transactionLogRepository.findByReference(withdrawal.getClientReference()).isEmpty()) {
             TransactionLog logEntry = TransactionLog.builder()
@@ -1673,6 +1754,7 @@ public class WalletService {
         Wallet savedWallet = walletRepository.save(wallet);
         if (savedWallet.getUser() != null && savedWallet.getUser().getId() != null) {
             monnieCacheInvalidationService.evictUserAfterCommit(savedWallet.getUser().getId());
+        evictWalletCache(savedWallet.getUser().getId());
         }
         return savedWallet;
     }
@@ -2266,6 +2348,7 @@ public class WalletService {
         wallet.setLastBalanceSyncAt(LocalDateTime.now());
         walletRepository.save(wallet);
         monnieCacheInvalidationService.evictUserAfterCommit(wallet.getUser().getId());
+        evictWalletCache(wallet.getUser().getId());
 
         completeRubiesP2pCreditLog(creditLog, sessionId);
         sendRubiesP2pCreditNotification(wallet.getUser().getId(), amount, creditLog, originatorName);
