@@ -330,6 +330,13 @@ public class RubiesGateway implements PaymentGateway {
                 amountStr, reference, narration
         );
 
+        ObjectMapper mapper = new ObjectMapper();
+        try {
+            logger.info("RUBIES REQUEST >>> {}", mapper.writeValueAsString(req));
+        } catch (JsonProcessingException e) {
+            throw new RuntimeException(e);
+        }
+
         logger.info("[Rubies] Fund transfer: ref={} amount={} from={} to={}/{}",
                 reference, amountStr, debitAccountNumber, creditBankCode, creditAccountNumber);
 
