@@ -768,6 +768,16 @@ public class EnvelopeService {
 
         // ── Detect PSP once so every branching point below can use it ────────
         Wallet userWallet = walletService.getWalletByUserId(user.getId());
+
+        if (userWallet == null || userWallet.getProviderWalletRef() == null) {
+            throw new IllegalStateException("Rubies wallet is not properly configured for user");
+        }
+
+        logger.info("USER WALLET DEBUG: id={}, provider={}, ref={}",
+                userWallet.getId(),
+                userWallet.getProviderName(),
+                userWallet.getProviderWalletRef());
+
         boolean isRubies = RubiesGateway.PROVIDER_NAME.equalsIgnoreCase(
                 userWallet != null ? userWallet.getProviderName() : null);
 
@@ -817,6 +827,9 @@ public class EnvelopeService {
         BigDecimal bankCharge;
         BigDecimal totalDebit;
         if (isRubies) {
+            if (userWallet.getProviderWalletRef() == null) {
+                throw new IllegalStateException("Rubies wallet not configured");
+            }
             // Rubies: markup-tier fee (waived for premium users) + NIP bank charge
             WithdrawalQuoteResponse rubiesQuote = walletService.quoteWithdrawal(amount, user.getId());
             markupFee  = rubiesQuote.getFee();
