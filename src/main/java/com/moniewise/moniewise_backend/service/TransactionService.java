@@ -7,6 +7,7 @@ import com.moniewise.moniewise_backend.dto.response.TransactionDetailResponse;
 import com.moniewise.moniewise_backend.dto.response.TransactionListResponse;
 import com.moniewise.moniewise_backend.entity.*;
 import com.moniewise.moniewise_backend.enums.TransactionType;
+import com.moniewise.moniewise_backend.psp.rubies.RubiesGateway;
 import com.moniewise.moniewise_backend.repository.*;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -33,6 +34,7 @@ public class TransactionService {
     private final TransactionLogRepository transactionLogRepo;
     private final EnvelopeRepository envelopeRepo;
     private final BudgetRepository budgetRepo;
+    private final MarkupCalculatorService markupCalculatorService;
 
     private static final Set<TransactionType> USER_VISIBLE_TYPES = Set.of(
             WALLET_DEPOSIT,
@@ -74,7 +76,8 @@ public class TransactionService {
             UserRepository userRepository,
             TransactionLogRepository transactionLogRepo,
             EnvelopeRepository envelopeRepo,
-            BudgetRepository budgetRepo
+            BudgetRepository budgetRepo,
+            MarkupCalculatorService markupCalculatorService
     ) {
         this.decisionEngineService = decisionEngineService;
         this.walletService = walletService;
@@ -84,6 +87,7 @@ public class TransactionService {
         this.transactionLogRepo = transactionLogRepo;
         this.envelopeRepo = envelopeRepo;
         this.budgetRepo = budgetRepo;
+        this.markupCalculatorService = markupCalculatorService;
     }
 
     @Transactional
@@ -374,7 +378,17 @@ public class TransactionService {
         String direction = debit ? "DEBIT" : "CREDIT";
 
         BigDecimal absoluteAmount = transaction.getAmount().abs();
+        // txn.fee stores ONLY the Moniewise markup fee — the NIBSS NIP bank charge is
+        // deducted by Rubies at the BaaS level and is never persisted on the txn
+        // (settlement recalculates it the same way). For display we add it back so the
+        // fee shown here matches the total the user was charged on the acknowledgement
+        // screen (markup + NIP). The stored value is left untouched so revenue
+        // settlement keeps crediting only the markup. See ExternalTransferSettlementService.
         BigDecimal fee = transaction.getFee() != null ? transaction.getFee() : BigDecimal.ZERO;
+        if (transaction.getTransactionType() == ENVELOPE_TO_EXTERNAL
+                && RubiesGateway.PROVIDER_NAME.equalsIgnoreCase(transaction.getProviderName())) {
+            fee = fee.add(markupCalculatorService.calculateNipFee(absoluteAmount));
+        }
         BigDecimal netAmount = debit ? absoluteAmount.add(fee) : absoluteAmount.subtract(fee);
 
         String sender;
