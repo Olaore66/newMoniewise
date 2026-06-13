@@ -347,6 +347,39 @@ public class RubiesAdminController {
                 });
     }
 
+    // ── API key management ────────────────────────────────────────────────────
+
+    /**
+     * POST /admin/rubies/update-api-key
+     *
+     * <p>Hot-reloads the Rubies JWT without restarting the server.  Use this when the
+     * token expires (Rubies error code 22) and you have a fresh JWT from the Rubies
+     * dashboard.  The new key takes effect immediately for all subsequent API calls.
+     *
+     * <p>Request body:
+     * <pre>{ "apiKey": "eyJhbGci..." }</pre>
+     *
+     * <p>For permanent fix also update the {@code RUBIES_API_KEY} env var on Render
+     * so the new token survives a redeploy.
+     */
+    @PostMapping("/update-api-key")
+    public ResponseEntity<?> updateApiKey(@RequestBody Map<String, String> body) {
+        String newKey = body.get("apiKey");
+        if (newKey == null || newKey.isBlank()) {
+            return ResponseEntity.badRequest().body(Map.of(
+                    "status", false,
+                    "error",  "apiKey is required in request body."
+            ));
+        }
+        rubiesGateway.updateApiKey(newKey);
+        logger.info("[Admin] Rubies API key hot-reloaded via admin endpoint.");
+        return ResponseEntity.ok(Map.of(
+                "status",  true,
+                "message", "Rubies API key updated in memory. All subsequent calls will use the new token. " +
+                           "Also update RUBIES_API_KEY on Render to persist across redeploys."
+        ));
+    }
+
     // ── Manual settlement endpoints ────────────────────────────────────────────
 
     /**

@@ -20,6 +20,7 @@ import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.stream.Collectors;
 
 /**
@@ -64,6 +65,22 @@ public class RubiesGateway implements PaymentGateway {
     @Value("${rubies.webhook.secret:}")
     private String webhookSecret;
 
+    // Optional: Rubies login credentials for auto-refresh when the JWT expires.
+    // Set RUBIES_EMAIL + RUBIES_PASSWORD (+ optionally RUBIES_LOGIN_URL) env vars
+    // to enable automatic JWT renewal on error code 22.
+    @Value("${rubies.credentials.email:}")
+    private String rubiesEmail;
+
+    @Value("${rubies.credentials.password:}")
+    private String rubiesPassword;
+
+    @Value("${rubies.login.url:}")
+    private String rubiesLoginUrl;
+
+    // Volatile so all threads see the latest token after a refresh.
+    private volatile String currentApiKey;
+    private final ReentrantLock tokenRefreshLock = new ReentrantLock();
+
     public RubiesGateway(RestTemplate restTemplate,
                          ObjectMapper objectMapper,
                          SystemConfigService systemConfig) {
@@ -76,6 +93,7 @@ public class RubiesGateway implements PaymentGateway {
 
     @PostConstruct
     public void validateConfiguration() {
+        currentApiKey = apiKey;
         if (apiKey == null || apiKey.isBlank()) {
             logger.error("[Rubies] RUBIES_API_KEY (rubies.api.key) is not set — " +
                     "all Rubies API calls will fail with 401. Set the env var before starting.");
@@ -83,6 +101,14 @@ public class RubiesGateway implements PaymentGateway {
         if (webhookSecret == null || webhookSecret.isBlank()) {
             logger.warn("[Rubies][SECURITY] RUBIES_WEBHOOK_SECRET (rubies.webhook.secret) is not set — " +
                     "webhook signature verification is DISABLED. Set the env var before going live.");
+        }
+        boolean canAutoRefresh = !isBlank(rubiesEmail) && !isBlank(rubiesPassword);
+        if (!canAutoRefresh) {
+            logger.warn("[Rubies] RUBIES_EMAIL / RUBIES_PASSWORD not set — JWT auto-refresh is DISABLED. " +
+                    "When the token expires, update RUBIES_API_KEY on Render or call " +
+                    "POST /admin/rubies/update-api-key with a fresh token.");
+        } else {
+            logger.info("[Rubies] Auto-refresh credentials are configured — JWT will be renewed automatically on expiry.");
         }
     }
 
@@ -341,43 +367,61 @@ public class RubiesGateway implements PaymentGateway {
                 reference, amountStr, debitAccountNumber, creditBankCode, creditAccountNumber);
 
         try {
-            ResponseEntity<RubiesFundTransferResponse> response =
-                    restTemplate.exchange(url, HttpMethod.POST,
-                            new HttpEntity<>(req, authHeaders()),
-                            RubiesFundTransferResponse.class);
-
-            RubiesFundTransferResponse body = response.getBody();
-
-            if (body == null) {
-                throw new RuntimeException("Rubies fund transfer returned null response for ref=" + reference);
-            }
-
-            if (body.isFailed()) {
-                logger.error("[Rubies] Fund transfer FAILED: ref={} code={} msg={}",
-                        reference, body.getResponseCode(), body.getResponseMessage());
-                throw new RuntimeException("Rubies transfer failed [" + body.getResponseCode() + "]: "
-                        + body.getResponseMessage());
-            }
-
-            // "00" = success, "09"/"90"/"99" = pending — both are acceptable outcomes here.
-            // The caller/webhook handler will finalize on pending.
-            // NOTE: FundTransferResponse is FLAT per the official Rubies production schema
-            // (no "data" wrapper) — read sessionId directly off the body, falling back to
-            // our locally-generated reference only if Rubies didn't echo one back.
-            String sessionId = (body.getSessionId() != null && !body.getSessionId().isBlank())
-                    ? body.getSessionId()
-                    : reference;
-            logger.info("[Rubies] Fund transfer {}: ref={} sessionId={}",
-                    body.isSuccess() ? "SUCCESS" : "PENDING", reference, sessionId);
-
-            return sessionId != null ? sessionId : reference;
-
+            return doFundTransfer(url, req, reference, false);
         } catch (RuntimeException e) {
             throw e;
         } catch (Exception e) {
             logger.error("[Rubies] Fund transfer exception: ref={} error={}", reference, e.getMessage(), e);
             throw new RuntimeException("Rubies transfer error: " + e.getMessage(), e);
         }
+    }
+
+    /**
+     * Executes the fund-transfer HTTP call.  If Rubies returns error code 22 (JWT expired)
+     * and this is the first attempt, we refresh the token and retry exactly once.
+     */
+    private String doFundTransfer(String url, RubiesFundTransferRequest req,
+                                  String reference, boolean isRetry) {
+        ResponseEntity<RubiesFundTransferResponse> response =
+                restTemplate.exchange(url, HttpMethod.POST,
+                        new HttpEntity<>(req, authHeaders()),
+                        RubiesFundTransferResponse.class);
+
+        RubiesFundTransferResponse body = response.getBody();
+
+        if (body == null) {
+            throw new RuntimeException("Rubies fund transfer returned null response for ref=" + reference);
+        }
+
+        // Code 22 = JWT expired. Refresh and retry once — but never on a retry to avoid loops.
+        if (!isRetry && "22".equals(body.getResponseCode())) {
+            logger.warn("[Rubies] JWT expired (code 22) on fund transfer ref={}. Attempting token refresh.", reference);
+            if (tryRefreshToken()) {
+                logger.info("[Rubies] Retrying fund transfer after JWT refresh: ref={}", reference);
+                return doFundTransfer(url, req, reference, true);
+            }
+            // Refresh failed or not configured — fall through and throw the original error
+        }
+
+        if (body.isFailed()) {
+            logger.error("[Rubies] Fund transfer FAILED: ref={} code={} msg={}",
+                    reference, body.getResponseCode(), body.getResponseMessage());
+            throw new RuntimeException("Rubies transfer failed [" + body.getResponseCode() + "]: "
+                    + body.getResponseMessage());
+        }
+
+        // "00" = success, "09"/"90"/"99" = pending — both are acceptable outcomes here.
+        // The caller/webhook handler will finalize on pending.
+        // NOTE: FundTransferResponse is FLAT per the official Rubies production schema
+        // (no "data" wrapper) — read sessionId directly off the body, falling back to
+        // our locally-generated reference only if Rubies didn't echo one back.
+        String sessionId = (body.getSessionId() != null && !body.getSessionId().isBlank())
+                ? body.getSessionId()
+                : reference;
+        logger.info("[Rubies] Fund transfer {}: ref={} sessionId={}",
+                body.isSuccess() ? "SUCCESS" : "PENDING", reference, sessionId);
+
+        return sessionId != null ? sessionId : reference;
     }
 
     /**
@@ -588,8 +632,101 @@ public class RubiesGateway implements PaymentGateway {
     private HttpHeaders authHeaders() {
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
-        headers.set("Authorization", apiKey);
+        headers.set("Authorization", currentApiKey);
         return headers;
+    }
+
+    /**
+     * Hot-reloads the Rubies API JWT without restarting the server.
+     * Called by the admin endpoint {@code POST /admin/rubies/update-api-key}.
+     */
+    public void updateApiKey(String newKey) {
+        currentApiKey = newKey;
+        logger.info("[Rubies] API key updated via admin endpoint. No restart needed.");
+    }
+
+    /**
+     * Attempts to get a fresh JWT from Rubies by re-authenticating with stored credentials.
+     * Only called when {@code RUBIES_EMAIL} and {@code RUBIES_PASSWORD} are configured.
+     * Returns true if the token was successfully refreshed.
+     */
+    private boolean tryRefreshToken() {
+        if (isBlank(rubiesEmail) || isBlank(rubiesPassword)) {
+            logger.error("[Rubies] JWT expired (code 22) and auto-refresh credentials are not configured. " +
+                    "Get a new token from the Rubies dashboard and either: " +
+                    "(1) update RUBIES_API_KEY on Render and redeploy, or " +
+                    "(2) call POST /admin/rubies/update-api-key with the new token (no restart needed). " +
+                    "Set RUBIES_EMAIL + RUBIES_PASSWORD env vars to enable automatic renewal.");
+            return false;
+        }
+
+        // Only one thread refreshes at a time; others wait for it to finish.
+        tokenRefreshLock.lock();
+        try {
+            // Another thread may have already refreshed while we waited for the lock.
+            // Re-check by attempting the call would be circular, so we just proceed.
+            String loginUrl = !isBlank(rubiesLoginUrl)
+                    ? rubiesLoginUrl
+                    : baseUrl + "/auth/login";
+
+            logger.info("[Rubies] JWT expired — attempting auto-refresh via {}", loginUrl);
+
+            Map<String, String> loginBody = new HashMap<>();
+            loginBody.put("email",    rubiesEmail);
+            loginBody.put("password", rubiesPassword);
+
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentType(MediaType.APPLICATION_JSON);
+
+            @SuppressWarnings("unchecked")
+            ResponseEntity<Map> response = restTemplate.exchange(
+                    loginUrl, HttpMethod.POST,
+                    new HttpEntity<>(loginBody, headers),
+                    Map.class
+            );
+
+            @SuppressWarnings("unchecked")
+            Map<String, Object> body = response.getBody();
+            if (body != null) {
+                // Rubies may return the token under various field names
+                String newToken = firstNonBlank(body,
+                        "token", "accessToken", "access_token", "jwt", "data");
+                if (newToken != null) {
+                    currentApiKey = newToken;
+                    logger.info("[Rubies] JWT auto-refreshed successfully.");
+                    return true;
+                }
+            }
+            logger.error("[Rubies] Login endpoint returned no recognisable token field. Body: {}", body);
+            return false;
+
+        } catch (Exception e) {
+            logger.error("[Rubies] Auto-refresh failed: {}", e.getMessage(), e);
+            return false;
+        } finally {
+            tokenRefreshLock.unlock();
+        }
+    }
+
+    /** Pulls the first non-blank String value from {@code map} by trying each key in order. */
+    @SuppressWarnings("unchecked")
+    private String firstNonBlank(Map<String, Object> map, String... keys) {
+        for (String key : keys) {
+            Object val = map.get(key);
+            if (val instanceof String && !((String) val).isBlank()) {
+                return (String) val;
+            }
+            // Handle nested "data" object that itself contains the token
+            if (val instanceof Map) {
+                String inner = firstNonBlank((Map<String, Object>) val, "token", "accessToken", "access_token", "jwt");
+                if (inner != null) return inner;
+            }
+        }
+        return null;
+    }
+
+    private boolean isBlank(String s) {
+        return s == null || s.isBlank();
     }
 
     private String str(Map<String, Object> map, String key, String defaultValue) {
