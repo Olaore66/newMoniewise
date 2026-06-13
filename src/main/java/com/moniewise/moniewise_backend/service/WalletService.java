@@ -151,6 +151,8 @@ public class WalletService {
                 }
                 Object prov = snap.get("providerName");
                 w.setProviderName(prov != null ? prov.toString() : null);
+                Object provWalletRef = snap.get("providerWalletRef");
+                w.setProviderWalletRef(provWalletRef != null ? provWalletRef.toString() : null);
                 return w;
             }
         } catch (Exception e) {
@@ -165,8 +167,9 @@ public class WalletService {
             snap.put("currency",       wallet.getCurrency() != null ? wallet.getCurrency() : "NGN");
             snap.put("accountNumber",  wallet.getAccountNumber());
             snap.put("bankName",       wallet.getBankName());
-            snap.put("status",         wallet.getStatus() != null ? wallet.getStatus().name() : "ACTIVE");
-            snap.put("providerName",   wallet.getProviderName());
+            snap.put("status",            wallet.getStatus() != null ? wallet.getStatus().name() : "ACTIVE");
+            snap.put("providerName",      wallet.getProviderName());
+            snap.put("providerWalletRef", wallet.getProviderWalletRef());
             redisTemplate.opsForValue().set(cacheKey, objectMapper.writeValueAsString(snap),
                     WALLET_CACHE_TTL_SECS, TimeUnit.SECONDS);
         } catch (Exception e) {
