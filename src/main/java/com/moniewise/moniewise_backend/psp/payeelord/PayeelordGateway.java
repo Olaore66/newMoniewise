@@ -92,7 +92,7 @@ public class PayeelordGateway {
                     "panel (PUT /admin/config/PAYEELORD_API_KEY) or as an env var. " +
                     "All purchase calls will fail with 401 until this is set.");
         } else {
-            logger.info("[Payeelord] Gateway initialised. key={}*** base_url={}",
+            logger.info("[Payeelord] Gateway initialised. key={}*** base_url={} auth_scheme=Bearer",
                     key.substring(0, Math.min(6, key.length())), baseUrl());
         }
     }
@@ -348,6 +348,7 @@ public class PayeelordGateway {
         result.put("url", url);
         result.put("keyConfigured", !keyPrefix.equals("(NONE)"));
         result.put("keyPrefix", keyPrefix);
+        result.put("authScheme", "Bearer (Authorization: Bearer <key>)");
         try {
             ResponseEntity<String> resp = restTemplate.exchange(
                     url, HttpMethod.GET, new HttpEntity<>(authHeaders(false)), String.class);
@@ -397,9 +398,12 @@ public class PayeelordGateway {
     @SuppressWarnings("unchecked")
     private java.util.List<java.util.Map<String, Object>> getListData(String url, Object body) {
         try {
-            HttpEntity<?> entity = (body != null)
-                    ? new HttpEntity<>(body, authHeaders(false))
-                    : new HttpEntity<>(authHeaders(false));
+            // Catalog endpoints (/datatypes, /all-network, /data-plan) are public — the Payeelord
+            // docs curl sends only Accept: application/json with no Authorization header.
+            HttpHeaders catalogHeaders = new HttpHeaders();
+            catalogHeaders.setAccept(java.util.List.of(MediaType.APPLICATION_JSON));
+            if (body != null) catalogHeaders.setContentType(MediaType.APPLICATION_JSON);
+            HttpEntity<?> entity = new HttpEntity<>(body, catalogHeaders);
             ResponseEntity<java.util.Map> resp =
                     restTemplate.exchange(url, HttpMethod.GET, entity, java.util.Map.class);
             java.util.Map<?, ?> m = resp.getBody();
@@ -470,23 +474,22 @@ public class PayeelordGateway {
     }
 
     /**
-     * Builds auth headers for an endpoint.
+     * Builds auth headers. All Payeelord endpoints use {@code Authorization: Bearer <key>}.
      *
-     * <p>Per the Payeelord API docs, auth varies by endpoint:
-     * <ul>
-     *   <li>{@code POST /buy/airtime} — {@code Authorization: Bearer <key>} → call with {@code true}</li>
-     *   <li>{@code POST /data}, {@code GET /check/balance}, catalog endpoints — raw key, no prefix → call with {@code false}</li>
-     * </ul>
+     * <p>Confirmed by Payeelord's published API docs ("AUTHORIZATION: Bearer Token").
+     * Earlier attempts with raw key and with {@code Token} scheme both returned
+     * {@code {"error":"Invalid Authorization header format"}} — the key in the admin panel
+     * was wrong (32 chars vs Payeelord's ~21-char key format), NOT the Bearer scheme itself.
      *
-     * <p>The boolean is the source of truth — no system_config override, because a stale DB
-     * row overriding the per-endpoint default was the root cause of repeated 401 failures.
+     * <p>The {@code useBearer} parameter is kept for call-site compatibility but is ignored —
+     * all callers get {@code Bearer} auth as per Payeelord docs.
      */
     private HttpHeaders authHeaders(boolean useBearer) {
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
         headers.setAccept(java.util.List.of(MediaType.APPLICATION_JSON));
         String key = resolveApiKey();
-        headers.set("Authorization", useBearer ? "Bearer " + key : key);
+        headers.set("Authorization", "Bearer " + key);
         return headers;
     }
 
