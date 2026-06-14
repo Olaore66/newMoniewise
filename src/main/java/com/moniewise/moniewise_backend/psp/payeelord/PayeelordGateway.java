@@ -153,11 +153,11 @@ public class PayeelordGateway {
                     PayeelordAirtimePurchaseResponse.class, e);
             if (parsed != null) return parsed;
             if (isDefiniteRejection(e)) {
-                // 401/403/400 = request rejected at the gate (bad/inactive key, wrong
-                // auth scheme, validation) — Payeelord did NOT process it, so this is a
-                // clean failure the caller can safely refund (NOT ambiguous).
-                logger.error("[Payeelord] Airtime purchase REJECTED (HTTP {}) — definitive failure (safe to refund). " +
-                        "Check PAYEELORD_API_KEY and payeelord.auth.use_bearer. mobile={}", e.getStatusCode(), mobileNumber);
+                // 401/403/400 = request rejected at the gate — Payeelord did NOT process it,
+                // so this is a clean failure the caller can safely refund (NOT ambiguous).
+                // Log the response body — that's where Payeelord puts the rejection reason.
+                logger.error("[Payeelord] Airtime purchase REJECTED (HTTP {}) mobile={} payeelord_body={}",
+                        e.getStatusCode(), mobileNumber, e.getResponseBodyAsString());
                 PayeelordAirtimePurchaseResponse failed = new PayeelordAirtimePurchaseResponse();
                 failed.setStatus("failed");
                 failed.setMessage("Provider rejected the request (HTTP " + e.getStatusCode().value() +
@@ -190,7 +190,7 @@ public class PayeelordGateway {
      * @param mobileNumber recipient line
      */
     public PayeelordDataPurchaseResponse purchaseData(String networkId, String dataId, String dataType, String mobileNumber) {
-        String url = baseUrl() + "/data";
+        String url = baseUrl() + "/buy/data";
         PayeelordDataPurchaseRequest req = new PayeelordDataPurchaseRequest(networkId, dataId, dataType, mobileNumber);
 
         logger.info("[Payeelord] Buying data: networkId={} dataId={} dataType={} mobile={}",
@@ -221,8 +221,8 @@ public class PayeelordGateway {
                     PayeelordDataPurchaseResponse.class, e);
             if (parsed != null) return parsed;
             if (isDefiniteRejection(e)) {
-                logger.error("[Payeelord] Data purchase REJECTED (HTTP {}) — definitive failure (safe to refund). " +
-                        "Check PAYEELORD_API_KEY and payeelord.auth.use_bearer. mobile={}", e.getStatusCode(), mobileNumber);
+                logger.error("[Payeelord] Data purchase REJECTED (HTTP {}) mobile={} payeelord_body={}",
+                        e.getStatusCode(), mobileNumber, e.getResponseBodyAsString());
                 PayeelordDataPurchaseResponse failed = new PayeelordDataPurchaseResponse();
                 failed.setStatus("failed");
                 failed.setMessage("Provider rejected the request (HTTP " + e.getStatusCode().value() +
@@ -334,6 +334,35 @@ public class PayeelordGateway {
     }
 
     // ── Catalog reads (used by PayeelordCatalogSyncJob) ───────────────────────
+
+    /**
+     * Diagnostic probe — makes a real call to Payeelord's balance endpoint and returns
+     * the raw HTTP status + body so the admin can see exactly what Payeelord says without
+     * wading through Spring's exception wrapping. Never throws; returns a simple string.
+     */
+    public java.util.Map<String, Object> diagnose() {
+        String url = baseUrl() + "/check/balance";
+        String keyUsed = resolveApiKey();
+        String keyPrefix = (keyUsed == null || keyUsed.isBlank()) ? "(NONE)" : keyUsed.substring(0, Math.min(8, keyUsed.length())) + "...";
+        java.util.Map<String, Object> result = new java.util.LinkedHashMap<>();
+        result.put("url", url);
+        result.put("keyConfigured", !keyPrefix.equals("(NONE)"));
+        result.put("keyPrefix", keyPrefix);
+        try {
+            ResponseEntity<String> resp = restTemplate.exchange(
+                    url, HttpMethod.GET, new HttpEntity<>(authHeaders(false)), String.class);
+            result.put("httpStatus", resp.getStatusCode().value());
+            result.put("body", resp.getBody());
+        } catch (HttpStatusCodeException e) {
+            result.put("httpStatus", e.getStatusCode().value());
+            result.put("body", e.getResponseBodyAsString());
+            result.put("responseHeaders", e.getResponseHeaders() != null ? e.getResponseHeaders().toSingleValueMap() : null);
+        } catch (Exception e) {
+            result.put("httpStatus", "ERROR");
+            result.put("body", e.getMessage());
+        }
+        return result;
+    }
 
     /** {@code GET /datatypes} → list of {@code {type, network_id}}. Empty on failure. */
     public java.util.List<java.util.Map<String, Object>> getDataTypes() {

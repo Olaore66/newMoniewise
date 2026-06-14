@@ -68,4 +68,17 @@ public class PayeelordAdminController {
         }
         return ResponseEntity.ok(Map.of("status", true, "balance", balance));
     }
+
+    /**
+     * Raw diagnostic probe — calls Payeelord's balance endpoint and returns
+     * the exact HTTP status and body so you can see what Payeelord is saying.
+     * Use this when purchase calls return 401 to find out why.
+     *
+     * <pre>GET /admin/payeelord/diagnose</pre>
+     */
+    @GetMapping("/diagnose")
+    public ResponseEntity<?> diagnose() {
+        logger.info("[Admin] Payeelord diagnostic probe triggered");
+        return ResponseEntity.ok(gateway.diagnose());
+    }
 }
