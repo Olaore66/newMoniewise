@@ -37,6 +37,8 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
 import static com.moniewise.moniewise_backend.enums.TransactionType.WALLET_DEDUCTION;
@@ -792,6 +794,116 @@ public class WalletService {
                 ? paymentGatewayResolver.resolveForWallet(wallet)
                 : paymentGatewayResolver.resolveDefault();
         return gateway.resolveAccount(bankCode, accountNumber);
+    }
+
+    // ── OPay-style bank auto-detect ────────────────────────────────────────────
+
+    private static final String DETECT_BANKS_CACHE_PREFIX = "detect_banks:";
+
+    /**
+     * Lowercased name fragments for the curated set of banks probed during account auto-detect.
+     * Codes are NOT hardcoded here — we intersect these names with the active PSP's supported bank
+     * list so each probe uses the exact {@code bank_code} that PSP expects. Trim this list if the
+     * PSP starts billing per name-enquiry.
+     */
+    private static final List<String> POPULAR_BANK_NAMES = List.of(
+            "opay", "palmpay", "moniepoint", "kuda", "guaranty", "gtbank",
+            "access bank", "zenith", "united bank for africa", "first bank",
+            "fidelity", "first city monument", "fcmb", "sterling", "wema",
+            "stanbic", "ecobank", "union bank", "polaris", "providus",
+            "keystone", "jaiz", "vfd"
+    );
+
+    /**
+     * Given just an account number, probe name-enquiry across the curated popular-bank set in
+     * parallel and return every bank that resolves to a real account name (normally exactly one).
+     *
+     * <p>A NUBAN doesn't encode its bank and Rubies name-enquiry requires a bank code, so this is
+     * the only way to "detect" the bank. Each unique account number is cached (~10 min on hit,
+     * ~1 min on miss) so repeats/retries don't re-probe. Resilient: a single failed probe (the
+     * expected outcome for a non-matching bank) is skipped, never failing the whole call.
+     *
+     * @return a list of {@code {bankCode, bankName, accountName}} maps; empty when nothing matched.
+     */
+    public List<Map<String, Object>> detectBanksForAccount(Long userId, String accountNumber) {
+        final String acct = accountNumber == null ? "" : accountNumber.trim();
+        if (acct.length() != 10 || !acct.chars().allMatch(Character::isDigit)) {
+            throw new IllegalArgumentException("A valid 10-digit account number is required.");
+        }
+
+        final String cacheKey = DETECT_BANKS_CACHE_PREFIX + acct;
+        try {
+            String cached = redisTemplate.opsForValue().get(cacheKey);
+            if (cached != null && !cached.isBlank()) {
+                return objectMapper.readValue(cached,
+                        objectMapper.getTypeFactory().constructCollectionType(List.class, Map.class));
+            }
+        } catch (Exception e) {
+            logger.warn("[DetectBanks] Redis read failed — probing live: {}", e.getMessage());
+        }
+
+        Wallet wallet = walletRepository.findByUserId(userId).orElse(null);
+        final PaymentGateway gateway = wallet != null
+                ? paymentGatewayResolver.resolveForWallet(wallet)
+                : paymentGatewayResolver.resolveDefault();
+
+        // Candidate banks = curated popular set ∩ the active PSP's supported bank list, so each
+        // candidate carries the exact bank_code that PSP's resolveAccount expects.
+        List<Map<String, Object>> candidates = new ArrayList<>();
+        for (Map<String, Object> bank : getSupportedBanks(userId)) {
+            Object codeObj = bank.get("bank_code");
+            String name = String.valueOf(bank.get("name")).toLowerCase();
+            if (codeObj == null || String.valueOf(codeObj).trim().isEmpty()) continue;
+            if (POPULAR_BANK_NAMES.stream().anyMatch(name::contains)) candidates.add(bank);
+        }
+        if (candidates.isEmpty()) return List.of();
+
+        ExecutorService pool = Executors.newFixedThreadPool(Math.min(8, candidates.size()));
+        try {
+            List<CompletableFuture<Map<String, Object>>> futures = new ArrayList<>();
+            for (Map<String, Object> bank : candidates) {
+                final String code = String.valueOf(bank.get("bank_code")).trim();
+                final String bankName = String.valueOf(bank.get("name"));
+                futures.add(CompletableFuture.supplyAsync(() -> {
+                    try {
+                        String name = gateway.resolveAccount(code, acct);
+                        if (name == null || name.isBlank()) return null;
+                        Map<String, Object> m = new LinkedHashMap<>();
+                        m.put("bankCode", code);
+                        m.put("bankName", bankName);
+                        m.put("accountName", name.trim());
+                        return m;
+                    } catch (Exception ignored) {
+                        return null; // wrong bank / no such account — the expected non-match outcome
+                    }
+                }, pool).completeOnTimeout(null, 5, TimeUnit.SECONDS));
+            }
+
+            List<Map<String, Object>> matches = new ArrayList<>();
+            Set<String> seen = new HashSet<>();
+            for (CompletableFuture<Map<String, Object>> f : futures) {
+                Map<String, Object> m;
+                try {
+                    m = f.join();
+                } catch (Exception e) {
+                    m = null;
+                }
+                if (m != null && seen.add((String) m.get("bankCode"))) {
+                    matches.add(m);
+                }
+            }
+
+            try {
+                long ttlSeconds = matches.isEmpty() ? 60 : 600;
+                redisTemplate.opsForValue().set(cacheKey,
+                        objectMapper.writeValueAsString(matches), ttlSeconds, TimeUnit.SECONDS);
+            } catch (Exception e) {
+                logger.warn("[DetectBanks] Redis write failed: {}", e.getMessage());
+            }
+            return matches;
+        } finally {
+            pool.shutdownNow();
+        }
     }
 
     private LocalDateTime parseTransactionDate(String paidOn) {

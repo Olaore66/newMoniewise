@@ -47,6 +47,7 @@ public class AbuseProtectionService {
     // ── Wallet ───────────────────────────────────────────────────────────────
     public static final String WALLET_WITHDRAW        = "wallet.withdraw";
     public static final String WALLET_RESOLVE_ACCOUNT = "wallet.resolve_account";
+    public static final String WALLET_DETECT_BANKS    = "wallet.detect_banks";
     public static final String WALLET_BANK_INFO       = "wallet.bank_info";
     public static final String P2P_USER_SEARCH        = "p2p.user_search";
 
@@ -201,6 +202,8 @@ public class AbuseProtectionService {
             // Wallet — generous limits for normal use, blocks abuse
             case WALLET_WITHDRAW        -> new AttemptPolicy(10, Duration.ofHours(1),   Duration.ofHours(1));
             case WALLET_RESOLVE_ACCOUNT -> new AttemptPolicy(30, Duration.ofMinutes(5), Duration.ofMinutes(10));
+            // Each detect call probes several banks server-side but counts as ONE request here.
+            case WALLET_DETECT_BANKS    -> new AttemptPolicy(20, Duration.ofMinutes(5), Duration.ofMinutes(10));
             case WALLET_BANK_INFO       -> new AttemptPolicy(10, Duration.ofMinutes(15),Duration.ofMinutes(15));
             case P2P_USER_SEARCH        -> new AttemptPolicy(120, Duration.ofMinutes(1), Duration.ofMinutes(5));
 

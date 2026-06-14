@@ -188,6 +188,38 @@ public class WalletController {
     }
 
     /**
+     * POST: OPay-style bank auto-detect. Given just an account number, probe name-enquiry across a
+     * curated set of popular banks and return the ones that resolve — so the app can suggest the
+     * destination bank before the user picks one. Falls back to manual selection when empty.
+     */
+    @PostMapping("/detect-banks")
+    public ResponseEntity<?> detectBanks(Authentication authentication,
+                                         @RequestBody Map<String, String> payload,
+                                         HttpServletRequest httpRequest) {
+        String accountNumber = payload.get("accountNumber");
+        if (accountNumber == null || accountNumber.isBlank()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "accountNumber is required."));
+        }
+
+        String throttleKey = abuseProtectionService.buildKey(authentication.getName(), httpRequest.getRemoteAddr());
+        abuseProtectionService.checkAllowed(AbuseProtectionService.WALLET_DETECT_BANKS, throttleKey);
+
+        try {
+            Long userId = currentUser(authentication.getName()).getId();
+            List<Map<String, Object>> matches = walletService.detectBanksForAccount(userId, accountNumber);
+            // One request per detect call (not per bank probed) — prevents enumeration abuse.
+            abuseProtectionService.recordRequest(AbuseProtectionService.WALLET_DETECT_BANKS, throttleKey);
+            return ResponseEntity.ok(Map.of("matches", matches));
+        } catch (IllegalArgumentException e) {
+            abuseProtectionService.recordRequest(AbuseProtectionService.WALLET_DETECT_BANKS, throttleKey);
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        } catch (RuntimeException e) {
+            abuseProtectionService.recordRequest(AbuseProtectionService.WALLET_DETECT_BANKS, throttleKey);
+            return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    /**
      * POST: Save the verified Settlement Account details to the Wallet.
      * Rate-limited — prevents rapid bank account cycling.
      */

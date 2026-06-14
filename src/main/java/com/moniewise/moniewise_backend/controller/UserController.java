@@ -19,12 +19,14 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
 import javax.servlet.http.HttpServletRequest;
 import javax.validation.Valid;
 import java.time.LocalDateTime;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -128,8 +130,18 @@ public class UserController {
                     });
         }
 
+        // Generate a JWT so the client can proceed directly — no second /auth/login needed.
+        UserDetails userDetails = userService.loadUserByUsername(user.getEmail());
+        String sessionId = authSessionService.createSession(user);
+        String token = jwtUtil.generateToken(userDetails, sessionId);
+
         abuseProtectionService.recordSuccess(AbuseProtectionService.OTP_VERIFY, throttleKey);
-        return ResponseEntity.ok(Map.of("message", "OTP verified successfully"));
+
+        Map<String, Object> response = new HashMap<>();
+        response.put("token", token);
+        response.put("message", "OTP verified successfully");
+        response.put("expiresAt", jwtUtil.extractExpiration(token).getTime());
+        return ResponseEntity.ok(response);
     }
 
     @PostMapping("/profile")
