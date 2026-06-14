@@ -2,6 +2,7 @@ package com.moniewise.moniewise_backend.repository;
 
 import com.moniewise.moniewise_backend.entity.User;
 import com.moniewise.moniewise_backend.entity.UserSummary;
+import com.moniewise.moniewise_backend.enums.Role;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
@@ -169,4 +170,7 @@ List<UserSummary> searchUsers(@Param("query") String query, Pageable pageable);
     List<User> findIncompleteSignups();
 
     Optional<User> findByEmail(String email);
+
+    /** All users holding a given role — used to target admins for ops alerts. */
+    List<User> findByRole(Role role);
 }

@@ -48,5 +48,8 @@ public enum NotificationType {
     AIRTIME_PURCHASE_SUCCESS,
     AIRTIME_PURCHASE_FAILED,
     DATA_PURCHASE_SUCCESS,
-    DATA_PURCHASE_FAILED
+    DATA_PURCHASE_FAILED,
+
+    // ── Admin / ops alerts ──────────────────────────────────────────────────
+    ADMIN_PAYEELORD_LOW_BALANCE
 }

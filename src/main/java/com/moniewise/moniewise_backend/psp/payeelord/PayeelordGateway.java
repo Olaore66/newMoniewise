@@ -63,7 +63,7 @@ public class PayeelordGateway {
     @Value("${payeelord.api.key:}")
     private String apiKey;
 
-    @Value("${payeelord.base.url:https://payeelord.com/api}")
+    @Value("${payeelord.base.url:https://api.payeelord.com/api}")
     private String defaultBaseUrl;
 
     /**
@@ -173,11 +173,12 @@ public class PayeelordGateway {
      * @param dataId    Payeelord's plan id from the catalog
      * @param mobileNumber recipient line
      */
-    public PayeelordDataPurchaseResponse purchaseData(String networkId, String dataId, String mobileNumber) {
-        String url = baseUrl() + "/buy/data";
-        PayeelordDataPurchaseRequest req = new PayeelordDataPurchaseRequest(networkId, dataId, mobileNumber);
+    public PayeelordDataPurchaseResponse purchaseData(String networkId, String dataId, String dataType, String mobileNumber) {
+        String url = baseUrl() + "/data";
+        PayeelordDataPurchaseRequest req = new PayeelordDataPurchaseRequest(networkId, dataId, dataType, mobileNumber);
 
-        logger.info("[Payeelord] Buying data: networkId={} dataId={} mobile={}", networkId, dataId, mobileNumber);
+        logger.info("[Payeelord] Buying data: networkId={} dataId={} dataType={} mobile={}",
+                networkId, dataId, dataType, mobileNumber);
 
         try {
             ResponseEntity<PayeelordDataPurchaseResponse> response =
@@ -275,6 +276,35 @@ public class PayeelordGateway {
         } catch (Exception e) {
             logger.error("[Payeelord][WEBHOOK] HMAC validation threw an exception", e);
             return true; // fail-open while the scheme is unverified — see Javadoc
+        }
+    }
+
+    // ── Wallet balance (admin float monitor) ──────────────────────────────────
+
+    /**
+     * Calls {@code GET /check/balance} to read our Payeelord float balance.
+     *
+     * <p>Response shape: {@code {"status":"successful","wallet_balance":"N34874.00"}}.
+     * Returns {@link java.util.Optional#empty()} on any transport/parse failure —
+     * the only caller is a best-effort low-balance monitor, so a transient outage
+     * must never page anyone or crash a scheduled run.
+     */
+    public java.util.Optional<BigDecimal> checkWalletBalance() {
+        String url = baseUrl() + "/check/balance";
+        try {
+            ResponseEntity<java.util.Map> response = restTemplate.exchange(
+                    url, HttpMethod.GET, new HttpEntity<>(authHeaders()), java.util.Map.class);
+            java.util.Map<?, ?> body = response.getBody();
+            if (body == null) return java.util.Optional.empty();
+            Object raw = body.get("wallet_balance");
+            if (raw == null) return java.util.Optional.empty();
+            // Strip currency noise: "N34874.00" / "₦ 34,874.00" → 34874.00
+            String cleaned = raw.toString().replaceAll("[^0-9.]", "");
+            if (cleaned.isBlank()) return java.util.Optional.empty();
+            return java.util.Optional.of(new BigDecimal(cleaned));
+        } catch (Exception e) {
+            logger.warn("[Payeelord] check/balance failed: {}", e.getMessage());
+            return java.util.Optional.empty();
         }
     }
 

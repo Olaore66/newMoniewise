@@ -138,6 +138,13 @@ public class SystemConfigService {
     /** Master switch for the periodic data-plan catalog sync job. Default: false (off until verified). */
     public static final String PAYEELORD_CATALOG_SYNC_ENABLED = "payeelord.catalog.sync.enabled";
 
+    /** Master switch for the Payeelord float low-balance admin alert job. Default: true. */
+    public static final String PAYEELORD_BALANCE_ALERT_ENABLED = "payeelord.balance.alert.enabled";
+    /** Threshold (NGN) below which the admin low-balance alert fires. Default: 5000. */
+    public static final String PAYEELORD_BALANCE_ALERT_THRESHOLD = "payeelord.balance.alert.threshold";
+    /** Minutes to suppress repeat low-balance alerts after one fires. Default: 360 (6h). */
+    public static final String PAYEELORD_BALANCE_ALERT_COOLDOWN_MINUTES = "payeelord.balance.alert.cooldown_minutes";
+
     // ──────────────────────────────────────────────────────────────────────────
 
     private final SystemConfigRepository repository;

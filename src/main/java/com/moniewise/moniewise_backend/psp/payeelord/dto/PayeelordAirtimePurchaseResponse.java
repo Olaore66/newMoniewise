@@ -6,60 +6,40 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import java.math.BigDecimal;
 
 /**
- * Wire response from {@code POST /buy/airtime} — this is the SYNCHRONOUS
- * source-of-truth for whether the purchase happened (the webhook is a secondary
- * audit confirmation that fires only after this response is returned).
+ * Wire response from {@code POST /api/buy/airtime} — the SYNCHRONOUS
+ * source-of-truth for whether the purchase happened.
  *
- * <p>Documented sample success response:
+ * <p><strong>Real envelope shape (success):</strong>
  * <pre>{@code
  * {
- *   "transaction_id": "UTL9XK4L2P7A",
- *   "api_response": "Airtime purchase completed successfully.",
- *   "network": "MTN",
- *   "balance_before": 15000,
- *   "balance_after": 14500,
- *   "mobile_number": "08012345678",
- *   "amount": "N500",
  *   "status": "successful",
- *   "responseTime": "0.31 secs",
- *   "create_date": "June 7, 2026, 1:14 PM"
+ *   "data": {
+ *     "transaction_id": "9340271729856579",
+ *     "apiResponse": "Congratulations! ...",
+ *     "network": "MTN",
+ *     "balanceBefore": "34893.60",
+ *     "balanceAfter": 34883.79,
+ *     "mobileNumber": "08144446509",
+ *     "paid_amount": "N9.8",
+ *     "amount": "N10",
+ *     "status": "successful",
+ *     "responseTime": "1.79 secs",
+ *     "date": "October 25, 2024, 12:43 PM"
+ *   }
  * }
  * }</pre>
  *
- * <p><strong>Quirk:</strong> in the response (unlike the request), {@code amount}
- * comes back as a STRING with a mangled currency prefix — {@code "N500"} rather
- * than a number. We capture it as a raw string for audit/display only; it must
- * NEVER be parsed and trusted as the amount actually charged — that comes from
- * our own {@code PayeelordVasTransaction.faceAmount}, set before we ever call out.
+ * <p><strong>Error shape (flat, no {@code data}):</strong>
+ * {@code {"status": "failed", "message": "..."}}
  *
- * <p>Sample error response: {@code {"status": "failed", "message": "Insufficient wallet balance."}}
+ * <p>The top-level {@code status} is authoritative; we fall back to the nested
+ * {@code data.status} if the top-level one is somehow absent. Monetary/text
+ * fields inside {@code data} are audit/display only — the amount actually charged
+ * comes from our own {@code PayeelordVasTransaction}, never from this response.
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class PayeelordAirtimePurchaseResponse {
 
-    @JsonProperty("transaction_id")
-    private String transactionId;
-
-    @JsonProperty("api_response")
-    private String apiResponse;
-
-    @JsonProperty("network")
-    private String network;
-
-    @JsonProperty("balance_before")
-    private BigDecimal balanceBefore;
-
-    @JsonProperty("balance_after")
-    private BigDecimal balanceAfter;
-
-    @JsonProperty("mobile_number")
-    private String mobileNumber;
-
-    /** Raw string as returned, e.g. "N500" — display/audit only, see class Javadoc. */
-    @JsonProperty("amount")
-    private String amount;
-
-    /** "successful" | "failed" | "processing" */
     @JsonProperty("status")
     private String status;
 
@@ -67,50 +47,99 @@ public class PayeelordAirtimePurchaseResponse {
     @JsonProperty("message")
     private String message;
 
-    @JsonProperty("responseTime")
-    private String responseTime;
+    @JsonProperty("data")
+    private Data data;
 
-    @JsonProperty("create_date")
-    private String createDate;
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class Data {
+        // Jackson coerces a JSON number → String by default, so this safely
+        // captures both the airtime (string) and any numeric transaction_id.
+        @JsonProperty("transaction_id")
+        private String transactionId;
 
-    public boolean isSuccessful() { return "successful".equalsIgnoreCase(status); }
+        @JsonProperty("apiResponse")
+        private String apiResponse;
 
-    public boolean isFailed() { return "failed".equalsIgnoreCase(status); }
+        @JsonProperty("network")
+        private String network;
 
-    public boolean isProcessing() { return "processing".equalsIgnoreCase(status); }
+        @JsonProperty("balanceBefore")
+        private BigDecimal balanceBefore;
 
-    // ── Getters & Setters ─────────────────────────────────────────────────────
+        @JsonProperty("balanceAfter")
+        private BigDecimal balanceAfter;
 
-    public String getTransactionId()              { return transactionId; }
-    public void setTransactionId(String v)        { this.transactionId = v; }
+        @JsonProperty("mobileNumber")
+        private String mobileNumber;
 
-    public String getApiResponse()                { return apiResponse; }
-    public void setApiResponse(String v)          { this.apiResponse = v; }
+        /** Raw string as returned, e.g. "N9.8" — display/audit only. */
+        @JsonProperty("paid_amount")
+        private String paidAmount;
 
-    public String getNetwork()                    { return network; }
-    public void setNetwork(String network)        { this.network = network; }
+        /** Raw string as returned, e.g. "N10" — display/audit only. */
+        @JsonProperty("amount")
+        private String amount;
 
-    public BigDecimal getBalanceBefore()          { return balanceBefore; }
-    public void setBalanceBefore(BigDecimal v)    { this.balanceBefore = v; }
+        @JsonProperty("status")
+        private String status;
 
-    public BigDecimal getBalanceAfter()           { return balanceAfter; }
-    public void setBalanceAfter(BigDecimal v)     { this.balanceAfter = v; }
+        @JsonProperty("responseTime")
+        private String responseTime;
 
-    public String getMobileNumber()               { return mobileNumber; }
-    public void setMobileNumber(String v)         { this.mobileNumber = v; }
+        @JsonProperty("date")
+        private String date;
 
-    public String getAmount()                     { return amount; }
-    public void setAmount(String amount)          { this.amount = amount; }
+        public String getTransactionId()           { return transactionId; }
+        public void setTransactionId(String v)      { this.transactionId = v; }
+        public String getApiResponse()             { return apiResponse; }
+        public void setApiResponse(String v)       { this.apiResponse = v; }
+        public String getNetwork()                 { return network; }
+        public void setNetwork(String v)           { this.network = v; }
+        public BigDecimal getBalanceBefore()       { return balanceBefore; }
+        public void setBalanceBefore(BigDecimal v) { this.balanceBefore = v; }
+        public BigDecimal getBalanceAfter()        { return balanceAfter; }
+        public void setBalanceAfter(BigDecimal v)  { this.balanceAfter = v; }
+        public String getMobileNumber()            { return mobileNumber; }
+        public void setMobileNumber(String v)      { this.mobileNumber = v; }
+        public String getPaidAmount()              { return paidAmount; }
+        public void setPaidAmount(String v)        { this.paidAmount = v; }
+        public String getAmount()                  { return amount; }
+        public void setAmount(String v)            { this.amount = v; }
+        public String getStatus()                  { return status; }
+        public void setStatus(String v)            { this.status = v; }
+        public String getResponseTime()            { return responseTime; }
+        public void setResponseTime(String v)      { this.responseTime = v; }
+        public String getDate()                    { return date; }
+        public void setDate(String v)              { this.date = v; }
+    }
 
-    public String getStatus()                     { return status; }
-    public void setStatus(String status)          { this.status = status; }
+    /** Effective status: prefer top-level, fall back to nested data.status. */
+    public String getStatus() {
+        if (status != null && !status.isBlank()) return status;
+        return data != null ? data.getStatus() : null;
+    }
 
-    public String getMessage()                    { return message; }
-    public void setMessage(String message)        { this.message = message; }
+    public boolean isSuccessful() { return "successful".equalsIgnoreCase(getStatus()); }
 
-    public String getResponseTime()               { return responseTime; }
-    public void setResponseTime(String v)         { this.responseTime = v; }
+    public boolean isFailed() {
+        String s = getStatus();
+        return s != null && !isSuccessful() && !isProcessing();
+    }
 
-    public String getCreateDate()                 { return createDate; }
-    public void setCreateDate(String createDate)  { this.createDate = createDate; }
+    public boolean isProcessing() { return "processing".equalsIgnoreCase(getStatus()); }
+
+    public String getTransactionId() { return data != null ? data.getTransactionId() : null; }
+
+    public String getNetwork()       { return data != null ? data.getNetwork() : null; }
+
+    public BigDecimal getBalanceBefore() { return data != null ? data.getBalanceBefore() : null; }
+
+    public BigDecimal getBalanceAfter()  { return data != null ? data.getBalanceAfter() : null; }
+
+    // ── Top-level getters/setters ───────────────────────────────────────────
+    public void setStatus(String status)     { this.status = status; }
+    public String getMessage()               { return message; }
+    public void setMessage(String message)   { this.message = message; }
+    public Data getData()                    { return data; }
+    public void setData(Data data)           { this.data = data; }
 }

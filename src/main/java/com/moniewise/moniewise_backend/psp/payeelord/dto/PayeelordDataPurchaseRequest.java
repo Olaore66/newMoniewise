@@ -34,14 +34,24 @@ public class PayeelordDataPurchaseRequest {
     @JsonProperty("dataId")
     private String dataId;
 
+    /**
+     * Payeelord's datatype label (e.g. "SME", "GIFTING", "CORPORATE GIFTING").
+     * Per the real {@code POST /api/data} contract this is REQUIRED alongside
+     * {@code dataId}/{@code networkId}; it's stored on each catalog row as
+     * {@code PayeelordDataPlan.planType}.
+     */
+    @JsonProperty("dataType")
+    private String dataType;
+
     @JsonProperty("mobileNumber")
     private String mobileNumber;
 
     public PayeelordDataPurchaseRequest() {}
 
-    public PayeelordDataPurchaseRequest(String networkId, String dataId, String mobileNumber) {
+    public PayeelordDataPurchaseRequest(String networkId, String dataId, String dataType, String mobileNumber) {
         this.networkId = networkId;
         this.dataId = dataId;
+        this.dataType = dataType;
         this.mobileNumber = mobileNumber;
     }
 
@@ -52,6 +62,9 @@ public class PayeelordDataPurchaseRequest {
 
     public String getDataId()                 { return dataId; }
     public void setDataId(String dataId)      { this.dataId = dataId; }
+
+    public String getDataType()               { return dataType; }
+    public void setDataType(String dataType)  { this.dataType = dataType; }
 
     public String getMobileNumber()           { return mobileNumber; }
     public void setMobileNumber(String v)     { this.mobileNumber = v; }

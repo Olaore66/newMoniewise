@@ -589,7 +589,8 @@ public class NotificationService {
     private NotificationPriority getPriority(NotificationType type) {
         return switch (type) {
             case WALLET_DEPOSIT, WALLET_FUNDED, ENVELOPE_TRANSFER, EXTERNAL_TRANSFER,
-                    LOW_BALANCE_WARNING, INSUFFICIENT_BALANCE, DISBURSEMENT, DISBURSEMENT_SUCCESS, DISBURSEMENT_READY, BUDGET_COMPLETED -> NotificationPriority.HIGH;
+                    LOW_BALANCE_WARNING, INSUFFICIENT_BALANCE, DISBURSEMENT, DISBURSEMENT_SUCCESS, DISBURSEMENT_READY, BUDGET_COMPLETED,
+                    ADMIN_PAYEELORD_LOW_BALANCE -> NotificationPriority.HIGH;
 
             case BUDGET_LIMIT_WARNING, BUDGET_END_SOON, DISBURSEMENT_FAILED,
                     GOAL_ACHIEVED, WELCOME -> NotificationPriority.MEDIUM;

@@ -170,7 +170,7 @@ public class PayeelordVasService {
 
         PayeelordDataPurchaseResponse response;
         try {
-            response = gateway.purchaseData(plan.getNetworkId(), plan.getDataId(), mobileNumber);
+            response = gateway.purchaseData(plan.getNetworkId(), plan.getDataId(), plan.getPlanType(), mobileNumber);
         } catch (PayeelordGateway.PayeelordAmbiguousResponseException e) {
             self.markAmbiguous(txn.getId(), e.getMessage());
             throw new RuntimeException(

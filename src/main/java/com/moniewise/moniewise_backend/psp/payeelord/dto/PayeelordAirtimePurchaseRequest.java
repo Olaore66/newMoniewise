@@ -5,17 +5,16 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import java.math.BigDecimal;
 
 /**
- * Wire request body for {@code POST /buy/airtime}.
+ * Wire request body for {@code POST /api/buy/airtime}.
  *
- * <p><strong>Field name quirk:</strong> Payeelord's airtime endpoint uses
- * snake_case for the recipient field — {@code mobile_number} — while its data
- * endpoint (see {@link PayeelordDataPurchaseRequest}) uses camelCase
- * {@code mobileNumber}. This isn't a typo on our side; it's how their two
- * controllers are documented. Sending the wrong casing to the wrong endpoint
- * means the field is silently dropped and the request fails validation upstream.
+ * <p>Per the real documented request both the airtime and data endpoints use
+ * camelCase {@code mobileNumber}, and {@code amount} is sent as a STRING
+ * (e.g. {@code "amount": "10"}). We accept a {@link BigDecimal} in the
+ * constructor for type safety and serialize it as a plain string to match.
  *
- * <p>Per the documented sample request, {@code amount} is sent as a JSON NUMBER
- * (e.g. {@code "amount": 500}) — unlike Rubies, which requires amounts as strings.
+ * <pre>{@code
+ * { "network": "MTN", "amount": "10", "mobileNumber": "08144446509" }
+ * }</pre>
  */
 public class PayeelordAirtimePurchaseRequest {
 
@@ -23,19 +22,19 @@ public class PayeelordAirtimePurchaseRequest {
     @JsonProperty("network")
     private String network;
 
-    @JsonProperty("mobile_number")
+    @JsonProperty("mobileNumber")
     private String mobileNumber;
 
-    /** Naira amount, 10–5000 inclusive — sent as a number, not a string. */
+    /** Naira amount sent as a plain string (e.g. "10") to match the documented contract. */
     @JsonProperty("amount")
-    private BigDecimal amount;
+    private String amount;
 
     public PayeelordAirtimePurchaseRequest() {}
 
     public PayeelordAirtimePurchaseRequest(String network, String mobileNumber, BigDecimal amount) {
         this.network = network;
         this.mobileNumber = mobileNumber;
-        this.amount = amount;
+        this.amount = amount != null ? amount.stripTrailingZeros().toPlainString() : null;
     }
 
     // ── Getters & Setters ─────────────────────────────────────────────────────
@@ -46,6 +45,6 @@ public class PayeelordAirtimePurchaseRequest {
     public String getMobileNumber()               { return mobileNumber; }
     public void setMobileNumber(String v)         { this.mobileNumber = v; }
 
-    public BigDecimal getAmount()                 { return amount; }
-    public void setAmount(BigDecimal amount)      { this.amount = amount; }
+    public String getAmount()                     { return amount; }
+    public void setAmount(String amount)          { this.amount = amount; }
 }
