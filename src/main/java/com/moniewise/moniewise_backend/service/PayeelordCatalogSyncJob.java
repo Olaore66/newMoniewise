@@ -1,6 +1,7 @@
 package com.moniewise.moniewise_backend.service;
 
 import com.moniewise.moniewise_backend.entity.PayeelordDataPlan;
+import com.moniewise.moniewise_backend.psp.payeelord.PayeelordGateway;
 import com.moniewise.moniewise_backend.repository.PayeelordDataPlanRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -10,9 +11,14 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Periodically refreshes {@code payeelord_data_plans.cost_price} from Payeelord's
@@ -61,13 +67,41 @@ public class PayeelordCatalogSyncJob {
 
     private static final Logger logger = LoggerFactory.getLogger(PayeelordCatalogSyncJob.class);
 
+    /** Networks we actually sell data for — MTN/GLO/9MOBILE/AIRTEL. SMILE(5)/SPECTRANET(6) are out of scope. */
+    private static final Set<String> SUPPORTED_NETWORK_IDS = Set.of("1", "2", "3", "4");
+
+    /** Pulls a data size like "500.0MB" / "1GB" / "1.5 GB" from the plan description. */
+    private static final Pattern SIZE_PATTERN =
+            Pattern.compile("(\\d+(?:\\.\\d+)?\\s*(?:MB|GB|TB))", Pattern.CASE_INSENSITIVE);
+    /** Pulls a validity like "30 days" / "7 day" from the plan description. */
+    private static final Pattern VALIDITY_PATTERN =
+            Pattern.compile("(\\d+\\s*days?)", Pattern.CASE_INSENSITIVE);
+
     private final PayeelordDataPlanRepository dataPlanRepository;
     private final SystemConfigService systemConfig;
+    private final PayeelordGateway gateway;
 
     public PayeelordCatalogSyncJob(PayeelordDataPlanRepository dataPlanRepository,
-                                   SystemConfigService systemConfig) {
+                                   SystemConfigService systemConfig,
+                                   PayeelordGateway gateway) {
         this.dataPlanRepository = dataPlanRepository;
         this.systemConfig = systemConfig;
+        this.gateway = gateway;
+    }
+
+    /**
+     * Forces a full catalog sync right now, bypassing the
+     * {@code payeelord.catalog.sync.enabled} gate — for the admin
+     * "populate plans now" endpoint. Returns the number of plans scraped.
+     */
+    public int syncNow() {
+        List<ScrapedPlan> scraped = scrapeCatalog();
+        if (scraped.isEmpty()) {
+            logger.warn("[PayeelordCatalogSync] Manual sync scraped 0 plans — leaving catalog untouched.");
+            return 0;
+        }
+        upsertCatalog(scraped);
+        return scraped.size();
     }
 
     /**
@@ -190,13 +224,86 @@ public class PayeelordCatalogSyncJob {
      * </pre>
      */
     List<ScrapedPlan> scrapeCatalog() {
-        throw new UnsupportedOperationException(
-                "Payeelord catalog scraper is not yet implemented — the scrape target " +
-                "(page URL, structure, auth, and a networkId/dataId mapping) is still " +
-                "unknown. See PayeelordCatalogSyncJob class Javadoc for exactly what's " +
-                "needed before this seam can be filled in. The job is also gated off by " +
-                "system_config.payeelord.catalog.sync.enabled=false, so this exception " +
-                "only surfaces if someone deliberately flips that flag on early.");
+        // 1. networkId → networkName (only the networks we sell data for)
+        Map<String, String> networkNames = new HashMap<>();
+        for (Map<String, Object> n : gateway.getNetworks()) {
+            String id = str(n.get("network_id"));
+            String name = str(n.get("network_name"));
+            if (id != null && name != null) networkNames.put(id, name.toUpperCase());
+        }
+
+        // 2. all datatypes, grouped by network
+        List<Map<String, Object>> dataTypes = gateway.getDataTypes();
+        if (dataTypes.isEmpty()) {
+            logger.warn("[PayeelordCatalogSync] /datatypes returned nothing — aborting this run.");
+            return List.of();
+        }
+
+        List<ScrapedPlan> out = new ArrayList<>();
+        for (Map<String, Object> dt : dataTypes) {
+            String networkId = str(dt.get("network_id"));
+            String dataType = str(dt.get("type"));
+            if (networkId == null || dataType == null) continue;
+            if (!SUPPORTED_NETWORK_IDS.contains(networkId)) continue;
+
+            String networkName = networkNames.getOrDefault(networkId, networkId);
+
+            // 3. plans for this (dataType, network)
+            for (Map<String, Object> plan : gateway.getDataPlans(dataType, networkId)) {
+                String dataId = str(plan.get("dataId"));
+                BigDecimal cost = parseNaira(str(plan.get("amount")));
+                if (dataId == null || cost == null) continue;
+
+                String description = str(plan.get("description"));
+                String planName = (description != null && !description.isBlank()) ? description : dataType;
+
+                out.add(new ScrapedPlan(
+                        networkId,
+                        networkName,
+                        dataId,
+                        dataType,                       // planType (e.g. "SME")
+                        planName,                       // human label
+                        extractSize(description),       // sizeLabel (e.g. "500.0MB")
+                        extractValidity(description),   // validityLabel (e.g. "30 days")
+                        cost                            // costPrice — Payeelord's price
+                ));
+            }
+        }
+
+        logger.info("[PayeelordCatalogSync] Scraped {} plans across {} datatypes", out.size(), dataTypes.size());
+        return out;
+    }
+
+    // ── Parse helpers ───────────────────────────────────────────────────────
+
+    private static String str(Object o) {
+        if (o == null) return null;
+        String s = o.toString().trim();
+        return s.isEmpty() ? null : s;
+    }
+
+    /** "₦ 150" / "N150" / "150.00" → 150.00; null if unparseable. */
+    private static BigDecimal parseNaira(String raw) {
+        if (raw == null) return null;
+        String cleaned = raw.replaceAll("[^0-9.]", "");
+        if (cleaned.isBlank()) return null;
+        try {
+            return new BigDecimal(cleaned);
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    private static String extractSize(String description) {
+        if (description == null) return null;
+        Matcher m = SIZE_PATTERN.matcher(description);
+        return m.find() ? m.group(1).replaceAll("\\s+", "") : null;
+    }
+
+    private static String extractValidity(String description) {
+        if (description == null) return null;
+        Matcher m = VALIDITY_PATTERN.matcher(description);
+        return m.find() ? m.group(1).toLowerCase() : null;
     }
 
     /**

@@ -308,6 +308,63 @@ public class PayeelordGateway {
         }
     }
 
+    // ── Catalog reads (used by PayeelordCatalogSyncJob) ───────────────────────
+
+    /** {@code GET /datatypes} → list of {@code {type, network_id}}. Empty on failure. */
+    public java.util.List<java.util.Map<String, Object>> getDataTypes() {
+        return getListData(baseUrl() + "/datatypes", null);
+    }
+
+    /** {@code GET /all-network} → list of {@code {network_id, network_name}}. Empty on failure. */
+    public java.util.List<java.util.Map<String, Object>> getNetworks() {
+        return getListData(baseUrl() + "/all-network", null);
+    }
+
+    /**
+     * {@code GET /data-plan} (with a JSON body, per Payeelord's contract) →
+     * list of {@code {id, dataId, dataName, description, amount, networkId}}.
+     */
+    public java.util.List<java.util.Map<String, Object>> getDataPlans(String dataType, String networkId) {
+        java.util.Map<String, Object> body = new java.util.HashMap<>();
+        body.put("dataType", dataType);
+        // Payeelord's sample sends networkId as a JSON number.
+        try {
+            body.put("networkId", Integer.parseInt(networkId));
+        } catch (NumberFormatException e) {
+            body.put("networkId", networkId);
+        }
+        return getListData(baseUrl() + "/data-plan", body);
+    }
+
+    /**
+     * Shared GET helper that unwraps Payeelord's {@code {"data": [...]}} envelope.
+     * Sends an optional JSON body (Payeelord's {@code /data-plan} is a GET-with-body).
+     */
+    @SuppressWarnings("unchecked")
+    private java.util.List<java.util.Map<String, Object>> getListData(String url, Object body) {
+        try {
+            HttpEntity<?> entity = (body != null)
+                    ? new HttpEntity<>(body, authHeaders())
+                    : new HttpEntity<>(authHeaders());
+            ResponseEntity<java.util.Map> resp =
+                    restTemplate.exchange(url, HttpMethod.GET, entity, java.util.Map.class);
+            java.util.Map<?, ?> m = resp.getBody();
+            if (m == null) return java.util.List.of();
+            Object data = m.get("data");
+            if (!(data instanceof java.util.List<?> list)) return java.util.List.of();
+            java.util.List<java.util.Map<String, Object>> out = new java.util.ArrayList<>();
+            for (Object o : list) {
+                if (o instanceof java.util.Map<?, ?> row) {
+                    out.add((java.util.Map<String, Object>) row);
+                }
+            }
+            return out;
+        } catch (Exception e) {
+            logger.warn("[Payeelord] GET {} failed: {}", url, e.getMessage());
+            return java.util.List.of();
+        }
+    }
+
     // ── Private helpers ───────────────────────────────────────────────────────
 
     /**
