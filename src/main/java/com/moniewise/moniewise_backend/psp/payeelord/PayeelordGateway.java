@@ -443,21 +443,19 @@ public class PayeelordGateway {
     /**
      * Builds auth headers for an endpoint.
      *
-     * <p>Per the Payeelord API docs:
+     * <p>Per the Payeelord API docs, auth varies by endpoint:
      * <ul>
-     *   <li>{@code POST /buy/airtime} — Bearer Token: pass {@code useBearerByDefault=true}</li>
-     *   <li>{@code POST /data}, {@code GET /check/balance}, catalog endpoints — raw API key:
-     *       pass {@code useBearerByDefault=false}</li>
+     *   <li>{@code POST /buy/airtime} — {@code Authorization: Bearer <key>} → call with {@code true}</li>
+     *   <li>{@code POST /data}, {@code GET /check/balance}, catalog endpoints — raw key, no prefix → call with {@code false}</li>
      * </ul>
      *
-     * <p>The {@code PAYEELORD_AUTH_USE_BEARER} system_config key overrides the per-endpoint
-     * default when set — flip it to force one scheme across all endpoints at runtime.
+     * <p>The boolean is the source of truth — no system_config override, because a stale DB
+     * row overriding the per-endpoint default was the root cause of repeated 401 failures.
      */
-    private HttpHeaders authHeaders(boolean useBearerByDefault) {
+    private HttpHeaders authHeaders(boolean useBearer) {
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
         headers.setAccept(java.util.List.of(MediaType.APPLICATION_JSON));
-        boolean useBearer = systemConfig.getBoolean(SystemConfigService.PAYEELORD_AUTH_USE_BEARER, useBearerByDefault);
         String key = resolveApiKey();
         headers.set("Authorization", useBearer ? "Bearer " + key : key);
         return headers;
