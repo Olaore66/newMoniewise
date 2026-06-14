@@ -586,6 +586,22 @@ public class EnvelopeService {
             case "weekly":
                 periodStart = now.toLocalDate().minusDays(now.getDayOfWeek().getValue() - 1).atStartOfDay();
                 break;
+            case "monthly":
+                // Calendar-anchored: resets on the 1st of each month.
+                periodStart = now.toLocalDate().withDayOfMonth(1).atStartOfDay();
+                break;
+            case "quarterly": {
+                // Calendar-anchored: resets on Jan/Apr/Jul/Oct 1.
+                int qStartMonth = ((now.getMonthValue() - 1) / 3) * 3 + 1;
+                periodStart = LocalDate.of(now.getYear(), qStartMonth, 1).atStartOfDay();
+                break;
+            }
+            case "biannual": {
+                // Calendar-anchored: resets on Jan 1 and Jul 1.
+                int hStartMonth = now.getMonthValue() <= 6 ? 1 : 7;
+                periodStart = LocalDate.of(now.getYear(), hStartMonth, 1).atStartOfDay();
+                break;
+            }
             case "dynamic":
                 @SuppressWarnings("unchecked")
                 List<String> rawDays = (List<String>) conditions.getOrDefault("days", List.of());
