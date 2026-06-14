@@ -125,7 +125,7 @@ public class PayeelordGateway {
         try {
             ResponseEntity<PayeelordAirtimePurchaseResponse> response =
                     restTemplate.exchange(url, HttpMethod.POST,
-                            new HttpEntity<>(req, authHeaders()),
+                            new HttpEntity<>(req, authHeaders(true)),
                             PayeelordAirtimePurchaseResponse.class);
 
             PayeelordAirtimePurchaseResponse body = response.getBody();
@@ -195,7 +195,7 @@ public class PayeelordGateway {
         try {
             ResponseEntity<PayeelordDataPurchaseResponse> response =
                     restTemplate.exchange(url, HttpMethod.POST,
-                            new HttpEntity<>(req, authHeaders()),
+                            new HttpEntity<>(req, authHeaders(false)),
                             PayeelordDataPurchaseResponse.class);
 
             PayeelordDataPurchaseResponse body = response.getBody();
@@ -314,7 +314,7 @@ public class PayeelordGateway {
         String url = baseUrl() + "/check/balance";
         try {
             ResponseEntity<java.util.Map> response = restTemplate.exchange(
-                    url, HttpMethod.GET, new HttpEntity<>(authHeaders()), java.util.Map.class);
+                    url, HttpMethod.GET, new HttpEntity<>(authHeaders(false)), java.util.Map.class);
             java.util.Map<?, ?> body = response.getBody();
             if (body == null) return java.util.Optional.empty();
             Object raw = body.get("wallet_balance");
@@ -365,8 +365,8 @@ public class PayeelordGateway {
     private java.util.List<java.util.Map<String, Object>> getListData(String url, Object body) {
         try {
             HttpEntity<?> entity = (body != null)
-                    ? new HttpEntity<>(body, authHeaders())
-                    : new HttpEntity<>(authHeaders());
+                    ? new HttpEntity<>(body, authHeaders(false))
+                    : new HttpEntity<>(authHeaders(false));
             ResponseEntity<java.util.Map> resp =
                     restTemplate.exchange(url, HttpMethod.GET, entity, java.util.Map.class);
             java.util.Map<?, ?> m = resp.getBody();
@@ -408,15 +408,24 @@ public class PayeelordGateway {
         return code == 400 || code == 401 || code == 403;
     }
 
-    private HttpHeaders authHeaders() {
+    /**
+     * Builds auth headers for an endpoint.
+     *
+     * <p>Per the Payeelord API docs:
+     * <ul>
+     *   <li>{@code POST /buy/airtime} — Bearer Token: pass {@code useBearerByDefault=true}</li>
+     *   <li>{@code POST /data}, {@code GET /check/balance}, catalog endpoints — raw API key:
+     *       pass {@code useBearerByDefault=false}</li>
+     * </ul>
+     *
+     * <p>The {@code PAYEELORD_AUTH_USE_BEARER} system_config key overrides the per-endpoint
+     * default when set — flip it to force one scheme across all endpoints at runtime.
+     */
+    private HttpHeaders authHeaders(boolean useBearerByDefault) {
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
         headers.setAccept(java.util.List.of(MediaType.APPLICATION_JSON));
-        // Live testing showed `Authorization: Bearer <key>` returns 401 across all
-        // endpoints, while Payeelord's /data and /check/balance docs show the raw key.
-        // So default to the RAW key (no "Bearer" prefix); flip payeelord.auth.use_bearer
-        // to true via system_config if Payeelord ever requires Bearer.
-        boolean useBearer = systemConfig.getBoolean(SystemConfigService.PAYEELORD_AUTH_USE_BEARER, false);
+        boolean useBearer = systemConfig.getBoolean(SystemConfigService.PAYEELORD_AUTH_USE_BEARER, useBearerByDefault);
         headers.set("Authorization", useBearer ? "Bearer " + apiKey : apiKey);
         return headers;
     }

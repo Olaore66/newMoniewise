@@ -5,6 +5,8 @@ import com.moniewise.moniewise_backend.psp.payeelord.PayeelordGateway;
 import com.moniewise.moniewise_backend.repository.PayeelordDataPlanRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
@@ -90,6 +92,31 @@ public class PayeelordCatalogSyncJob {
     }
 
     /**
+     * Runs once immediately after the application has fully started (all DB connections
+     * up, beans wired) so the data-plan catalog is always populated on first boot —
+     * no manual Postman call or admin trigger needed. Runs in a background thread so
+     * it does not delay the final startup phase.
+     */
+    @EventListener(ApplicationReadyEvent.class)
+    public void syncOnStartup() {
+        new Thread(() -> {
+            logger.info("[PayeelordCatalogSync] Application ready — running startup catalog sync...");
+            try {
+                int count = syncNow();
+                if (count > 0) {
+                    logger.info("[PayeelordCatalogSync] Startup sync complete — {} plans loaded into catalog", count);
+                } else {
+                    logger.warn("[PayeelordCatalogSync] Startup sync pulled 0 plans — " +
+                            "check PAYEELORD_API_KEY and PAYEELORD_BASE_URL are set correctly");
+                }
+            } catch (Exception e) {
+                logger.error("[PayeelordCatalogSync] Startup sync failed — " +
+                        "catalog may be empty until the nightly run at 03:00", e);
+            }
+        }, "payeelord-startup-sync").start();
+    }
+
+    /**
      * Forces a full catalog sync right now, bypassing the
      * {@code payeelord.catalog.sync.enabled} gate — for the admin
      * "populate plans now" endpoint. Returns the number of plans scraped.
@@ -112,7 +139,7 @@ public class PayeelordCatalogSyncJob {
      */
     @Scheduled(cron = "${payeelord.catalog.sync.cron:0 0 3 * * ?}", zone = "Africa/Lagos")
     public void runCatalogSync() {
-        if (!systemConfig.getBoolean(SystemConfigService.PAYEELORD_CATALOG_SYNC_ENABLED, false)) {
+        if (!systemConfig.getBoolean(SystemConfigService.PAYEELORD_CATALOG_SYNC_ENABLED, true)) {
             logger.debug("[PayeelordCatalogSync] Disabled via system_config.{} — skipping run",
                     SystemConfigService.PAYEELORD_CATALOG_SYNC_ENABLED);
             return;
