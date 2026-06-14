@@ -92,7 +92,7 @@ public class PayeelordGateway {
                     "panel (PUT /admin/config/PAYEELORD_API_KEY) or as an env var. " +
                     "All purchase calls will fail with 401 until this is set.");
         } else {
-            logger.info("[Payeelord] Gateway initialised. key={}*** base_url={} auth_scheme=Bearer",
+            logger.info("[Payeelord] Gateway initialised. key={}*** base_url={} auth_header=token",
                     key.substring(0, Math.min(6, key.length())), baseUrl());
         }
     }
@@ -348,7 +348,7 @@ public class PayeelordGateway {
         result.put("url", url);
         result.put("keyConfigured", !keyPrefix.equals("(NONE)"));
         result.put("keyPrefix", keyPrefix);
-        result.put("authScheme", "Bearer (Authorization: Bearer <key>)");
+        result.put("authHeader", "token: <key>  (custom Payeelord header, not Authorization)");
         try {
             ResponseEntity<String> resp = restTemplate.exchange(
                     url, HttpMethod.GET, new HttpEntity<>(authHeaders(false)), String.class);
@@ -474,22 +474,26 @@ public class PayeelordGateway {
     }
 
     /**
-     * Builds auth headers. All Payeelord endpoints use {@code Authorization: Bearer <key>}.
+     * Builds auth headers for Payeelord purchase/balance endpoints.
      *
-     * <p>Confirmed by Payeelord's published API docs ("AUTHORIZATION: Bearer Token").
-     * Earlier attempts with raw key and with {@code Token} scheme both returned
-     * {@code {"error":"Invalid Authorization header format"}} — the key in the admin panel
-     * was wrong (32 chars vs Payeelord's ~21-char key format), NOT the Bearer scheme itself.
+     * <p>Payeelord uses a custom {@code token} header (lowercase), NOT the standard
+     * {@code Authorization} header. The Postman collection shows auth type "Bearer Token"
+     * (a Postman UI label) with field "Token: py965401ARBV10Z6hfg56", but the generated
+     * curl for catalog endpoints has NO Authorization header — confirming Payeelord's
+     * wire format is just {@code token: <api_key>}.
      *
-     * <p>The {@code useBearer} parameter is kept for call-site compatibility but is ignored —
-     * all callers get {@code Bearer} auth as per Payeelord docs.
+     * <p>Earlier failures:
+     * <ul>
+     *   <li>{@code Authorization: <key>} (raw) → 401 "Invalid Authorization header format"</li>
+     *   <li>{@code Authorization: Bearer <key>} → 401 "Invalid Authorization header format"</li>
+     *   <li>{@code token: <key>} → current attempt per Payeelord docs field name</li>
+     * </ul>
      */
     private HttpHeaders authHeaders(boolean useBearer) {
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
         headers.setAccept(java.util.List.of(MediaType.APPLICATION_JSON));
-        String key = resolveApiKey();
-        headers.set("Authorization", "Bearer " + key);
+        headers.set("token", resolveApiKey());
         return headers;
     }
 
