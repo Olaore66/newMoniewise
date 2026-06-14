@@ -148,6 +148,18 @@ public class PayeelordGateway {
             PayeelordAirtimePurchaseResponse parsed = tryParseFailureBody(e.getResponseBodyAsString(),
                     PayeelordAirtimePurchaseResponse.class, e);
             if (parsed != null) return parsed;
+            if (isDefiniteRejection(e)) {
+                // 401/403/400 = request rejected at the gate (bad/inactive key, wrong
+                // auth scheme, validation) — Payeelord did NOT process it, so this is a
+                // clean failure the caller can safely refund (NOT ambiguous).
+                logger.error("[Payeelord] Airtime purchase REJECTED (HTTP {}) — definitive failure (safe to refund). " +
+                        "Check PAYEELORD_API_KEY and payeelord.auth.use_bearer. mobile={}", e.getStatusCode(), mobileNumber);
+                PayeelordAirtimePurchaseResponse failed = new PayeelordAirtimePurchaseResponse();
+                failed.setStatus("failed");
+                failed.setMessage("Provider rejected the request (HTTP " + e.getStatusCode().value() +
+                        "). Please try again shortly.");
+                return failed;
+            }
             logger.error("[Payeelord] Airtime purchase HTTP error (ambiguous outcome): mobile={} status={} body={}",
                     mobileNumber, e.getStatusCode(), e.getResponseBodyAsString());
             throw new PayeelordAmbiguousResponseException(
@@ -204,6 +216,15 @@ public class PayeelordGateway {
             PayeelordDataPurchaseResponse parsed = tryParseFailureBody(e.getResponseBodyAsString(),
                     PayeelordDataPurchaseResponse.class, e);
             if (parsed != null) return parsed;
+            if (isDefiniteRejection(e)) {
+                logger.error("[Payeelord] Data purchase REJECTED (HTTP {}) — definitive failure (safe to refund). " +
+                        "Check PAYEELORD_API_KEY and payeelord.auth.use_bearer. mobile={}", e.getStatusCode(), mobileNumber);
+                PayeelordDataPurchaseResponse failed = new PayeelordDataPurchaseResponse();
+                failed.setStatus("failed");
+                failed.setMessage("Provider rejected the request (HTTP " + e.getStatusCode().value() +
+                        "). Please try again shortly.");
+                return failed;
+            }
             logger.error("[Payeelord] Data purchase HTTP error (ambiguous outcome): mobile={} status={} body={}",
                     mobileNumber, e.getStatusCode(), e.getResponseBodyAsString());
             throw new PayeelordAmbiguousResponseException(
@@ -376,14 +397,26 @@ public class PayeelordGateway {
         return systemConfig.getString(SystemConfigService.PAYEELORD_API_BASE_URL, defaultBaseUrl);
     }
 
+    /**
+     * True for HTTP statuses that mean Payeelord rejected the request at the gate
+     * (bad/inactive API key, wrong auth scheme, or a validation error) — the
+     * purchase definitely did NOT execute, so the caller can treat it as a clean
+     * failure and refund, rather than an ambiguous "maybe the float was charged".
+     */
+    private boolean isDefiniteRejection(HttpStatusCodeException e) {
+        int code = e.getStatusCode().value();
+        return code == 400 || code == 401 || code == 403;
+    }
+
     private HttpHeaders authHeaders() {
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
         headers.setAccept(java.util.List.of(MediaType.APPLICATION_JSON));
-        // Payeelord's docs show Bearer on most endpoints and a raw key on a couple;
-        // most likely it accepts Bearer everywhere. Default to Bearer, flippable via
-        // system_config if any endpoint 401s.
-        boolean useBearer = systemConfig.getBoolean(SystemConfigService.PAYEELORD_AUTH_USE_BEARER, true);
+        // Live testing showed `Authorization: Bearer <key>` returns 401 across all
+        // endpoints, while Payeelord's /data and /check/balance docs show the raw key.
+        // So default to the RAW key (no "Bearer" prefix); flip payeelord.auth.use_bearer
+        // to true via system_config if Payeelord ever requires Bearer.
+        boolean useBearer = systemConfig.getBoolean(SystemConfigService.PAYEELORD_AUTH_USE_BEARER, false);
         headers.set("Authorization", useBearer ? "Bearer " + apiKey : apiKey);
         return headers;
     }
