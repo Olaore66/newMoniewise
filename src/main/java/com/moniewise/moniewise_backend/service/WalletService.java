@@ -406,7 +406,7 @@ public class WalletService {
 
         String desc = String.format(
                 "Transfer fee for ₦%,.2f to %s%s%s",
-                transferAmount, recipientDisplay, bankDisplay, breakdown);
+                transferAmount, recipientDisplay, bankDisplay);
 
         TransactionLog feeLog = TransactionLog.builder()
                 .userId(userId)
@@ -1545,6 +1545,40 @@ public class WalletService {
             String fromWalletName,
             String originalRef,
             Long userId) {
+        collectRubiesToRevenueAsync(feeAmount, fromWalletRef, fromWalletName, originalRef, userId,
+                TransactionType.MARKUP_FEE_COLLECTION, "Markup fee");
+    }
+
+    /**
+     * VAS analogue of {@link #collectRubiesMarkupFeeAsync}: physically moves the full
+     * airtime/data payment from the user's Rubies wallet into Moniewise's Rubies
+     * revenue/internal account. Same idempotent, best-effort Rubies-to-Rubies P2P —
+     * only the ledger label ({@link TransactionType#VAS_PAYMENT_COLLECTION}) differs,
+     * so VAS collections are distinguishable from markup-fee collections in reports.
+     */
+    public void collectRubiesVasPaymentAsync(
+            BigDecimal amount,
+            String fromWalletRef,
+            String fromWalletName,
+            String originalRef,
+            Long userId) {
+        collectRubiesToRevenueAsync(amount, fromWalletRef, fromWalletName, originalRef, userId,
+                TransactionType.VAS_PAYMENT_COLLECTION, "Airtime/Data payment");
+    }
+
+    /**
+     * Shared core for both Rubies-to-revenue collectors. {@code label} drives the
+     * human-readable log/narration text and {@code txnType} the ledger category.
+     * Reference is always {@code REV-{originalRef}} (idempotent retry key).
+     */
+    private void collectRubiesToRevenueAsync(
+            BigDecimal feeAmount,
+            String fromWalletRef,
+            String fromWalletName,
+            String originalRef,
+            Long userId,
+            TransactionType txnType,
+            String label) {
 
         if (feeAmount == null || feeAmount.compareTo(BigDecimal.ZERO) <= 0) return;
         if (fromWalletRef == null || fromWalletRef.isBlank()) return;
@@ -1599,10 +1633,10 @@ public class WalletService {
                         .userId(userId)
                         .reference(skipRef)
                         .amount(feeAmount)
-                        .transactionType(TransactionType.MARKUP_FEE_COLLECTION)
+                        .transactionType(txnType)
                         .status(TransactionStatus.FAILED)
                         .providerName(RubiesGateway.PROVIDER_NAME)
-                        .description("Markup fee collection SKIPPED — Rubies revenue account not configured. "
+                        .description(label + " collection SKIPPED — Rubies revenue account not configured. "
                                 + "Call POST /admin/rubies/register-revenue-wallet to fix.")
                         .createdAt(LocalDateTime.now())
                         .build();
@@ -1639,7 +1673,7 @@ public class WalletService {
                 if (existing != null) {
                     // FAILED or stuck PENDING — reset for retry rather than creating a duplicate
                     existing.setStatus(TransactionStatus.PENDING);
-                    existing.setDescription("Markup fee ₦" + feeAmount + " retry for " + originalRef);
+                    existing.setDescription(label + " ₦" + feeAmount + " retry for " + originalRef);
                     existing.setCreatedAt(LocalDateTime.now());
                     feeLog = transactionLogRepository.save(existing);
                     logger.info("[Rubies-Fee] Resetting {} fee log to PENDING for retry. ref={}",
@@ -1652,13 +1686,13 @@ public class WalletService {
                             .userId(revUserId)
                             .reference(revRef)
                             .amount(feeAmount)
-                            .transactionType(TransactionType.MARKUP_FEE_COLLECTION)
+                            .transactionType(txnType)
                             .status(TransactionStatus.PENDING)
                             .externalAccountNumber(revAccount)
                             .externalAccountName(revName)
                             .externalBankName("Rubies MFB")
                             .providerName(RubiesGateway.PROVIDER_NAME)
-                            .description("Markup fee ₦" + feeAmount + " collected via Rubies P2P for " + originalRef)
+                            .description(label + " ₦" + feeAmount + " collected via Rubies P2P for " + originalRef)
                             .createdAt(LocalDateTime.now())
                             .build());
                 }
@@ -1683,7 +1717,7 @@ public class WalletService {
                         revName,
                         feeAmount,
                         revRef,
-                        "Markup fee for " + originalRef
+                        label + " for " + originalRef
                 );
 
                 // ── 3. Update log to COMPLETED ────────────────────────────────────

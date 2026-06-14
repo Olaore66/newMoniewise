@@ -471,7 +471,7 @@ public class PayeelordVasService {
                 return;
             }
             String debitName = walletService.resolveDisplayNameByUserId(txn.getUserId());
-            walletService.collectRubiesMarkupFeeAsync(
+            walletService.collectRubiesVasPaymentAsync(
                     txn.getSellingAmount(),
                     wallet.getProviderWalletRef(),
                     debitName,

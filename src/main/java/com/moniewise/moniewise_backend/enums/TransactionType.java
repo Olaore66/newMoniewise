@@ -45,6 +45,14 @@ public enum TransactionType {
      * transaction history (do not add to the findUserVisibleTransactions type set).
      * Reference pattern: REV-{originalTransferRef}
      */
-    MARKUP_FEE_COLLECTION
+    MARKUP_FEE_COLLECTION,
+
+    /**
+     * Internal Rubies-to-Rubies P2P used to physically move the full payment for an
+     * airtime/data (VAS) purchase from the user's Rubies wallet into the Moniewise
+     * revenue/internal wallet. Platform-internal — must NOT appear in user-facing
+     * history. Reference pattern: REV-{vasReference}
+     */
+    VAS_PAYMENT_COLLECTION
 
     }

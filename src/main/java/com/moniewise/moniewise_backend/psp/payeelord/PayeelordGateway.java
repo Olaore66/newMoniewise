@@ -380,7 +380,11 @@ public class PayeelordGateway {
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
         headers.setAccept(java.util.List.of(MediaType.APPLICATION_JSON));
-        headers.set("Authorization", "Bearer " + apiKey);
+        // Payeelord's docs show Bearer on most endpoints and a raw key on a couple;
+        // most likely it accepts Bearer everywhere. Default to Bearer, flippable via
+        // system_config if any endpoint 401s.
+        boolean useBearer = systemConfig.getBoolean(SystemConfigService.PAYEELORD_AUTH_USE_BEARER, true);
+        headers.set("Authorization", useBearer ? "Bearer " + apiKey : apiKey);
         return headers;
     }
 

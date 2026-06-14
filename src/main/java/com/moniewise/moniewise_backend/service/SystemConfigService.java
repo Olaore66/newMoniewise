@@ -138,6 +138,14 @@ public class SystemConfigService {
     /** Master switch for the periodic data-plan catalog sync job. Default: false (off until verified). */
     public static final String PAYEELORD_CATALOG_SYNC_ENABLED = "payeelord.catalog.sync.enabled";
 
+    /**
+     * Whether to send the Payeelord API key as {@code Authorization: Bearer <key>}
+     * (true, default) or as a raw {@code Authorization: <key>} header (false).
+     * Payeelord's docs are inconsistent across endpoints; flip this if purchases
+     * start returning 401.
+     */
+    public static final String PAYEELORD_AUTH_USE_BEARER = "payeelord.auth.use_bearer";
+
     /** Master switch for the Payeelord float low-balance admin alert job. Default: true. */
     public static final String PAYEELORD_BALANCE_ALERT_ENABLED = "payeelord.balance.alert.enabled";
     /** Threshold (NGN) below which the admin low-balance alert fires. Default: 5000. */
