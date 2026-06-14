@@ -406,7 +406,7 @@ public class WalletService {
 
         String desc = String.format(
                 "Transfer fee for ₦%,.2f to %s%s%s",
-                transferAmount, recipientDisplay, bankDisplay);
+                transferAmount, recipientDisplay, bankDisplay, breakdown);
 
         TransactionLog feeLog = TransactionLog.builder()
                 .userId(userId)

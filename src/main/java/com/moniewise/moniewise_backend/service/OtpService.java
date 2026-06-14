@@ -65,6 +65,35 @@ public class OtpService {
         return otpCode;
     }
 
+    /**
+     * Generates + emails a 6-digit login OTP for first-device 2FA. Identical to
+     * {@link #generateOtp} but deliberately does NOT flip {@code user.isVerified}
+     * to false — that flag is signup-verification state, and a returning, already
+     * verified user going through device 2FA must stay verified.
+     */
+    @Transactional
+    public String generateLoginOtp(Long userId) {
+        SecureRandom random = new SecureRandom();
+        String otpCode = String.valueOf(random.nextInt(900000) + 100000);
+
+        otpRepository.deleteByUserId(userId);
+
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new RuntimeException("User not found with ID: " + userId));
+
+        LocalDateTime now = LocalDateTime.now();
+        Otp otp = new Otp(userId, otpCode, now, now.plusMinutes(OTP_EXPIRY_MINUTES));
+        otpRepository.save(otp);
+
+        try {
+            CompletableFuture.runAsync(() -> notificationService.sendOtpEmail(user.getEmail(), otpCode));
+        } catch (Exception e) {
+            System.err.println("Failed to trigger login OTP email: " + e.getMessage());
+        }
+
+        return otpCode;
+    }
+
     @Transactional(readOnly = true)
     public boolean verifyOtp(Long userId, String otpCode) {
         Optional<Otp> otpOptional = otpRepository.findByUserIdAndOtpCode(userId, otpCode);

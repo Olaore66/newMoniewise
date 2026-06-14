@@ -2,8 +2,10 @@ package com.moniewise.moniewise_backend.controller;
 
 import com.moniewise.moniewise_backend.dto.request.*;
 import com.moniewise.moniewise_backend.dto.response.*;
+import com.moniewise.moniewise_backend.entity.TrustedDevice;
 import com.moniewise.moniewise_backend.entity.User;
 import com.moniewise.moniewise_backend.entity.Wallet;
+import com.moniewise.moniewise_backend.repository.TrustedDeviceRepository;
 import com.moniewise.moniewise_backend.repository.UserRepository;
 import com.moniewise.moniewise_backend.repository.WalletRepository;
 import com.moniewise.moniewise_backend.security.JwtUtil;
@@ -22,6 +24,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 import javax.servlet.http.HttpServletRequest;
 import javax.validation.Valid;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -38,6 +41,7 @@ public class UserController {
     private final JwtUtil jwtUtil;
     private final AuthSessionService authSessionService;
     private final AbuseProtectionService abuseProtectionService;
+    private final TrustedDeviceRepository trustedDeviceRepository;
 
     @GetMapping("/me")
     public ResponseEntity<UserResponse> getCurrentUser() {
@@ -80,7 +84,8 @@ public class UserController {
         abuseProtectionService.checkAllowed(AbuseProtectionService.OTP_GENERATE, throttleKey);
         Optional<User> userOpt = userRepository.findFirstByEmailOrderByCreatedAtAsc(request.getEmailOrPhone()).or(() -> userRepository.findByPhone(request.getEmailOrPhone()));
         if (userOpt.isPresent()) {
-            otpService.generateOtp(userOpt.get().getId());
+            // Login/device-2FA OTP — does NOT flip isVerified (that's signup state).
+            otpService.generateLoginOtp(userOpt.get().getId());
         }
         abuseProtectionService.recordSuccess(AbuseProtectionService.OTP_GENERATE, throttleKey);
         return ResponseEntity.ok(new OtpResponse("If the account exists, a verification code has been sent."));
@@ -103,6 +108,26 @@ public class UserController {
         user.setVerified(true);
         userRepository.save(user);
         otpService.clearOtp(user.getId());
+
+        // Trust this device so subsequent logins from it skip the OTP step
+        // (first-login-per-device 2FA — see AuthController#login).
+        String deviceId = httpRequest.getHeader("X-Device-Id");
+        if (deviceId != null && !deviceId.isBlank()) {
+            final String did = deviceId.trim();
+            trustedDeviceRepository.findByUserIdAndDeviceId(user.getId(), did)
+                    .ifPresentOrElse(td -> {
+                        td.setLastUsedAt(LocalDateTime.now());
+                        trustedDeviceRepository.save(td);
+                    }, () -> {
+                        TrustedDevice td = new TrustedDevice();
+                        td.setUserId(user.getId());
+                        td.setDeviceId(did);
+                        td.setCreatedAt(LocalDateTime.now());
+                        td.setLastUsedAt(LocalDateTime.now());
+                        trustedDeviceRepository.save(td);
+                    });
+        }
+
         abuseProtectionService.recordSuccess(AbuseProtectionService.OTP_VERIFY, throttleKey);
         return ResponseEntity.ok(Map.of("message", "OTP verified successfully"));
     }

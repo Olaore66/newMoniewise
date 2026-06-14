@@ -13,6 +13,7 @@ import com.moniewise.moniewise_backend.dto.response.AuthResponse;
 import com.moniewise.moniewise_backend.dto.response.LogoutResponse;
 import com.moniewise.moniewise_backend.entity.PasswordResetToken;
 import com.moniewise.moniewise_backend.entity.User;
+import com.moniewise.moniewise_backend.repository.TrustedDeviceRepository;
 import com.moniewise.moniewise_backend.repository.UserRepository;
 import com.moniewise.moniewise_backend.security.JwtUtil;
 import com.moniewise.moniewise_backend.service.AbuseProtectionService;
@@ -56,6 +57,7 @@ public class AuthController {
     @Autowired private AuthSessionService authSessionService;
     @Autowired private AbuseProtectionService abuseProtectionService;
     @Autowired private KycService kycService;
+    @Autowired private TrustedDeviceRepository trustedDeviceRepository;
 
     @Value("${spring.security.oauth2.client.registration.google.client-id:}")
     private String googleClientId;
@@ -226,6 +228,20 @@ public class AuthController {
         abuseProtectionService.checkAllowed(AbuseProtectionService.LOGIN, throttleKey);
         try {
             User user = userService.login(request.getEmailOrPhone(), request.getPassword());
+
+            // First-login-per-device 2FA: the password is correct, but if this
+            // device hasn't been verified before, require the email OTP step
+            // (the client sends/collects the OTP, then UserController#verifyOtp
+            // records the device as trusted before the client retries login).
+            String deviceId = httpRequest.getHeader("X-Device-Id");
+            boolean deviceTrusted = deviceId != null && !deviceId.isBlank()
+                    && trustedDeviceRepository.existsByUserIdAndDeviceId(user.getId(), deviceId.trim());
+            if (!deviceTrusted) {
+                // Valid credentials — reset the failure counter, then ask for OTP.
+                abuseProtectionService.recordSuccess(AbuseProtectionService.LOGIN, throttleKey);
+                return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of("error", "OTP verification required"));
+            }
+
             UserDetails userDetails = userService.loadUserByUsername(user.getEmail());
             String newSessionId = authSessionService.createSession(user);
             String token = jwtUtil.generateToken(userDetails, newSessionId);
