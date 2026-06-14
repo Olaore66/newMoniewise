@@ -126,7 +126,7 @@ public class VasController {
         switch (status) {
             case "SUCCESSFUL": return "Purchase completed successfully.";
             case "PENDING":    return "Purchase is being confirmed by the provider — you'll be notified shortly.";
-            case "REVERSED":   return "Purchase could not be completed — your wallet has been refunded.";
+            case "REVERSED":   return "Purchase could not be completed — your envelope has been refunded.";
             default:           return "Purchase submitted.";
         }
     }

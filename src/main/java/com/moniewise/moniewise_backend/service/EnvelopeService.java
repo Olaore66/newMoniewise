@@ -689,6 +689,86 @@ public class EnvelopeService {
     }
 
     // -------------------------------------------------------------------------
+    // VAS spend (airtime/data via Payeelord) — envelope-funded
+    // -------------------------------------------------------------------------
+    // Mirrors the envelope side of the external-transfer flow exactly: HOLD on
+    // spend, SETTLE on provider success, RELEASE on provider failure. Unlike
+    // external transfers there is no separate wallet fee — the whole selling
+    // amount comes out of the envelope. Called as discrete @Transactional steps
+    // by PayeelordVasService (which makes the slow Payeelord HTTP call between
+    // hold and settle, deliberately outside any transaction).
+
+    /**
+     * Validates ownership + period limit + vault balance + envelope rules, then
+     * HOLDS {@code amount} against the envelope (remaining −= amount, held += amount).
+     * Throws a user-friendly {@link IllegalStateException} if the spend isn't allowed.
+     */
+    @Transactional
+    public Envelope holdEnvelopeForVas(Long envelopeId, String email, BigDecimal amount) {
+        // Recompute + persist the fresh remaining limit; also enforces ownership.
+        BigDecimal availableLimit = getRemainingLimit(envelopeId, email);
+
+        Envelope source = envelopeRepository.findByIdAndBudget_UserEmail(envelopeId, email)
+                .orElseThrow(() -> new EntityNotFoundException("Envelope not found or not accessible: " + envelopeId));
+
+        validateTransferRules(source, source.getBudget(), fetchCurrentDateTimeFromDatabase());
+
+        if (amount.compareTo(availableLimit) > 0) {
+            throw new IllegalStateException(String.format(
+                    "Insufficient envelope balance. Max spendable: ₦%,.2f.", availableLimit));
+        }
+
+        BigDecimal availableVault = safeAmount(source.getTotalRemainingAmount())
+                .subtract(safeAmount(source.getHeldAmount()));
+        if (amount.compareTo(availableVault) > 0) {
+            throw new IllegalStateException(String.format(
+                    "Insufficient funds. Max spendable: ₦%,.2f.", availableVault));
+        }
+
+        source.setRemainingAmount(safeAmount(source.getRemainingAmount()).subtract(amount));
+        source.setHeldAmount(safeAmount(source.getHeldAmount()).add(amount));
+        envelopeRepository.save(source);
+        monnieCacheInvalidationService.evictUserIdentifierAfterCommit(email);
+        return source;
+    }
+
+    /**
+     * Finalises a successful VAS spend: releases the hold and reduces the vault
+     * (held −= amount, totalRemaining −= amount), then propagates the spend to the
+     * parent budget's remaining_amount. Mirrors ExternalTransferSettlementService.
+     */
+    @Transactional
+    public void settleEnvelopeVas(Long envelopeId, BigDecimal amount) {
+        Envelope source = envelopeRepository.findById(envelopeId)
+                .orElseThrow(() -> new EntityNotFoundException("Envelope not found: " + envelopeId));
+
+        source.setHeldAmount(safeAmount(source.getHeldAmount()).subtract(amount).max(BigDecimal.ZERO));
+        source.setTotalRemainingAmount(safeAmount(source.getTotalRemainingAmount()).subtract(amount).max(BigDecimal.ZERO));
+        envelopeRepository.save(source);
+
+        Budget budget = source.getBudget();
+        if (budget != null) {
+            budget.setRemainingAmount(safeAmount(budget.getRemainingAmount()).subtract(amount).max(BigDecimal.ZERO));
+            budgetRepository.save(budget);
+        }
+    }
+
+    /**
+     * Reverses a held VAS spend after a provider failure: restores the period
+     * limit and releases the hold (remaining += amount, held −= amount). The vault
+     * was never reduced (settle didn't run), so there is nothing else to undo.
+     */
+    @Transactional
+    public void releaseEnvelopeVasHold(Long envelopeId, BigDecimal amount) {
+        Envelope source = envelopeRepository.findById(envelopeId)
+                .orElseThrow(() -> new EntityNotFoundException("Envelope not found: " + envelopeId));
+
+        source.setRemainingAmount(safeAmount(source.getRemainingAmount()).add(amount));
+        source.setHeldAmount(safeAmount(source.getHeldAmount()).subtract(amount).max(BigDecimal.ZERO));
+        envelopeRepository.save(source);
+    }
+
+    // -------------------------------------------------------------------------
     // HELPERS & OTHER METHODS
     // -------------------------------------------------------------------------
 

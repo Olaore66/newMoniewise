@@ -50,6 +50,10 @@ public class PayeelordVasTransaction {
     @Column(name = "wallet_id", nullable = false)
     private Long walletId;
 
+    /** Budget envelope the purchase was funded from (the money left this envelope). */
+    @Column(name = "envelope_id")
+    private Long envelopeId;
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 20)
     private VasTransactionType type;
@@ -125,6 +129,9 @@ public class PayeelordVasTransaction {
 
     public Long getWalletId()                              { return walletId; }
     public void setWalletId(Long walletId)                 { this.walletId = walletId; }
+
+    public Long getEnvelopeId()                            { return envelopeId; }
+    public void setEnvelopeId(Long envelopeId)             { this.envelopeId = envelopeId; }
 
     public VasTransactionType getType()                    { return type; }
     public void setType(VasTransactionType type)           { this.type = type; }

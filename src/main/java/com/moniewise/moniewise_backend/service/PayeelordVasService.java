@@ -11,6 +11,7 @@ import com.moniewise.moniewise_backend.enums.NotificationType;
 import com.moniewise.moniewise_backend.enums.VasTransactionStatus;
 import com.moniewise.moniewise_backend.enums.VasTransactionType;
 import com.moniewise.moniewise_backend.psp.payeelord.PayeelordGateway;
+import com.moniewise.moniewise_backend.psp.rubies.RubiesGateway;
 import com.moniewise.moniewise_backend.psp.payeelord.dto.PayeelordAirtimePurchaseResponse;
 import com.moniewise.moniewise_backend.psp.payeelord.dto.PayeelordDataPurchaseResponse;
 import com.moniewise.moniewise_backend.psp.payeelord.dto.PayeelordWebhookPayload;
@@ -81,6 +82,8 @@ public class PayeelordVasService {
     private final UserRepository userRepository;
     private final WalletRepository walletRepository;
     private final UserService userService;
+    private final WalletService walletService;
+    private final EnvelopeService envelopeService;
     private final PayeelordGateway gateway;
     private final PayeelordPricingService pricingService;
     private final PayeelordDataPlanRepository dataPlanRepository;
@@ -92,6 +95,8 @@ public class PayeelordVasService {
     public PayeelordVasService(UserRepository userRepository,
                                WalletRepository walletRepository,
                                UserService userService,
+                               WalletService walletService,
+                               @Lazy EnvelopeService envelopeService,
                                PayeelordGateway gateway,
                                PayeelordPricingService pricingService,
                                PayeelordDataPlanRepository dataPlanRepository,
@@ -102,6 +107,8 @@ public class PayeelordVasService {
         this.userRepository = userRepository;
         this.walletRepository = walletRepository;
         this.userService = userService;
+        this.walletService = walletService;
+        this.envelopeService = envelopeService;
         this.gateway = gateway;
         this.pricingService = pricingService;
         this.dataPlanRepository = dataPlanRepository;
@@ -128,7 +135,8 @@ public class PayeelordVasService {
                 userId, reference, pricing.displayText());
 
         PayeelordVasTransaction txn = self.openPurchase(
-                userId, VasTransactionType.AIRTIME, reference, network, mobileNumber, null, pricing);
+                userId, user.getEmail(), request.getEnvelopeId(),
+                VasTransactionType.AIRTIME, reference, network, mobileNumber, null, pricing);
 
         PayeelordAirtimePurchaseResponse response;
         try {
@@ -166,7 +174,8 @@ public class PayeelordVasService {
                 userId, reference, plan.getDataId(), plan.getPlanName(), pricing.displayText());
 
         PayeelordVasTransaction txn = self.openPurchase(
-                userId, VasTransactionType.DATA, reference, plan.getNetworkName(), mobileNumber, plan, pricing);
+                userId, user.getEmail(), request.getEnvelopeId(),
+                VasTransactionType.DATA, reference, plan.getNetworkName(), mobileNumber, plan, pricing);
 
         PayeelordDataPurchaseResponse response;
         try {
@@ -211,34 +220,29 @@ public class PayeelordVasService {
      */
     @Transactional
     public PayeelordVasTransaction openPurchase(Long userId,
+                                                 String email,
+                                                 Long envelopeId,
                                                  VasTransactionType type,
                                                  String reference,
                                                  String network,
                                                  String mobileNumber,
                                                  PayeelordDataPlan dataPlan,
                                                  PayeelordPricingService.VasPricing pricing) {
-        Wallet wallet = walletRepository.findByUserIdForUpdate(userId)
+        Wallet wallet = walletRepository.findByUserId(userId)
                 .orElseThrow(() -> new IllegalArgumentException("Wallet not found"));
 
-        BigDecimal balanceBefore = wallet.getBalance();
         BigDecimal sellingAmount = pricing.sellingAmount();
 
-        if (balanceBefore.compareTo(sellingAmount) < 0) {
-            throw new IllegalArgumentException(String.format(
-                    "Insufficient balance. You have ₦%,.2f available, but this purchase costs ₦%,.2f. " +
-                    "Please fund your wallet and try again.",
-                    balanceBefore, sellingAmount));
-        }
-
-        wallet.setBalance(balanceBefore.subtract(sellingAmount));
-        wallet.setUpdatedAt(LocalDateTime.now());
-        walletRepository.save(wallet);
-        BigDecimal balanceAfter = wallet.getBalance();
-        monnieCacheInvalidationService.evictUserAfterCommit(userId);
+        // Fund the purchase from the chosen budget envelope: validate ownership +
+        // period limit + vault + envelope rules, then HOLD the selling amount.
+        // (The real money is collected from the user's Rubies wallet only AFTER a
+        // successful Payeelord delivery — see finalize*Result.)
+        envelopeService.holdEnvelopeForVas(envelopeId, email, sellingAmount);
 
         PayeelordVasTransaction txn = new PayeelordVasTransaction();
         txn.setUserId(userId);
         txn.setWalletId(wallet.getId());
+        txn.setEnvelopeId(envelopeId);
         txn.setType(type);
         txn.setStatus(VasTransactionStatus.PENDING);
         txn.setReference(reference);
@@ -249,8 +253,6 @@ public class PayeelordVasService {
         txn.setCostAmount(pricing.costAmount());
         txn.setSellingAmount(sellingAmount);
         txn.setMarginAmount(pricing.marginAmount());
-        txn.setBalanceBefore(balanceBefore);
-        txn.setBalanceAfter(balanceAfter);
         txn.setCreatedAt(LocalDateTime.now());
         txn.setUpdatedAt(LocalDateTime.now());
         return transactionRepository.save(txn);
@@ -275,6 +277,10 @@ public class PayeelordVasService {
         if (response.isSuccessful()) {
             txn.setStatus(VasTransactionStatus.SUCCESSFUL);
             transactionRepository.save(txn);
+            // Spend confirmed: reduce the envelope vault + budget, then collect the
+            // money from the user's Rubies wallet into Moniewise's Rubies account.
+            envelopeService.settleEnvelopeVas(txn.getEnvelopeId(), txn.getSellingAmount());
+            collectRubiesPayment(txn);
             logger.info("[PayeelordVAS] Airtime purchase SUCCESSFUL: ref={} providerTxnId={}",
                     txn.getReference(), response.getTransactionId());
             notifyAsync(txn.getUserId(), String.format(
@@ -291,16 +297,16 @@ public class PayeelordVasService {
             return txn;
         }
 
-        // Definitive failure — reverse the debit.
-        reverseDebit(txn);
+        // Definitive failure — release the envelope hold (refund the budget).
+        envelopeService.releaseEnvelopeVasHold(txn.getEnvelopeId(), txn.getSellingAmount());
         txn.setStatus(VasTransactionStatus.REVERSED);
         txn.setFailureReason(response.getMessage() != null ? response.getMessage() : "Airtime purchase failed.");
         transactionRepository.save(txn);
-        logger.warn("[PayeelordVAS] Airtime purchase FAILED → reversed: ref={} reason={}",
+        logger.warn("[PayeelordVAS] Airtime purchase FAILED → envelope hold released: ref={} reason={}",
                 txn.getReference(), txn.getFailureReason());
         notifyAsync(txn.getUserId(), String.format(
                         "Your airtime purchase of ₦%,.2f to %s could not be completed (%s). " +
-                        "₦%,.2f has been refunded to your wallet. Reference: %s",
+                        "₦%,.2f has been refunded to your envelope. Reference: %s",
                         txn.getFaceAmount(), txn.getMobileNumber(), txn.getFailureReason(),
                         txn.getSellingAmount(), txn.getReference()),
                 NotificationType.AIRTIME_PURCHASE_FAILED);
@@ -324,6 +330,10 @@ public class PayeelordVasService {
         if (response.isSuccessful()) {
             txn.setStatus(VasTransactionStatus.SUCCESSFUL);
             transactionRepository.save(txn);
+            // Spend confirmed: reduce the envelope vault + budget, then collect the
+            // money from the user's Rubies wallet into Moniewise's Rubies account.
+            envelopeService.settleEnvelopeVas(txn.getEnvelopeId(), txn.getSellingAmount());
+            collectRubiesPayment(txn);
             logger.info("[PayeelordVAS] Data purchase SUCCESSFUL: ref={} providerTxnId={}",
                     txn.getReference(), response.getTransactionId());
             notifyAsync(txn.getUserId(), String.format(
@@ -340,15 +350,15 @@ public class PayeelordVasService {
             return txn;
         }
 
-        reverseDebit(txn);
+        envelopeService.releaseEnvelopeVasHold(txn.getEnvelopeId(), txn.getSellingAmount());
         txn.setStatus(VasTransactionStatus.REVERSED);
         txn.setFailureReason(response.getMessage() != null ? response.getMessage() : "Data purchase failed.");
         transactionRepository.save(txn);
-        logger.warn("[PayeelordVAS] Data purchase FAILED → reversed: ref={} reason={}",
+        logger.warn("[PayeelordVAS] Data purchase FAILED → envelope hold released: ref={} reason={}",
                 txn.getReference(), txn.getFailureReason());
         notifyAsync(txn.getUserId(), String.format(
                         "Your purchase of %s for %s could not be completed (%s). " +
-                        "₦%,.2f has been refunded to your wallet. Reference: %s",
+                        "₦%,.2f has been refunded to your envelope. Reference: %s",
                         planLabel, txn.getMobileNumber(), txn.getFailureReason(),
                         txn.getSellingAmount(), txn.getReference()),
                 NotificationType.DATA_PURCHASE_FAILED);
@@ -442,21 +452,35 @@ public class PayeelordVasService {
     // ── Private helpers ───────────────────────────────────────────────────────
 
     /**
-     * Reverses the wallet debit for a failed purchase. Called from within the
-     * same {@code @Transactional} finalize step that marks the transaction
-     * {@code REVERSED} — both happen atomically, hence the entity's documented
-     * {@code PENDING → FAILED → REVERSED} flow collapses to a single observable
-     * {@code PENDING → REVERSED} transition (no external observer ever sees a
-     * dangling FAILED-but-not-yet-reversed state).
+     * Fires the Rubies P2P collection for a confirmed purchase: moves the selling
+     * amount from the user's Rubies wallet into Moniewise's Rubies revenue/internal
+     * account. Best-effort and idempotent (keyed on the txn reference) — reuses the
+     * same proven Rubies-to-revenue collector as markup-fee collection. Only applies
+     * to users whose wallet is on Rubies; a failure here never fails the purchase
+     * (the airtime/data was already delivered) — it leaves a reconciliation log.
      */
-    private void reverseDebit(PayeelordVasTransaction txn) {
-        Wallet wallet = walletRepository.findByUserIdForUpdate(txn.getUserId())
-                .orElseThrow(() -> new IllegalArgumentException("Wallet not found"));
-
-        wallet.setBalance(wallet.getBalance().add(txn.getSellingAmount()));
-        wallet.setUpdatedAt(LocalDateTime.now());
-        walletRepository.save(wallet);
-        monnieCacheInvalidationService.evictUserAfterCommit(txn.getUserId());
+    private void collectRubiesPayment(PayeelordVasTransaction txn) {
+        try {
+            Wallet wallet = walletRepository.findByUserId(txn.getUserId()).orElse(null);
+            if (wallet == null
+                    || wallet.getProviderWalletRef() == null
+                    || wallet.getProviderWalletRef().isBlank()
+                    || !RubiesGateway.PROVIDER_NAME.equalsIgnoreCase(wallet.getProviderName())) {
+                logger.warn("[PayeelordVAS] Skipping Rubies P2P collection for ref={} — user wallet not on Rubies.",
+                        txn.getReference());
+                return;
+            }
+            String debitName = walletService.resolveDisplayNameByUserId(txn.getUserId());
+            walletService.collectRubiesMarkupFeeAsync(
+                    txn.getSellingAmount(),
+                    wallet.getProviderWalletRef(),
+                    debitName,
+                    txn.getReference(),
+                    txn.getUserId());
+        } catch (Exception e) {
+            logger.error("[PayeelordVAS] Rubies P2P collection failed to enqueue for ref={}: {}",
+                    txn.getReference(), e.getMessage());
+        }
     }
 
     private User loadUser(Long userId) {

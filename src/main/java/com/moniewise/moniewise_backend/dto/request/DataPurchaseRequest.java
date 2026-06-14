@@ -1,6 +1,7 @@
 package com.moniewise.moniewise_backend.dto.request;
 
 import javax.validation.constraints.NotBlank;
+import javax.validation.constraints.NotNull;
 import javax.validation.constraints.Size;
 
 /**
@@ -23,12 +24,19 @@ public class DataPurchaseRequest {
     @Size(min = 11, max = 20, message = "Mobile number must be between 11 and 20 digits")
     private String mobileNumber;
 
+    /** Budget envelope the purchase is funded from (the money leaves this envelope). */
+    @NotNull(message = "Funding envelope is required")
+    private Long envelopeId;
+
     @NotBlank(message = "Transaction PIN is required")
     private String transactionPin;
 
     // Getters and Setters
     public String getDataId() { return dataId; }
     public void setDataId(String dataId) { this.dataId = dataId; }
+
+    public Long getEnvelopeId() { return envelopeId; }
+    public void setEnvelopeId(Long envelopeId) { this.envelopeId = envelopeId; }
 
     public String getMobileNumber() { return mobileNumber; }
     public void setMobileNumber(String mobileNumber) { this.mobileNumber = mobileNumber; }
