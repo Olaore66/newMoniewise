@@ -1029,6 +1029,12 @@ public class BudgetService {
             budgetSummary.put("spentAmount", spentAmount);
 
             if (status == BudgetStatus.ACTIVE && endDate != null && endDate.isAfter(today)) {
+                // Quick-spend rail: attach the budget's envelopes sorted spendable-first so the
+                // dashboard can render tap-to-spend links without a second round-trip. Cap a little
+                // above the 3 the UI shows for headroom. Active budgets only — keeps the payload
+                // small and leaves the (additive) completed summaries untouched.
+                budgetSummary.put("spendableEnvelopes",
+                        envelopeService.getDashboardEnvelopes(budgetId, 5));
                 budgetMap.get("active").add(budgetSummary);
             } else {
                 budgetMap.get("completed").add(budgetSummary);

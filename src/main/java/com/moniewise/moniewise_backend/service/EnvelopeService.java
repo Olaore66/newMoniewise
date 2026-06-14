@@ -1572,6 +1572,48 @@ public class EnvelopeService {
         );
     }
 
+    /**
+     * Envelopes for the dashboard "quick spend" row, sorted spendable-first.
+     *
+     * <p>Spendable-now envelopes ({@code periodRemaining > 0} — the disbursement window is open and
+     * the pocket still has money, see {@link #getSpendableBalance}) come first, ordered by balance
+     * desc. The remaining (locked) envelopes follow, ordered by soonest {@code nextDisbursementAt}
+     * so the client can show an "unlocks in…" hint. Capped at {@code limit}. Reuses
+     * {@link #toResponse} so the shape matches the regular envelope endpoints.
+     */
+    @Transactional(readOnly = true)
+    public List<EnvelopeResponse> getDashboardEnvelopes(Long budgetId, int limit) {
+        return envelopeRepository.findByBudgetId(budgetId).stream()
+                .map(this::toResponse)
+                .sorted((a, b) -> {
+                    boolean aSpendable = isSpendableNow(a);
+                    boolean bSpendable = isSpendableNow(b);
+                    if (aSpendable != bSpendable) return aSpendable ? -1 : 1;
+                    if (aSpendable) {
+                        // both spendable now → highest balance first
+                        return nz(b.getPeriodRemaining()).compareTo(nz(a.getPeriodRemaining()));
+                    }
+                    // both locked → soonest to unlock first (nulls last)
+                    LocalDateTime an = a.getNextDisbursementAt();
+                    LocalDateTime bn = b.getNextDisbursementAt();
+                    if (an == null && bn == null) return 0;
+                    if (an == null) return 1;
+                    if (bn == null) return -1;
+                    return an.compareTo(bn);
+                })
+                .limit(Math.max(0, limit))
+                .collect(Collectors.toList());
+    }
+
+    private boolean isSpendableNow(EnvelopeResponse e) {
+        return e.getPeriodRemaining() != null
+                && e.getPeriodRemaining().compareTo(BigDecimal.ZERO) > 0;
+    }
+
+    private static BigDecimal nz(BigDecimal v) {
+        return v == null ? BigDecimal.ZERO : v;
+    }
+
     @Transactional
     public void resetEnvelopeLimits(Envelope envelope) {
         Map<String, Object> conditions = envelope.getConditions();
