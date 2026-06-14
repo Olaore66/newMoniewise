@@ -133,8 +133,21 @@ public class SystemConfigService {
      * later without a code change.
      */
     public static final String PAYEELORD_AIRTIME_MARKUP_AMOUNT = "payeelord.airtime.markup_amount";
-    /** Payeelord API base URL — runtime-overridable without redeploying. */
+    /**
+     * Payeelord API key — stored in system_config so the admin UI can set it without a redeploy.
+     * The key name matches exactly what the admin panel shows ({@code PAYEELORD_API_KEY}).
+     * Falls back to the {@code PAYEELORD_API_KEY} env var if not set here.
+     */
+    public static final String PAYEELORD_API_KEY = "PAYEELORD_API_KEY";
+    /**
+     * Payeelord API base URL — runtime-overridable without redeploying.
+     * Accepts both {@code PAYEELORD_BASE_URL} (admin-UI style) and {@code payeelord.api.base_url}
+     * (dotted style). Either key works; just the domain is enough — {@code /api} is appended
+     * automatically if missing (so {@code https://api.payeelord.com} and
+     * {@code https://api.payeelord.com/api} are both valid).
+     */
     public static final String PAYEELORD_API_BASE_URL = "payeelord.api.base_url";
+    public static final String PAYEELORD_BASE_URL     = "PAYEELORD_BASE_URL";
     /** Master switch for the periodic data-plan catalog sync job. Default: false (off until verified). */
     public static final String PAYEELORD_CATALOG_SYNC_ENABLED = "payeelord.catalog.sync.enabled";
 

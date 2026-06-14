@@ -86,11 +86,15 @@ public class PayeelordGateway {
 
     @PostConstruct
     public void validateConfiguration() {
-        if (apiKey == null || apiKey.isBlank()) {
-            logger.error("[Payeelord] PAYEELORD_API_KEY (payeelord.api.key) is not set — " +
-                    "all Payeelord purchase calls will fail with 401. Set the env var before going live.");
+        String key = resolveApiKey();
+        if (key == null || key.isBlank()) {
+            logger.error("[Payeelord] API key not configured — set PAYEELORD_API_KEY via the admin config " +
+                    "panel (PUT /admin/config/PAYEELORD_API_KEY) or as an env var. " +
+                    "All purchase calls will fail with 401 until this is set.");
+        } else {
+            logger.info("[Payeelord] Gateway initialised. key={}*** base_url={}",
+                    key.substring(0, Math.min(6, key.length())), baseUrl());
         }
-        logger.info("[Payeelord] Gateway initialised. base_url={}", baseUrl());
     }
 
     // ── Identity ──────────────────────────────────────────────────────────────
@@ -264,7 +268,7 @@ public class PayeelordGateway {
     public boolean validateWebhookSignature(String signature, String rawPayload) {
         String secret = (webhookSecretOverride != null && !webhookSecretOverride.isBlank())
                 ? webhookSecretOverride
-                : apiKey;
+                : resolveApiKey();
 
         if (secret == null || secret.isBlank()) {
             logger.warn("[Payeelord][SECURITY] No webhook secret/API key configured — " +
@@ -389,12 +393,40 @@ public class PayeelordGateway {
     // ── Private helpers ───────────────────────────────────────────────────────
 
     /**
-     * Resolves the active base URL: {@code system_config.payeelord.api.base_url}
-     * wins when set (so it can be changed at runtime without a redeploy), falling
-     * back to the {@code payeelord.base.url} property / {@code PAYEELORD_BASE_URL} env var.
+     * Resolves the Payeelord API key — checks system_config first (key: {@code PAYEELORD_API_KEY},
+     * which is what the admin config panel sets), then falls back to the {@code @Value} env var.
+     */
+    private String resolveApiKey() {
+        String fromConfig = systemConfig.getString(SystemConfigService.PAYEELORD_API_KEY, null);
+        if (fromConfig != null && !fromConfig.isBlank()) return fromConfig;
+        return apiKey; // from @Value("${payeelord.api.key:}")
+    }
+
+    /**
+     * Resolves the active base URL. Checks system_config in priority order:
+     * <ol>
+     *   <li>{@code payeelord.api.base_url} — the dotted-style key</li>
+     *   <li>{@code PAYEELORD_BASE_URL} — the admin-panel SCREAMING_SNAKE_CASE key</li>
+     *   <li>{@code @Value("${payeelord.base.url:...}")} — env var / property fallback</li>
+     * </ol>
+     *
+     * <p>Regardless of source, {@code /api} is appended automatically when absent, so both
+     * {@code https://api.payeelord.com} and {@code https://api.payeelord.com/api} are valid.
      */
     private String baseUrl() {
-        return systemConfig.getString(SystemConfigService.PAYEELORD_API_BASE_URL, defaultBaseUrl);
+        String url = systemConfig.getString(SystemConfigService.PAYEELORD_API_BASE_URL, null);
+        if (url == null || url.isBlank()) {
+            url = systemConfig.getString(SystemConfigService.PAYEELORD_BASE_URL, defaultBaseUrl);
+        }
+        if (url == null || url.isBlank()) {
+            url = defaultBaseUrl;
+        }
+        // Normalize: strip trailing slash, then ensure /api suffix
+        url = url.replaceAll("/+$", "");
+        if (!url.endsWith("/api")) {
+            url = url + "/api";
+        }
+        return url;
     }
 
     /**
@@ -426,7 +458,8 @@ public class PayeelordGateway {
         headers.setContentType(MediaType.APPLICATION_JSON);
         headers.setAccept(java.util.List.of(MediaType.APPLICATION_JSON));
         boolean useBearer = systemConfig.getBoolean(SystemConfigService.PAYEELORD_AUTH_USE_BEARER, useBearerByDefault);
-        headers.set("Authorization", useBearer ? "Bearer " + apiKey : apiKey);
+        String key = resolveApiKey();
+        headers.set("Authorization", useBearer ? "Bearer " + key : key);
         return headers;
     }
 
