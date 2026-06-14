@@ -41,13 +41,12 @@ import java.nio.charset.StandardCharsets;
  * from {@code /buy/airtime} / {@code /buy/data} is the source of truth; the webhook
  * (see {@link #validateWebhookSignature}) is a secondary audit confirmation only.
  *
- * <h3>Configuration</h3>
+ * <h3>Configuration — set these in the Render dashboard, no Postman needed</h3>
  * <ul>
- *   <li>{@code PAYEELORD_API_KEY} env var (→ {@code payeelord.api.key}) — sent as
- *       {@code Authorization: Bearer {key}}</li>
- *   <li>{@code PAYEELORD_BASE_URL} env var (→ {@code payeelord.base.url}, default
- *       {@code https://payeelord.com/api}) — also runtime-overridable via
- *       {@code system_config.payeelord.api.base_url}, the latter wins if set</li>
+ *   <li>{@code PAYEELORD_API_KEY} — your Payeelord API key. Sent as {@code token: <key>}
+ *       header. Env var always wins over any DB system_config value.</li>
+ *   <li>{@code PAYEELORD_BASE_URL} — optional override (default
+ *       {@code https://api.payeelord.com/api}). {@code /api} is auto-appended if missing.</li>
  * </ul>
  */
 @Component
@@ -88,12 +87,12 @@ public class PayeelordGateway {
     public void validateConfiguration() {
         String key = resolveApiKey();
         if (key == null || key.isBlank()) {
-            logger.error("[Payeelord] API key not configured — set PAYEELORD_API_KEY via the admin config " +
-                    "panel (PUT /admin/config/PAYEELORD_API_KEY) or as an env var. " +
-                    "All purchase calls will fail with 401 until this is set.");
+            logger.error("[Payeelord] API key not configured — add PAYEELORD_API_KEY to your Render " +
+                    "environment variables and redeploy. All purchase calls will return 401 until this is set.");
         } else {
-            logger.info("[Payeelord] Gateway initialised. key={}*** base_url={} auth_header=token",
-                    key.substring(0, Math.min(6, key.length())), baseUrl());
+            String source = (apiKey != null && !apiKey.isBlank()) ? "env-var" : "system_config";
+            logger.info("[Payeelord] Gateway initialised. key={}*** base_url={} auth_header=token source={}",
+                    key.substring(0, Math.min(6, key.length())), baseUrl(), source);
         }
     }
 
@@ -426,13 +425,16 @@ public class PayeelordGateway {
     // ── Private helpers ───────────────────────────────────────────────────────
 
     /**
-     * Resolves the Payeelord API key — checks system_config first (key: {@code PAYEELORD_API_KEY},
-     * which is what the admin config panel sets), then falls back to the {@code @Value} env var.
+     * Resolves the Payeelord API key.
+     *
+     * <p>Priority: env var ({@code PAYEELORD_API_KEY} set in Render dashboard) → system_config DB.
+     * Env var wins so the key can be rotated purely from the Render dashboard without any
+     * Postman/admin-panel calls.  DB fallback is kept for local dev convenience only.
      */
     private String resolveApiKey() {
-        String fromConfig = systemConfig.getString(SystemConfigService.PAYEELORD_API_KEY, null);
-        if (fromConfig != null && !fromConfig.isBlank()) return fromConfig;
-        return apiKey; // from @Value("${payeelord.api.key:}")
+        // Env var always wins — set PAYEELORD_API_KEY in the Render dashboard to rotate without redeploy
+        if (apiKey != null && !apiKey.isBlank()) return apiKey;
+        return systemConfig.getString(SystemConfigService.PAYEELORD_API_KEY, null);
     }
 
     /**
@@ -447,12 +449,13 @@ public class PayeelordGateway {
      * {@code https://api.payeelord.com} and {@code https://api.payeelord.com/api} are valid.
      */
     private String baseUrl() {
-        String url = systemConfig.getString(SystemConfigService.PAYEELORD_API_BASE_URL, null);
+        // Env var (PAYEELORD_BASE_URL → payeelord.base.url → defaultBaseUrl) wins over DB
+        String url = defaultBaseUrl;
         if (url == null || url.isBlank()) {
-            url = systemConfig.getString(SystemConfigService.PAYEELORD_BASE_URL, defaultBaseUrl);
+            url = systemConfig.getString(SystemConfigService.PAYEELORD_API_BASE_URL, null);
         }
         if (url == null || url.isBlank()) {
-            url = defaultBaseUrl;
+            url = systemConfig.getString(SystemConfigService.PAYEELORD_BASE_URL, "https://api.payeelord.com/api");
         }
         // Normalize: strip trailing slash, then ensure /api suffix
         url = url.replaceAll("/+$", "");
