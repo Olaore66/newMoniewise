@@ -91,7 +91,7 @@ public class PayeelordGateway {
                     "environment variables and redeploy. All purchase calls will return 401 until this is set.");
         } else {
             String source = (apiKey != null && !apiKey.isBlank()) ? "env-var" : "system_config";
-            logger.info("[Payeelord] Gateway initialised. key={}*** base_url={} auth_header=token source={}",
+            logger.info("[Payeelord] Gateway initialised. key={}*** base_url={} auth_header=Authorization source={}",
                     key.substring(0, Math.min(6, key.length())), baseUrl(), source);
         }
     }
@@ -479,24 +479,22 @@ public class PayeelordGateway {
     /**
      * Builds auth headers for Payeelord purchase/balance endpoints.
      *
-     * <p>Payeelord uses a custom {@code token} header (lowercase), NOT the standard
-     * {@code Authorization} header. The Postman collection shows auth type "Bearer Token"
-     * (a Postman UI label) with field "Token: py965401ARBV10Z6hfg56", but the generated
-     * curl for catalog endpoints has NO Authorization header — confirming Payeelord's
-     * wire format is just {@code token: <api_key>}.
+     * <p>Payeelord uses Postman's "API Key" auth type with key name {@code Authorization}
+     * — confirmed from their official Postman collection. That translates to the raw header:
+     * {@code Authorization: <api_key>} (no "Bearer" prefix, no "token" prefix).
      *
-     * <p>Earlier failures:
+     * <p>History of attempts:
      * <ul>
-     *   <li>{@code Authorization: <key>} (raw) → 401 "Invalid Authorization header format"</li>
-     *   <li>{@code Authorization: Bearer <key>} → 401 "Invalid Authorization header format"</li>
-     *   <li>{@code token: <key>} → current attempt per Payeelord docs field name</li>
+     *   <li>{@code Authorization: Bearer <key>} → 401 (Bearer not supported)</li>
+     *   <li>{@code token: <key>} → 401 (wrong header name)</li>
+     *   <li>{@code Authorization: <key>} ← current, matches Postman API Key auth format</li>
      * </ul>
      */
     private HttpHeaders authHeaders(boolean useBearer) {
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
         headers.setAccept(java.util.List.of(MediaType.APPLICATION_JSON));
-        headers.set("token", resolveApiKey());
+        headers.set("Authorization", resolveApiKey());
         return headers;
     }
 
