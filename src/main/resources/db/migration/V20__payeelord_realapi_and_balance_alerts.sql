@@ -23,10 +23,3 @@ INSERT INTO system_config (config_key, config_value, description) VALUES
     ('payeelord.balance.alert.cooldown_minutes', '360',
      'Minutes to suppress repeat low-balance alerts after one fires (default 6h).')
 ON CONFLICT (config_key) DO NOTHING;
-
--- The catalog scraper is now implemented against the real /datatypes + /data-plan
--- endpoints, so enable the nightly refresh (admins can still trigger it on demand
--- via POST /admin/payeelord/sync-catalog).
-UPDATE system_config
-   SET config_value = 'true'
- WHERE config_key = 'payeelord.catalog.sync.enabled';
