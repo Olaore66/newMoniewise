@@ -253,35 +253,58 @@ public class PayeelordCatalogSyncJob {
     List<ScrapedPlan> scrapeCatalog() {
         // 1. networkId → networkName (only the networks we sell data for)
         Map<String, String> networkNames = new HashMap<>();
-        for (Map<String, Object> n : gateway.getNetworks()) {
-            String id = str(n.get("network_id"));
-            String name = str(n.get("network_name"));
+        List<Map<String, Object>> networkList = gateway.getNetworks();
+        logger.info("[PayeelordCatalogSync] /all-network → {} items. Sample: {}",
+                networkList.size(), networkList.isEmpty() ? "none" : networkList.get(0));
+        for (Map<String, Object> n : networkList) {
+            // Payeelord may return snake_case or camelCase — try both
+            String id   = coalesce(n, "network_id", "networkId", "id");
+            String name = coalesce(n, "network_name", "networkName", "name");
             if (id != null && name != null) networkNames.put(id, name.toUpperCase());
         }
 
         // 2. all datatypes, grouped by network
         List<Map<String, Object>> dataTypes = gateway.getDataTypes();
+        logger.info("[PayeelordCatalogSync] /datatypes → {} items. Sample: {}",
+                dataTypes.size(), dataTypes.isEmpty() ? "none" : dataTypes.get(0));
         if (dataTypes.isEmpty()) {
             logger.warn("[PayeelordCatalogSync] /datatypes returned nothing — aborting this run.");
             return List.of();
         }
 
         List<ScrapedPlan> out = new ArrayList<>();
+        boolean loggedPlanSample = false;
         for (Map<String, Object> dt : dataTypes) {
-            String networkId = str(dt.get("network_id"));
-            String dataType = str(dt.get("type"));
-            if (networkId == null || dataType == null) continue;
+            // Payeelord may return snake_case or camelCase — try both
+            String networkId = coalesce(dt, "network_id", "networkId");
+            String dataType  = coalesce(dt, "type", "dataType", "plan_type", "planType");
+            if (networkId == null || dataType == null) {
+                logger.warn("[PayeelordCatalogSync] Datatype row missing networkId or type — keys={} values={}",
+                        dt.keySet(), dt);
+                continue;
+            }
             if (!SUPPORTED_NETWORK_IDS.contains(networkId)) continue;
 
             String networkName = networkNames.getOrDefault(networkId, networkId);
 
             // 3. plans for this (dataType, network)
-            for (Map<String, Object> plan : gateway.getDataPlans(dataType, networkId)) {
-                String dataId = str(plan.get("dataId"));
-                BigDecimal cost = parseNaira(str(plan.get("amount")));
-                if (dataId == null || cost == null) continue;
+            List<Map<String, Object>> plans = gateway.getDataPlans(dataType, networkId);
+            if (!loggedPlanSample && !plans.isEmpty()) {
+                logger.info("[PayeelordCatalogSync] /data-plan first item sample (dataType={} networkId={}): {}",
+                        dataType, networkId, plans.get(0));
+                loggedPlanSample = true;
+            }
+            for (Map<String, Object> plan : plans) {
+                // Try both camelCase and snake_case for every field
+                String dataId = coalesce(plan, "dataId", "data_id", "id");
+                String rawAmt = coalesce(plan, "amount", "price", "cost", "plan_amount", "planAmount");
+                BigDecimal cost = parseNaira(rawAmt);
+                if (dataId == null || cost == null) {
+                    logger.warn("[PayeelordCatalogSync] Plan row missing dataId or amount — keys={}", plan.keySet());
+                    continue;
+                }
 
-                String description = str(plan.get("description"));
+                String description = coalesce(plan, "description", "planName", "plan_name", "name", "dataName");
                 String planName = (description != null && !description.isBlank()) ? description : dataType;
 
                 out.add(new ScrapedPlan(
@@ -299,6 +322,15 @@ public class PayeelordCatalogSyncJob {
 
         logger.info("[PayeelordCatalogSync] Scraped {} plans across {} datatypes", out.size(), dataTypes.size());
         return out;
+    }
+
+    /** Returns the first non-null/non-blank value found under any of the given keys. */
+    private static String coalesce(Map<String, Object> map, String... keys) {
+        for (String key : keys) {
+            String val = str(map.get(key));
+            if (val != null) return val;
+        }
+        return null;
     }
 
     // ── Parse helpers ───────────────────────────────────────────────────────
