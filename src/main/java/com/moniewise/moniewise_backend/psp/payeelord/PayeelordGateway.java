@@ -152,15 +152,14 @@ public class PayeelordGateway {
                     PayeelordAirtimePurchaseResponse.class, e);
             if (parsed != null) return parsed;
             if (isDefiniteRejection(e)) {
-                // 401/403/400 = request rejected at the gate — Payeelord did NOT process it,
-                // so this is a clean failure the caller can safely refund (NOT ambiguous).
-                // Log the response body — that's where Payeelord puts the rejection reason.
                 logger.error("[Payeelord] Airtime purchase REJECTED (HTTP {}) mobile={} payeelord_body={}",
                         e.getStatusCode(), mobileNumber, e.getResponseBodyAsString());
                 PayeelordAirtimePurchaseResponse failed = new PayeelordAirtimePurchaseResponse();
                 failed.setStatus("failed");
-                failed.setMessage("Provider rejected the request (HTTP " + e.getStatusCode().value() +
-                        "). Please try again shortly.");
+                String msg = e.getStatusCode().value() == 422
+                        ? "Service provider has insufficient balance to fulfil this request. Please try again later."
+                        : "Provider rejected the request (HTTP " + e.getStatusCode().value() + "). Please try again shortly.";
+                failed.setMessage(msg);
                 return failed;
             }
             logger.error("[Payeelord] Airtime purchase HTTP error (ambiguous outcome): mobile={} status={} body={}",
@@ -224,8 +223,10 @@ public class PayeelordGateway {
                         e.getStatusCode(), mobileNumber, e.getResponseBodyAsString());
                 PayeelordDataPurchaseResponse failed = new PayeelordDataPurchaseResponse();
                 failed.setStatus("failed");
-                failed.setMessage("Provider rejected the request (HTTP " + e.getStatusCode().value() +
-                        "). Please try again shortly.");
+                String msg = e.getStatusCode().value() == 422
+                        ? "Service provider has insufficient balance to fulfil this request. Please try again later."
+                        : "Provider rejected the request (HTTP " + e.getStatusCode().value() + "). Please try again shortly.";
+                failed.setMessage(msg);
                 return failed;
             }
             logger.error("[Payeelord] Data purchase HTTP error (ambiguous outcome): mobile={} status={} body={}",
@@ -397,11 +398,11 @@ public class PayeelordGateway {
     @SuppressWarnings("unchecked")
     private java.util.List<java.util.Map<String, Object>> getListData(String url, Object body) {
         try {
-            // Catalog endpoints (/datatypes, /all-network, /data-plan) are public — the Payeelord
-            // docs curl sends only Accept: application/json with no Authorization header.
+            // Catalog endpoints require the same auth as purchase endpoints.
             HttpHeaders catalogHeaders = new HttpHeaders();
             catalogHeaders.setAccept(java.util.List.of(MediaType.APPLICATION_JSON));
             if (body != null) catalogHeaders.setContentType(MediaType.APPLICATION_JSON);
+            catalogHeaders.set("Authorization", "Token " + resolveApiKey());
             HttpEntity<?> entity = new HttpEntity<>(body, catalogHeaders);
             ResponseEntity<java.util.Map> resp =
                     restTemplate.exchange(url, HttpMethod.GET, entity, java.util.Map.class);
@@ -473,7 +474,9 @@ public class PayeelordGateway {
      */
     private boolean isDefiniteRejection(HttpStatusCodeException e) {
         int code = e.getStatusCode().value();
-        return code == 400 || code == 401 || code == 403;
+        // 422 = Payeelord float balance insufficient — request was received and rejected cleanly,
+        // the purchase definitely did NOT execute, safe to refund.
+        return code == 400 || code == 401 || code == 403 || code == 422;
     }
 
     /**

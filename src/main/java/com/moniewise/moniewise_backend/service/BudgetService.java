@@ -1028,7 +1028,7 @@ public class BudgetService {
             budgetSummary.put("remainingAmount", remainingAmount);
             budgetSummary.put("spentAmount", spentAmount);
 
-            if (status == BudgetStatus.ACTIVE && endDate != null && endDate.isAfter(today)) {
+            if (status == BudgetStatus.ACTIVE && endDate != null && !endDate.isBefore(today)) {
                 // Quick-spend rail: attach the budget's envelopes sorted spendable-first so the
                 // dashboard can render tap-to-spend links without a second round-trip. Cap a little
                 // above the 3 the UI shows for headroom. Active budgets only — keeps the payload
