@@ -376,19 +376,21 @@ public class PayeelordGateway {
     }
 
     /**
-     * {@code GET /data-plan} (with a JSON body, per Payeelord's contract) →
+     * {@code GET /data-plan?dataType=SME&networkId=1} →
      * list of {@code {id, dataId, dataName, description, amount, networkId}}.
+     *
+     * <p>Payeelord ignores GET request bodies (returns 422 "field required" even when
+     * the body is present). Params must be query-string, not JSON body.
      */
     public java.util.List<java.util.Map<String, Object>> getDataPlans(String dataType, String networkId) {
-        java.util.Map<String, Object> body = new java.util.HashMap<>();
-        body.put("dataType", dataType);
-        // Payeelord's sample sends networkId as a JSON number.
+        String encodedType;
         try {
-            body.put("networkId", Integer.parseInt(networkId));
-        } catch (NumberFormatException e) {
-            body.put("networkId", networkId);
+            encodedType = java.net.URLEncoder.encode(dataType, java.nio.charset.StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            encodedType = dataType;
         }
-        return getListData(baseUrl() + "/data-plan", body);
+        String url = baseUrl() + "/data-plan?dataType=" + encodedType + "&networkId=" + networkId;
+        return getListData(url, null); // no body — params are in the URL
     }
 
     /**
