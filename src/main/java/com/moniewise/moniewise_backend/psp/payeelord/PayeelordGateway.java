@@ -494,7 +494,9 @@ public class PayeelordGateway {
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
         headers.setAccept(java.util.List.of(MediaType.APPLICATION_JSON));
-        headers.set("Authorization", resolveApiKey());
+        // Payeelord uses "Token <api_key>" — confirmed from Postman: API Key auth,
+        // key=Authorization, value="Token py..."
+        headers.set("Authorization", "Token " + resolveApiKey());
         return headers;
     }
 
