@@ -394,34 +394,59 @@ public class PayeelordGateway {
     /**
      * Shared GET helper that unwraps Payeelord's {@code {"data": [...]}} envelope.
      * Sends an optional JSON body (Payeelord's {@code /data-plan} is a GET-with-body).
+     * Logs the raw response body at INFO level so catalog issues are visible in Render logs.
      */
     @SuppressWarnings("unchecked")
     private java.util.List<java.util.Map<String, Object>> getListData(String url, Object body) {
         try {
-            // Catalog endpoints (/datatypes, /all-network, /data-plan) — Postman shows
-            // Bearer Token auth but the documented curl sends only Accept: application/json.
-            // Send auth anyway as a fallback; harmless if public, required if protected.
             HttpHeaders catalogHeaders = new HttpHeaders();
             catalogHeaders.setAccept(java.util.List.of(MediaType.APPLICATION_JSON));
             if (body != null) catalogHeaders.setContentType(MediaType.APPLICATION_JSON);
             String key = resolveApiKey();
             if (key != null && !key.isBlank()) catalogHeaders.set("Authorization", "Token " + key);
             HttpEntity<?> entity = new HttpEntity<>(body, catalogHeaders);
-            ResponseEntity<java.util.Map> resp =
-                    restTemplate.exchange(url, HttpMethod.GET, entity, java.util.Map.class);
-            java.util.Map<?, ?> m = resp.getBody();
-            if (m == null) return java.util.List.of();
-            Object data = m.get("data");
-            if (!(data instanceof java.util.List<?> list)) return java.util.List.of();
+
+            // Deserialize to String first — gives us the raw body for logging and lets us
+            // handle both {"data":[...]} and top-level [...] response shapes defensively.
+            ResponseEntity<String> rawResp =
+                    restTemplate.exchange(url, HttpMethod.GET, entity, String.class);
+            String rawBody = rawResp.getBody();
+            logger.info("[Payeelord] Catalog {} → HTTP {} body={}",
+                    url,
+                    rawResp.getStatusCode().value(),
+                    rawBody != null && rawBody.length() > 300 ? rawBody.substring(0, 300) + "…" : rawBody);
+
+            if (rawBody == null || rawBody.isBlank()) return java.util.List.of();
+
+            com.fasterxml.jackson.databind.ObjectMapper mapper =
+                    new com.fasterxml.jackson.databind.ObjectMapper();
+            Object parsed = mapper.readValue(rawBody, Object.class);
+
+            java.util.List<?> list = null;
+            if (parsed instanceof java.util.Map<?, ?> m) {
+                Object data = m.get("data");
+                if (data instanceof java.util.List<?> l) list = l;
+                else logger.warn("[Payeelord] Catalog {} — 'data' field missing or not a list (keys={})", url, ((java.util.Map<?,?>) m).keySet());
+            } else if (parsed instanceof java.util.List<?> l) {
+                list = l; // top-level array — some Payeelord endpoints skip the wrapper
+            }
+
+            if (list == null) return java.util.List.of();
+
             java.util.List<java.util.Map<String, Object>> out = new java.util.ArrayList<>();
             for (Object o : list) {
                 if (o instanceof java.util.Map<?, ?> row) {
                     out.add((java.util.Map<String, Object>) row);
                 }
             }
+            logger.info("[Payeelord] Catalog {} → {} items", url, out.size());
             return out;
+        } catch (HttpStatusCodeException e) {
+            logger.warn("[Payeelord] Catalog {} failed HTTP {} body={}",
+                    url, e.getStatusCode().value(), e.getResponseBodyAsString());
+            return java.util.List.of();
         } catch (Exception e) {
-            logger.warn("[Payeelord] GET {} failed: {}", url, e.getMessage());
+            logger.warn("[Payeelord] Catalog {} failed: {}", url, e.getMessage());
             return java.util.List.of();
         }
     }

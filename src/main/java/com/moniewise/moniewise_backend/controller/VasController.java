@@ -6,6 +6,7 @@ import com.moniewise.moniewise_backend.entity.PayeelordDataPlan;
 import com.moniewise.moniewise_backend.entity.PayeelordVasTransaction;
 import com.moniewise.moniewise_backend.entity.User;
 import com.moniewise.moniewise_backend.service.AbuseProtectionService;
+import com.moniewise.moniewise_backend.service.PayeelordCatalogSyncJob;
 import com.moniewise.moniewise_backend.service.PayeelordVasService;
 import com.moniewise.moniewise_backend.service.UserService;
 import lombok.extern.slf4j.Slf4j;
@@ -38,13 +39,20 @@ public class VasController {
     private final PayeelordVasService vasService;
     private final UserService userService;
     private final AbuseProtectionService abuseProtectionService;
+    private final PayeelordCatalogSyncJob catalogSyncJob;
+
+    // Prevents concurrent auto-syncs when multiple users hit /data/plans simultaneously
+    private final java.util.concurrent.atomic.AtomicBoolean syncInProgress =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
 
     public VasController(PayeelordVasService vasService,
                           UserService userService,
-                          AbuseProtectionService abuseProtectionService) {
+                          AbuseProtectionService abuseProtectionService,
+                          PayeelordCatalogSyncJob catalogSyncJob) {
         this.vasService = vasService;
         this.userService = userService;
         this.abuseProtectionService = abuseProtectionService;
+        this.catalogSyncJob = catalogSyncJob;
     }
 
     // ── Airtime ───────────────────────────────────────────────────────────────
@@ -105,6 +113,21 @@ public class VasController {
         List<PayeelordDataPlan> plans = (networkId != null && !networkId.isBlank())
                 ? vasService.getActiveDataPlansForNetwork(networkId.trim())
                 : vasService.getActiveDataPlans();
+
+        // Auto-heal: catalog table is empty — kick a background sync so the NEXT request returns plans.
+        // syncInProgress guard prevents duplicate concurrent syncs.
+        if (plans.isEmpty() && syncInProgress.compareAndSet(false, true)) {
+            new Thread(() -> {
+                try {
+                    int count = catalogSyncJob.syncNow();
+                    log.info("[VAS] Auto-sync (empty catalog) — {} plans loaded", count);
+                } catch (Exception e) {
+                    log.warn("[VAS] Auto-sync (empty catalog) failed: {}", e.getMessage());
+                } finally {
+                    syncInProgress.set(false);
+                }
+            }, "vas-catalog-autosync").start();
+        }
 
         List<Map<String, Object>> data = plans.stream().map(this::toPlanMap).collect(Collectors.toList());
         return ResponseEntity.ok(Map.of("status", true, "data", data));
