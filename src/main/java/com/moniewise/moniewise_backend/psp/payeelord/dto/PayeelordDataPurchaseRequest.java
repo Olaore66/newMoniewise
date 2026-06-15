@@ -28,18 +28,13 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  */
 public class PayeelordDataPurchaseRequest {
 
+    // Payeelord requires networkId as a JSON integer (e.g. 1), not a string ("1")
     @JsonProperty("networkId")
-    private String networkId;
+    private int networkId;
 
     @JsonProperty("dataId")
     private String dataId;
 
-    /**
-     * Payeelord's datatype label (e.g. "SME", "GIFTING", "CORPORATE GIFTING").
-     * Per the real {@code POST /api/data} contract this is REQUIRED alongside
-     * {@code dataId}/{@code networkId}; it's stored on each catalog row as
-     * {@code PayeelordDataPlan.planType}.
-     */
     @JsonProperty("dataType")
     private String dataType;
 
@@ -49,7 +44,11 @@ public class PayeelordDataPurchaseRequest {
     public PayeelordDataPurchaseRequest() {}
 
     public PayeelordDataPurchaseRequest(String networkId, String dataId, String dataType, String mobileNumber) {
-        this.networkId = networkId;
+        try {
+            this.networkId = Integer.parseInt(networkId);
+        } catch (NumberFormatException e) {
+            this.networkId = 0;
+        }
         this.dataId = dataId;
         this.dataType = dataType;
         this.mobileNumber = mobileNumber;
@@ -57,8 +56,8 @@ public class PayeelordDataPurchaseRequest {
 
     // ── Getters & Setters ─────────────────────────────────────────────────────
 
-    public String getNetworkId()              { return networkId; }
-    public void setNetworkId(String v)        { this.networkId = v; }
+    public int getNetworkId()                 { return networkId; }
+    public void setNetworkId(int v)           { this.networkId = v; }
 
     public String getDataId()                 { return dataId; }
     public void setDataId(String dataId)      { this.dataId = dataId; }

@@ -188,7 +188,7 @@ public class PayeelordGateway {
      * @param mobileNumber recipient line
      */
     public PayeelordDataPurchaseResponse purchaseData(String networkId, String dataId, String dataType, String mobileNumber) {
-        String url = baseUrl() + "/buy/data";
+        String url = baseUrl() + "/data";
         PayeelordDataPurchaseRequest req = new PayeelordDataPurchaseRequest(networkId, dataId, dataType, mobileNumber);
 
         logger.info("[Payeelord] Buying data: networkId={} dataId={} dataType={} mobile={}",
@@ -398,11 +398,14 @@ public class PayeelordGateway {
     @SuppressWarnings("unchecked")
     private java.util.List<java.util.Map<String, Object>> getListData(String url, Object body) {
         try {
-            // Catalog endpoints require the same auth as purchase endpoints.
+            // Catalog endpoints (/datatypes, /all-network, /data-plan) — Postman shows
+            // Bearer Token auth but the documented curl sends only Accept: application/json.
+            // Send auth anyway as a fallback; harmless if public, required if protected.
             HttpHeaders catalogHeaders = new HttpHeaders();
             catalogHeaders.setAccept(java.util.List.of(MediaType.APPLICATION_JSON));
             if (body != null) catalogHeaders.setContentType(MediaType.APPLICATION_JSON);
-            catalogHeaders.set("Authorization", "Token " + resolveApiKey());
+            String key = resolveApiKey();
+            if (key != null && !key.isBlank()) catalogHeaders.set("Authorization", "Token " + key);
             HttpEntity<?> entity = new HttpEntity<>(body, catalogHeaders);
             ResponseEntity<java.util.Map> resp =
                     restTemplate.exchange(url, HttpMethod.GET, entity, java.util.Map.class);
