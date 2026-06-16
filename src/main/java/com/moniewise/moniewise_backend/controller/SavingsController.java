@@ -64,22 +64,50 @@ public class SavingsController {
     }
 
     /**
-     * GET: Fetch all active savings pots for the dashboard (Phase 3)
+     * GET: Fetch all savings goals (all statuses) for the savings screen
+     */
+    @GetMapping
+    public ResponseEntity<?> getAllSavings(Principal principal) {
+        try {
+            User user = userService.findByEmail(principal.getName());
+            return ResponseEntity.ok(savingsService.getAllSavingsForUser(user.getId()));
+        } catch (Exception e) {
+            logger.error("Failed to fetch savings for {}", principal.getName(), e);
+            return ResponseEntity.internalServerError().body("Failed to load savings goals.");
+        }
+    }
+
+    /**
+     * GET: Fetch only active savings pots
      */
     @GetMapping("/active")
     public ResponseEntity<?> getActiveSavings(Principal principal) {
         try {
-            // 1. Get the securely authenticated user
             User user = userService.findByEmail(principal.getName());
-
-            // 2. Fetch their pots
-            List<SavingsGoal> activeGoals = savingsService.getActiveSavingsForUser(user.getId());
-
-            return ResponseEntity.ok(activeGoals);
-
+            return ResponseEntity.ok(savingsService.getActiveSavingsForUser(user.getId()));
         } catch (Exception e) {
             logger.error("Failed to fetch active savings for {}", principal.getName(), e);
             return ResponseEntity.internalServerError().body("Failed to load savings goals.");
+        }
+    }
+
+    /**
+     * POST: Withdraw a matured savings goal — pays out principal + interest to wallet
+     */
+    @PostMapping("/{id}/withdraw")
+    public ResponseEntity<?> withdrawSavings(
+            @PathVariable("id") Long savingsGoalId,
+            Principal principal) {
+        try {
+            User user = userService.findByEmail(principal.getName());
+            SavingsGoal result = savingsService.withdrawSavings(user.getId(), savingsGoalId);
+            return ResponseEntity.ok(result);
+        } catch (SecurityException | IllegalArgumentException | IllegalStateException e) {
+            logger.warn("Withdrawal failed for {}: {}", principal.getName(), e.getMessage());
+            return ResponseEntity.badRequest().body(e.getMessage());
+        } catch (Exception e) {
+            logger.error("System error during savings withdrawal", e);
+            return ResponseEntity.internalServerError().body("An error occurred while processing your withdrawal.");
         }
     }
 

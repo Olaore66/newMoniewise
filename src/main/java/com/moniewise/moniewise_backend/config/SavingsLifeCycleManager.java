@@ -18,6 +18,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -48,7 +49,7 @@ public class SavingsLifeCycleManager {
     public void processDailySavings() {
         logger.info("🌤️ Waking up Savings Engine: Calculating interest & checking maturities...");
 
-        LocalDate today = LocalDate.now();
+        LocalDate today = LocalDate.now(ZoneId.of("Africa/Lagos"));
         int pageNumber = 0;
         int pageSize = 100; // Process 100 pots at a time to save RAM
         Page<SavingsGoal> page;

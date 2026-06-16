@@ -646,7 +646,8 @@ public class BudgetService {
             if (conditions != null && "savings_sweep".equalsIgnoreCase((String) conditions.getOrDefault("type", ""))) {
                 try {
                     Long targetSavingsId = Long.valueOf(conditions.get("targetSavingsGoalId").toString());
-                    savingsService.sweepEnvelopeToSavings(user.getId(), targetSavingsId, correctAmount, envelope.getName());
+                    savingsService.sweepEnvelopeToSavings(user.getId(), targetSavingsId, correctAmount,
+                            envelope.getName(), savedBudget.getId(), envelope.getId());
 
                     envelope.setRemainingAmount(BigDecimal.ZERO);
                     envelope.setTotalRemainingAmount(BigDecimal.ZERO);

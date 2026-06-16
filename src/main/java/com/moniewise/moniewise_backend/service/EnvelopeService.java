@@ -1769,6 +1769,11 @@ public class EnvelopeService {
         boolean isOneWeekBudget   = budgetDurationDays == 7;
         boolean isMultiWeekBudget = budgetDurationDays >= 14;
 
+        // savings_sweep is a one-shot instant transfer — duration is irrelevant
+        if ("savings_sweep".equals(type)) {
+            return;
+        }
+
         if (isOneDayBudget && !"emergency".equals(type)) {
             throw new IllegalArgumentException(
                 "A 1-day budget only supports the 'emergency' release plan.");
@@ -1846,6 +1851,11 @@ public class EnvelopeService {
                 }
                 break;
             case "emergency":
+                break;
+            case "savings_sweep":
+                if (!conditions.containsKey("targetSavingsGoalId")) {
+                    throw new IllegalArgumentException("Savings sweep envelope must include 'targetSavingsGoalId'");
+                }
                 break;
             default:
                 throw new IllegalArgumentException("Unsupported envelope type: " + type);

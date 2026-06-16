@@ -12,6 +12,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.List;
 import java.util.UUID;
 
@@ -54,7 +55,7 @@ public class SavingsService {
         goal.setUser(user);
         goal.setName(name);
         goal.setTargetAmount(targetAmount);
-        goal.setStartDate(LocalDate.now()); // Or fetch from your DB time config
+        goal.setStartDate(LocalDate.now(ZoneId.of("Africa/Lagos")));
         goal.setMaturityDate(maturityDate);
         goal.setInterestRate(interestRate != null ? interestRate : BigDecimal.ZERO);
         goal.setStatus(SavingsStatus.ACTIVE);
@@ -89,27 +90,28 @@ public class SavingsService {
      * This moves money from the active budget straight into the locked pot.
      */
     @Transactional(rollbackFor = Exception.class)
-    public void sweepEnvelopeToSavings(Long userId, Long savingsGoalId, BigDecimal amount, String envelopeName) {
+    public void sweepEnvelopeToSavings(Long userId, Long savingsGoalId, BigDecimal amount,
+                                       String envelopeName, Long budgetId, Long envelopeId) {
         if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) return;
 
         SavingsGoal goal = savingsGoalRepository.findById(savingsGoalId)
                 .orElseThrow(() -> new RuntimeException("Savings Goal not found"));
 
+        if (!goal.getUser().getId().equals(userId)) {
+            throw new SecurityException("Savings goal does not belong to this user.");
+        }
+
         if (goal.getStatus() != SavingsStatus.ACTIVE) {
             throw new IllegalStateException("Cannot sweep money into an inactive savings pot.");
         }
 
-        if (goal.getCurrentBalance().compareTo(goal.getTargetAmount()) >= 0) {
-            // 🎉 SEND PUSH NOTIFICATION: "Congratulations! You just hit your ₦6M target for Wedding Savings!"
-        }
-
-        // 1. Add money to the Pot
         goal.setCurrentBalance(goal.getCurrentBalance().add(amount));
         savingsGoalRepository.save(goal);
 
-        // 2. Log the Transaction (So the user sees it in their history)
         TransactionLog log = new TransactionLog();
         log.setUserId(userId);
+        log.setBudgetId(budgetId);
+        log.setSourceEnvelopeId(envelopeId);
         log.setAmount(amount);
         log.setTransactionType(TransactionType.SAVINGS_DEPOSIT);
         log.setDescription("Swept from Budget Envelope: " + envelopeName);
@@ -117,14 +119,56 @@ public class SavingsService {
         log.setReference("SWEEP-" + UUID.randomUUID().toString());
         transactionLogRepository.save(log);
 
-        logger.info("Swept ₦{} from envelope '{}' into Savings Goal {}", amount, envelopeName, savingsGoalId);
+        logger.info("Swept ₦{} from envelope '{}' (budget={}) into Savings Goal {}", amount, envelopeName, budgetId, savingsGoalId);
     }
 
-    /**
-     * Dashboard: Fetch User's Active Savings
-     */
     public List<SavingsGoal> getActiveSavingsForUser(Long userId) {
         return savingsGoalRepository.findByUserIdAndStatus(userId, SavingsStatus.ACTIVE);
+    }
+
+    public List<SavingsGoal> getAllSavingsForUser(Long userId) {
+        return savingsGoalRepository.findByUserIdOrderByCreatedAtDesc(userId);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public SavingsGoal withdrawSavings(Long userId, Long savingsGoalId) {
+        SavingsGoal goal = savingsGoalRepository.findById(savingsGoalId)
+                .orElseThrow(() -> new IllegalArgumentException("Savings goal not found"));
+
+        if (!goal.getUser().getId().equals(userId)) {
+            throw new SecurityException("You do not have permission to withdraw this savings goal.");
+        }
+
+        if (goal.getStatus() != SavingsStatus.MATURED) {
+            throw new IllegalStateException("Only matured savings goals can be withdrawn. Current status: " + goal.getStatus());
+        }
+
+        BigDecimal principal = goal.getCurrentBalance() != null ? goal.getCurrentBalance() : BigDecimal.ZERO;
+        BigDecimal interest  = goal.getAccruedInterest() != null ? goal.getAccruedInterest() : BigDecimal.ZERO;
+        BigDecimal totalPayout = principal.add(interest);
+
+        if (totalPayout.compareTo(BigDecimal.ZERO) > 0) {
+            String msg = String.format("Savings withdrawal: %s (₦%,.2f principal + ₦%,.2f interest)",
+                    goal.getName(), principal, interest);
+            walletService.fundWallet(userId, totalPayout, msg, false);
+        }
+
+        TransactionLog log = new TransactionLog();
+        log.setUserId(userId);
+        log.setAmount(totalPayout);
+        log.setTransactionType(TransactionType.SAVINGS_WITHDRAWAL);
+        log.setDescription("Withdrawal from matured savings: " + goal.getName());
+        log.setStatus(TransactionStatus.COMPLETED);
+        log.setReference("SAVE-OUT-" + UUID.randomUUID().toString());
+        transactionLogRepository.save(log);
+
+        goal.setCurrentBalance(BigDecimal.ZERO);
+        goal.setAccruedInterest(BigDecimal.ZERO);
+        goal.setStatus(SavingsStatus.WITHDRAWN);
+        SavingsGoal saved = savingsGoalRepository.save(goal);
+
+        logger.info("User {} withdrew ₦{} from savings goal {} ({})", userId, totalPayout, savingsGoalId, goal.getName());
+        return saved;
     }
 
     /**
