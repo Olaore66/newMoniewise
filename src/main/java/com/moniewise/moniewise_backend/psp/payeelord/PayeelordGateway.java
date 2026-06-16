@@ -156,9 +156,9 @@ public class PayeelordGateway {
                         e.getStatusCode(), mobileNumber, e.getResponseBodyAsString());
                 PayeelordAirtimePurchaseResponse failed = new PayeelordAirtimePurchaseResponse();
                 failed.setStatus("failed");
-                String msg = e.getStatusCode().value() == 422
-                        ? "Service provider has insufficient balance to fulfil this request. Please try again later."
-                        : "Provider rejected the request (HTTP " + e.getStatusCode().value() + "). Please try again shortly.";
+                String providerMsg = extractProviderMessage(e.getResponseBodyAsString());
+                String msg = providerMsg != null ? providerMsg
+                        : "Airtime purchase failed (HTTP " + e.getStatusCode().value() + "). Please try again shortly.";
                 failed.setMessage(msg);
                 return failed;
             }
@@ -223,9 +223,9 @@ public class PayeelordGateway {
                         e.getStatusCode(), mobileNumber, e.getResponseBodyAsString());
                 PayeelordDataPurchaseResponse failed = new PayeelordDataPurchaseResponse();
                 failed.setStatus("failed");
-                String msg = e.getStatusCode().value() == 422
-                        ? "Service provider has insufficient balance to fulfil this request. Please try again later."
-                        : "Provider rejected the request (HTTP " + e.getStatusCode().value() + "). Please try again shortly.";
+                String providerMsg = extractProviderMessage(e.getResponseBodyAsString());
+                String msg = providerMsg != null ? providerMsg
+                        : "Data purchase failed (HTTP " + e.getStatusCode().value() + "). Please try another plan or try again shortly.";
                 failed.setMessage(msg);
                 return failed;
             }
@@ -531,6 +531,24 @@ public class PayeelordGateway {
         // key=Authorization, value="Token py..."
         headers.set("Authorization", "Token " + resolveApiKey());
         return headers;
+    }
+
+    /**
+     * Extracts the human-readable error message from a Payeelord error body,
+     * regardless of exact JSON shape. Tries common keys: message, error, description.
+     * Returns null if the body is blank, not JSON, or has none of these keys.
+     */
+    private String extractProviderMessage(String rawBody) {
+        if (rawBody == null || rawBody.isBlank()) return null;
+        try {
+            com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+            java.util.Map<?, ?> map = mapper.readValue(rawBody, java.util.Map.class);
+            for (String key : new String[]{"message", "error", "description", "msg", "detail"}) {
+                Object val = map.get(key);
+                if (val instanceof String s && !s.isBlank()) return s;
+            }
+        } catch (Exception ignored) {}
+        return null;
     }
 
     /**
