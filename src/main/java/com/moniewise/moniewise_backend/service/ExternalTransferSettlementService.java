@@ -5,6 +5,7 @@ import com.moniewise.moniewise_backend.entity.Envelope;
 import com.moniewise.moniewise_backend.entity.RevenueLog;
 import com.moniewise.moniewise_backend.entity.TransactionLog;
 import com.moniewise.moniewise_backend.entity.Wallet;
+import com.moniewise.moniewise_backend.enums.BudgetStatus;
 import com.moniewise.moniewise_backend.enums.TransactionStatus;
 import com.moniewise.moniewise_backend.exception.EntityNotFoundException;
 import com.moniewise.moniewise_backend.psp.rubies.RubiesGateway;
@@ -147,9 +148,27 @@ public class ExternalTransferSettlementService {
             }
 
         } else if (isFailed(status)) {
-            // On failure: restore envelope hold (send amount only) and refund fees to wallet.
+            // On failure: release the hold and refund the send amount.
             source.setHeldAmount(source.getHeldAmount().subtract(transferAmount).max(BigDecimal.ZERO));
-            source.setRemainingAmount(source.getRemainingAmount().add(transferAmount));
+
+            // If the budget is already COMPLETED (expired), the envelope amounts were zeroed at
+            // expiry time and the user's refund has already been paid out. Restoring to
+            // remainingAmount of a dead envelope leaves the money inaccessible forever.
+            // Instead, fund the wallet directly so the user gets their money back.
+            Budget parentBudget = source.getBudget();
+            if (parentBudget != null && BudgetStatus.COMPLETED == parentBudget.getStatus()) {
+                String msg = String.format(
+                        "Refund ₦%,.2f — bank transfer failed after budget '%s' ended",
+                        transferAmount,
+                        parentBudget.getName() != null ? parentBudget.getName() : parentBudget.getId().toString()
+                );
+                walletService.fundWallet(txn.getUserId(), transferAmount, msg, false);
+                logger.info("[ExternalTransfer] Budget {} already COMPLETED — refunded ₦{} directly to wallet for user {} (ref={})",
+                        parentBudget.getId(), transferAmount, txn.getUserId(), txn.getReference());
+            } else {
+                source.setRemainingAmount(source.getRemainingAmount().add(transferAmount));
+            }
+
             txn.setStatus(TransactionStatus.FAILED);
 
             // Refund the fees (NIP + markup) that were pre-deducted from the wallet at initiation.

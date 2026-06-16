@@ -1370,21 +1370,38 @@ public class EnvelopeService {
 
         recalculateTargetEnvelopeLimit(envelope, budget);
 
+        // Calculate the first-disbursement time before deciding the initial pocket size:
+        // the choice depends on whether that first fire is still in the future today.
+        LocalDateTime firstDisbursement = budgetLifeCycleManager.calculateNextDisbursementTime(envelope);
+        LocalDateTime nowForSeed = fetchCurrentDateTimeFromDatabase();
+        envelope.setNextDisbursementAt(firstDisbursement);
+        envelope.setHasMatured(false);
+
         String typez = (String) conditions.getOrDefault("type", "");
         if ("emergency".equalsIgnoreCase(typez)) {
             envelope.setRemainingAmount(amount);
+        } else if ("daily".equalsIgnoreCase(typez) || "weekly".equalsIgnoreCase(typez) || "dynamic".equalsIgnoreCase(typez)) {
+            // If the first disbursement is still later today, start the pocket at zero
+            // so the scheduler funds and notifies at the exact configured time.
+            // If the disbursement time has already passed (first fire is tomorrow or later),
+            // pre-seed the pocket for immediate access and mark today as processed so
+            // tomorrow's task doesn't double-disburse.
+            boolean firstDisbursementIsToday = firstDisbursement != null
+                    && firstDisbursement.toLocalDate().isEqual(nowForSeed.toLocalDate());
+            if (firstDisbursementIsToday) {
+                envelope.setRemainingAmount(BigDecimal.ZERO);
+                // lastDisbursedAt intentionally left null — today's scheduled task will fire and notify
+            } else {
+                BigDecimal startingPocket = getPeriodLimit(envelope.getConditions());
+                startingPocket = startingPocket.min(envelope.getTotalRemainingAmount());
+                envelope.setRemainingAmount(startingPocket);
+                envelope.setLastDisbursedAt(nowForSeed);
+            }
         } else {
             BigDecimal startingPocket = getPeriodLimit(envelope.getConditions());
             startingPocket = startingPocket.min(envelope.getTotalRemainingAmount());
             envelope.setRemainingAmount(startingPocket);
         }
-
-        // 5. Calculate Schedule
-        envelope.setNextDisbursementAt(budgetLifeCycleManager.calculateNextDisbursementTime(envelope));
-        envelope.setHasMatured(false);
-
-        // Ã°Å¸â€ºâ€˜ FIX: Initialize this so the Scheduler knows it started TODAY
-        envelope.setLastDisbursedAt(fetchCurrentDateTimeFromDatabase());
 
         envelopeRepository.save(envelope);
 
@@ -1564,6 +1581,8 @@ public class EnvelopeService {
                 periodRemaining,
                 periodLimit,
                 usedThisPeriod,
+
+                envelope.getHeldAmount() != null ? envelope.getHeldAmount() : BigDecimal.ZERO,
 
                 envelope.getConditions(),
                 envelope.getCreatedAt(),

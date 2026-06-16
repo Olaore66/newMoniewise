@@ -53,6 +53,7 @@ public class EnvelopeResponse {
     private BigDecimal periodLimit;
     private BigDecimal usedThisPeriod;
 
+    private BigDecimal heldAmount;
 
     private Map<String, Object> conditions;
     private LocalDateTime createdAt;

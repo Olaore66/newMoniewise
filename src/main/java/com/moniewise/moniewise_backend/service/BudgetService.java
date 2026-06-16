@@ -1173,6 +1173,8 @@ public class BudgetService {
                 getPeriodLimit(envelope),                // ← periodLimit
                 getUsedThisPeriod(envelope),             // ← usedThisPeriod
 
+                envelope.getHeldAmount() != null ? envelope.getHeldAmount() : BigDecimal.ZERO,
+
                 envelope.getConditions(),
                 envelope.getCreatedAt(),
                 envelope.getLastDisbursedAt(),
@@ -1346,6 +1348,10 @@ public class BudgetService {
                 .subtract(periodRemaining)
                 .max(BigDecimal.ZERO);
 
+        BigDecimal heldAmt = freshEnvelope.getHeldAmount() != null
+                ? freshEnvelope.getHeldAmount()
+                : BigDecimal.ZERO;
+
         return new EnvelopeResponse(
                 freshEnvelope.getId(),
                 budget.getId(),
@@ -1359,6 +1365,8 @@ public class BudgetService {
                 periodRemaining,
                 periodLimit,
                 usedThisPeriod,
+
+                heldAmt,
 
                 freshEnvelope.getConditions(),
                 freshEnvelope.getCreatedAt(),
