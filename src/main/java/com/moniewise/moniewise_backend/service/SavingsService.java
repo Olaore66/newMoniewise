@@ -12,6 +12,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.List;
 import java.util.UUID;
@@ -76,6 +77,7 @@ public class SavingsService {
             log.setDescription("Funded Savings Goal: " + name);
             log.setStatus(TransactionStatus.COMPLETED);
             log.setReference("SAVE-" + UUID.randomUUID().toString());
+            log.setCreatedAt(LocalDateTime.now());
             transactionLogRepository.save(log);
         } else {
             goal.setCurrentBalance(BigDecimal.ZERO);
@@ -117,6 +119,7 @@ public class SavingsService {
         log.setDescription("Swept from Budget Envelope: " + envelopeName);
         log.setStatus(TransactionStatus.COMPLETED);
         log.setReference("SWEEP-" + UUID.randomUUID().toString());
+        log.setCreatedAt(LocalDateTime.now());
         transactionLogRepository.save(log);
 
         logger.info("Swept ₦{} from envelope '{}' (budget={}) into Savings Goal {}", amount, envelopeName, budgetId, savingsGoalId);
@@ -160,6 +163,7 @@ public class SavingsService {
         log.setDescription("Withdrawal from matured savings: " + goal.getName());
         log.setStatus(TransactionStatus.COMPLETED);
         log.setReference("SAVE-OUT-" + UUID.randomUUID().toString());
+        log.setCreatedAt(LocalDateTime.now());
         transactionLogRepository.save(log);
 
         goal.setCurrentBalance(BigDecimal.ZERO);
@@ -208,6 +212,7 @@ public class SavingsService {
         log.setDescription("Manual top-up to Savings: " + goal.getName());
         log.setStatus(TransactionStatus.COMPLETED);
         log.setReference("SAVE-TOPUP-" + UUID.randomUUID().toString());
+        log.setCreatedAt(LocalDateTime.now());
         transactionLogRepository.save(log);
 
         logger.info("User {} manually topped up ₦{} into Savings Goal {}", userId, amount, savingsGoalId);
