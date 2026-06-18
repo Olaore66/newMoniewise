@@ -19,7 +19,8 @@ public class PayeelordDataPurchaseRequest {
     public PayeelordDataPurchaseRequest() {}
 
     // ← Use this constructor
-    public PayeelordDataPurchaseRequest(String dataId, String dataType, String mobileNumber) {
+    public PayeelordDataPurchaseRequest(String networkId, String dataId, String dataType, String mobileNumber) {
+        this.network = networkId != null ? Integer.parseInt(networkId) : null;
         this.plan = dataId;
         this.dataType = dataType;
         this.mobileNumber = mobileNumber;

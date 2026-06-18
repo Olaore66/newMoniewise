@@ -228,6 +228,7 @@ public class PayeelordVasService {
         try {
             // ==================== DEBUG LOG ====================
             PayeelordDataPurchaseRequest reqForLog = new PayeelordDataPurchaseRequest(
+                    String.valueOf(plan.getNetworkId()),   // ← This was missing
                     String.valueOf(plan.getDataId()),
                     plan.getPlanType(),
                     mobileNumber
