@@ -12,7 +12,6 @@ import com.moniewise.moniewise_backend.enums.VasTransactionStatus;
 import com.moniewise.moniewise_backend.enums.VasTransactionType;
 import com.moniewise.moniewise_backend.psp.payeelord.PayeelordGateway;
 import com.moniewise.moniewise_backend.psp.payeelord.dto.PayeelordAirtimePurchaseResponse;
-import com.moniewise.moniewise_backend.psp.payeelord.dto.PayeelordDataPurchaseRequest;
 import com.moniewise.moniewise_backend.psp.payeelord.dto.PayeelordDataPurchaseResponse;
 import com.moniewise.moniewise_backend.psp.payeelord.dto.PayeelordWebhookPayload;
 import com.moniewise.moniewise_backend.psp.rubies.RubiesGateway;
@@ -192,12 +191,6 @@ public class PayeelordVasService {
 //        return self.finalizeDataResult(txn.getId(), response);
 //    }
 
-    // ── Read-only queries ─────────────────────────────────────────────────────
-
-    // ── Data purchase ─────────────────────────────────────────────────────────
-
-    // ── Data purchase ─────────────────────────────────────────────────────────
-
     // ── Data purchase ─────────────────────────────────────────────────────────
 
     public PayeelordVasTransaction purchaseData(Long userId, DataPurchaseRequest request) {
@@ -226,26 +219,12 @@ public class PayeelordVasService {
         PayeelordDataPurchaseResponse response;
 
         try {
-            // ==================== DEBUG LOG ====================
-            PayeelordDataPurchaseRequest reqForLog = new PayeelordDataPurchaseRequest(
-                    String.valueOf(plan.getNetworkId()),   // ← This was missing
-                    String.valueOf(plan.getDataId()),
-                    plan.getPlanType(),
-                    mobileNumber
-            );
-
-            logger.info("[Payeelord] REQUEST JSON BEING SENT:\n{}",
-                    objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(reqForLog));
-            // ===================================================
-
-            // Call gateway with String parameters (safer)
             response = gateway.purchaseData(
                     String.valueOf(plan.getNetworkId()),
                     String.valueOf(plan.getDataId()),
                     plan.getPlanType(),
                     mobileNumber
             );
-
         } catch (PayeelordGateway.PayeelordAmbiguousResponseException e) {
             self.markAmbiguous(txn.getId(), e.getMessage());
             throw new RuntimeException(

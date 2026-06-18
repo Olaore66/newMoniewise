@@ -192,14 +192,6 @@ public class PayeelordGateway {
 
         PayeelordDataPurchaseRequest req = new PayeelordDataPurchaseRequest(networkId, dataId, dataType, mobileNumber);
 
-        // Important: Log the exact JSON being sent
-        try {
-            logger.info("[Payeelord] REQUEST JSON BEING SENT:\n{}",
-                    new com.fasterxml.jackson.databind.ObjectMapper()
-                            .writerWithDefaultPrettyPrinter()
-                            .writeValueAsString(req));
-        } catch (Exception ignored) {}
-
         logger.info("[Payeelord] Buying data: networkId={} dataId={} dataType={} mobile={}",
                 networkId, dataId, dataType, mobileNumber);
 
