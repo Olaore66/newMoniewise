@@ -28,8 +28,8 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  */
 public class PayeelordDataPurchaseRequest {
 
-    // Payeelord requires networkId as a JSON integer (e.g. 1), not a string ("1")
-    @JsonProperty("networkId")
+    // Payeelord's POST /api/data expects "network" (integer), not "networkId"
+    @JsonProperty("network")
     private int networkId;
 
     @JsonProperty("plan")
