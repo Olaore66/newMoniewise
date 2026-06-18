@@ -73,6 +73,7 @@ public class EnvelopeService {
     private final TransferFeeService transferFeeService;
     private final MonnieCacheInvalidationService monnieCacheInvalidationService;
     private final ProcessingTransferRecoveryScheduler transferRecoveryScheduler;
+    private final PayeelordVasTransactionRepository vasTransactionRepository;
 
     @Value("${moniewise.revenue.wallet.user-id}")
     private Long revenueWalletUserId;
@@ -92,7 +93,8 @@ public class EnvelopeService {
             ProvidusExpressGateway providusExpressGateway, PaymentGatewayResolver paymentGatewayResolver,
             TransferFeeService transferFeeService,
             MonnieCacheInvalidationService monnieCacheInvalidationService,
-            @Lazy ProcessingTransferRecoveryScheduler transferRecoveryScheduler) {
+            @Lazy ProcessingTransferRecoveryScheduler transferRecoveryScheduler,
+            PayeelordVasTransactionRepository vasTransactionRepository) {
         this.envelopeRepository = envelopeRepository;
         this.budgetRepository = budgetRepository;
         this.revenueLogRepository = revenueLogRepository;
@@ -113,6 +115,7 @@ public class EnvelopeService {
         this.transferFeeService = transferFeeService;
         this.monnieCacheInvalidationService = monnieCacheInvalidationService;
         this.transferRecoveryScheduler = transferRecoveryScheduler;
+        this.vasTransactionRepository = vasTransactionRepository;
     }
 
     @PostConstruct
@@ -666,7 +669,12 @@ public class EnvelopeService {
                 )
         );
 
-        BigDecimal remainingLimit = limit.subtract(spentAmount);
+        // Also account for VAS (airtime/data) purchases — stored in payeelord_vas_transactions,
+        // not TransactionLog, so the query above misses them entirely.
+        BigDecimal vasSpent = safeAmount(vasTransactionRepository.sumSettledSellingAmount(
+                envelopeId, VasTransactionStatus.SUCCESSFUL, periodStart));
+
+        BigDecimal remainingLimit = limit.subtract(spentAmount).subtract(vasSpent);
 
         remainingLimit = remainingLimit.compareTo(BigDecimal.ZERO) < 0 ? BigDecimal.ZERO : remainingLimit;
 
@@ -766,6 +774,10 @@ public class EnvelopeService {
         if (budget != null) {
             budget.setRemainingAmount(safeAmount(budget.getRemainingAmount()).subtract(amount).max(BigDecimal.ZERO));
             budgetRepository.save(budget);
+            String ownerEmail = budget.getUser().getEmail();
+            if (ownerEmail != null) {
+                monnieCacheInvalidationService.evictUserIdentifierAfterCommit(ownerEmail);
+            }
         }
     }
 
