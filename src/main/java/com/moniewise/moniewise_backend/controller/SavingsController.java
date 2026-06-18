@@ -112,6 +112,25 @@ public class SavingsController {
     }
 
     /**
+     * POST: Sweep a savings-linked envelope's balance into its savings goal
+     */
+    @PostMapping("/sweep-envelope/{envelopeId}")
+    public ResponseEntity<?> sweepEnvelopeToSavings(
+            @PathVariable("envelopeId") Long envelopeId,
+            Principal principal) {
+        try {
+            SavingsGoal result = savingsService.triggerEnvelopeSweep(principal.getName(), envelopeId);
+            return ResponseEntity.ok(result);
+        } catch (SecurityException | IllegalArgumentException | IllegalStateException e) {
+            logger.warn("Envelope sweep failed for {}: {}", principal.getName(), e.getMessage());
+            return ResponseEntity.badRequest().body(e.getMessage());
+        } catch (Exception e) {
+            logger.error("System error during envelope sweep", e);
+            return ResponseEntity.internalServerError().body("An error occurred while sweeping funds.");
+        }
+    }
+
+    /**
      * POST: Manually Top-Up an existing Savings Goal from Wallet
      */
     @PostMapping("/{id}/fund")

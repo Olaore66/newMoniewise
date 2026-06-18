@@ -15,6 +15,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 @Service
@@ -23,17 +24,20 @@ public class SavingsService {
     private static final Logger logger = LoggerFactory.getLogger(SavingsService.class);
     private final SavingsGoalRepository savingsGoalRepository;
     private final UserRepository userRepository;
-    private final WalletService walletService; // To deduct initial deposits
+    private final WalletService walletService;
     private final TransactionLogRepository transactionLogRepository;
+    private final EnvelopeRepository envelopeRepository;
 
     public SavingsService(SavingsGoalRepository savingsGoalRepository,
                           UserRepository userRepository,
                           WalletService walletService,
-                          TransactionLogRepository transactionLogRepository) {
+                          TransactionLogRepository transactionLogRepository,
+                          EnvelopeRepository envelopeRepository) {
         this.savingsGoalRepository = savingsGoalRepository;
         this.userRepository = userRepository;
         this.walletService = walletService;
         this.transactionLogRepository = transactionLogRepository;
+        this.envelopeRepository = envelopeRepository;
     }
 
     /**
@@ -127,6 +131,41 @@ public class SavingsService {
 
     public List<SavingsGoal> getActiveSavingsForUser(Long userId) {
         return savingsGoalRepository.findByUserIdAndStatus(userId, SavingsStatus.ACTIVE);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public SavingsGoal triggerEnvelopeSweep(String userEmail, Long envelopeId) {
+        Envelope envelope = envelopeRepository.findByIdAndBudget_UserEmail(envelopeId, userEmail)
+                .orElseThrow(() -> new IllegalArgumentException("Envelope not found or does not belong to you."));
+
+        Map<String, Object> conditions = envelope.getConditions();
+        if (!"savings_sweep".equals(conditions.get("type"))) {
+            throw new IllegalStateException("This envelope is not linked to a savings goal.");
+        }
+
+        Object goalIdObj = conditions.get("targetSavingsGoalId");
+        if (goalIdObj == null) {
+            throw new IllegalStateException("This envelope has no linked savings goal.");
+        }
+        Long savingsGoalId = ((Number) goalIdObj).longValue();
+
+        BigDecimal amount = envelope.getTotalRemainingAmount();
+        if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new IllegalStateException("No funds available to sweep.");
+        }
+
+        User user = userRepository.findByEmail(userEmail)
+                .orElseThrow(() -> new RuntimeException("User not found"));
+        Long budgetId = envelope.getBudget().getId();
+
+        sweepEnvelopeToSavings(user.getId(), savingsGoalId, amount, envelope.getName(), budgetId, envelopeId);
+
+        envelope.setTotalRemainingAmount(BigDecimal.ZERO);
+        envelope.setRemainingAmount(BigDecimal.ZERO);
+        envelopeRepository.save(envelope);
+
+        return savingsGoalRepository.findById(savingsGoalId)
+                .orElseThrow(() -> new RuntimeException("Savings goal not found after sweep."));
     }
 
     public List<SavingsGoal> getAllSavingsForUser(Long userId) {
