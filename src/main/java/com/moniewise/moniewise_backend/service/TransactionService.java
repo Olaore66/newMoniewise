@@ -375,7 +375,7 @@ public class TransactionService {
         String budgetName = getBudgetName(transaction.getBudgetId());
 
         boolean debit = isOutgoing(transaction.getTransactionType(), transaction.getAmount());
-        String direction = debit ? "DEBIT" : "CREDIT";
+        String direction = debit ? "OUT" : "IN";
 
         BigDecimal absoluteAmount = transaction.getAmount().abs();
         // txn.fee stores ONLY the Moniewise markup fee — the NIBSS NIP bank charge is
@@ -385,7 +385,8 @@ public class TransactionService {
         // screen (markup + NIP). The stored value is left untouched so revenue
         // settlement keeps crediting only the markup. See ExternalTransferSettlementService.
         BigDecimal fee = transaction.getFee() != null ? transaction.getFee() : BigDecimal.ZERO;
-        if (transaction.getTransactionType() == ENVELOPE_TO_EXTERNAL
+        if ((transaction.getTransactionType() == ENVELOPE_TO_EXTERNAL
+                || transaction.getTransactionType() == WALLET_WITHDRAWAL)
                 && RubiesGateway.PROVIDER_NAME.equalsIgnoreCase(transaction.getProviderName())) {
             fee = fee.add(markupCalculatorService.calculateNipFee(absoluteAmount));
         }
