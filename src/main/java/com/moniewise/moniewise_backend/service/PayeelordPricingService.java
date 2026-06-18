@@ -93,12 +93,13 @@ public class PayeelordPricingService {
         }
 
         BigDecimal costAmount = plan.getCostPrice().setScale(2, RoundingMode.HALF_UP);
-        BigDecimal markup = plan.getMarkupAmount() != null ? plan.getMarkupAmount() : BigDecimal.ZERO;
-        BigDecimal sellingAmount = costAmount.add(markup).setScale(2, RoundingMode.HALF_UP);
-        BigDecimal marginAmount = markup.setScale(2, RoundingMode.HALF_UP);
-
-        // Data bundles have no separate "face value" concept (unlike airtime's currency
-        // value) — the catalog price IS the reference/nominal value. Use cost as face.
+        // Round up to the next multiple of 100 naira — e.g. ₦80 → ₦100, ₦750 → ₦800.
+        BigDecimal hundred = new BigDecimal("100");
+        BigDecimal sellingAmount = costAmount
+                .divide(hundred, 0, RoundingMode.CEILING)
+                .multiply(hundred)
+                .setScale(2, RoundingMode.HALF_UP);
+        BigDecimal marginAmount = sellingAmount.subtract(costAmount).setScale(2, RoundingMode.HALF_UP);
         BigDecimal faceAmount = costAmount;
 
         return new VasPricing(faceAmount, costAmount, sellingAmount, marginAmount);

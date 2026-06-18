@@ -81,12 +81,16 @@ public class PayeelordDataPlan {
 
     // ── Convenience ───────────────────────────────────────────────────────────
 
-    /** What the user pays = Payeelord's price + your configured margin. */
+    /** What the user pays = Payeelord's price rounded up to the next multiple of ₦100. */
     @Transient
     public BigDecimal getSellingPrice() {
-        BigDecimal cost   = costPrice    != null ? costPrice    : BigDecimal.ZERO;
-        BigDecimal markup = markupAmount != null ? markupAmount : BigDecimal.ZERO;
-        return cost.add(markup);
+        if (costPrice == null || costPrice.compareTo(BigDecimal.ZERO) <= 0) {
+            return BigDecimal.ZERO;
+        }
+        java.math.BigDecimal hundred = new java.math.BigDecimal("100");
+        return costPrice
+                .divide(hundred, 0, java.math.RoundingMode.CEILING)
+                .multiply(hundred);
     }
 
     // ── Getters & Setters ─────────────────────────────────────────────────────
