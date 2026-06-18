@@ -7,8 +7,8 @@ public class PayeelordDataPurchaseRequest {
     @JsonProperty("networkId")
     private Integer networkId;
 
-    @JsonProperty("dataId")
-    private String dataId;
+    @JsonProperty("plan")           // ← Changed from dataId to "plan"
+    private String plan;
 
     @JsonProperty("dataType")
     private String dataType;
@@ -20,14 +20,14 @@ public class PayeelordDataPurchaseRequest {
 
     public PayeelordDataPurchaseRequest(String networkId, String dataId, String dataType, String mobileNumber) {
         this.networkId = networkId != null ? Integer.parseInt(networkId) : 0;
-        this.dataId = dataId;
+        this.plan = dataId;
         this.dataType = dataType;
         this.mobileNumber = mobileNumber;
     }
 
     public PayeelordDataPurchaseRequest(Integer networkId, String dataId, String dataType, String mobileNumber) {
         this.networkId = networkId;
-        this.dataId = dataId;
+        this.plan = dataId;
         this.dataType = dataType;
         this.mobileNumber = mobileNumber;
     }
@@ -36,8 +36,8 @@ public class PayeelordDataPurchaseRequest {
     public Integer getNetworkId() { return networkId; }
     public void setNetworkId(Integer networkId) { this.networkId = networkId; }
 
-    public String getDataId() { return dataId; }
-    public void setDataId(String dataId) { this.dataId = dataId; }
+    public String getDataId() { return plan; }
+    public void setDataId(String dataId) { this.plan = dataId; }
 
     public String getDataType() { return dataType; }
     public void setDataType(String dataType) { this.dataType = dataType; }
