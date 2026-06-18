@@ -32,7 +32,7 @@ public class PayeelordDataPurchaseRequest {
     @JsonProperty("networkId")
     private int networkId;
 
-    @JsonProperty("dataId")
+    @JsonProperty("plan")
     private String dataId;
 
     @JsonProperty("dataType")
