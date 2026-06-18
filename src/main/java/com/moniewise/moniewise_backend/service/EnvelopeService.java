@@ -1783,10 +1783,10 @@ public class EnvelopeService {
                 "A weekly release plan requires at least 8 days. " +
                 "Your budget is only " + budgetDurationDays + " day(s).");
         }
-        if (isOneWeekBudget && ("weekly".equals(type) || "dynamic".equals(type))) {
+        if (isOneWeekBudget && "weekly".equals(type)) {
             throw new IllegalArgumentException(
-                "A " + type + " release plan is not useful for a 7-day budget. " +
-                "Use daily or emergency instead.");
+                "A weekly release plan fires only once in a 7-day budget. " +
+                "Use daily, dynamic, or emergency instead.");
         }
         if (!isMultiWeekBudget && budgetDurationDays > 7 && "weekly".equals(type)) {
             throw new IllegalArgumentException(
