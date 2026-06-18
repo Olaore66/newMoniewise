@@ -93,10 +93,11 @@ public class PayeelordPricingService {
         }
 
         BigDecimal costAmount = plan.getCostPrice().setScale(2, RoundingMode.HALF_UP);
-        // Round up to the next multiple of 100 naira — e.g. ₦80 → ₦100, ₦750 → ₦800.
+        // Always advance to the NEXT multiple of ₦100 — e.g. ₦80→₦100, ₦750→₦800, ₦1000→₦1100.
         BigDecimal hundred = new BigDecimal("100");
         BigDecimal sellingAmount = costAmount
-                .divide(hundred, 0, RoundingMode.CEILING)
+                .divide(hundred, 0, RoundingMode.FLOOR)
+                .add(BigDecimal.ONE)
                 .multiply(hundred)
                 .setScale(2, RoundingMode.HALF_UP);
         BigDecimal marginAmount = sellingAmount.subtract(costAmount).setScale(2, RoundingMode.HALF_UP);

@@ -89,7 +89,8 @@ public class PayeelordDataPlan {
         }
         java.math.BigDecimal hundred = new java.math.BigDecimal("100");
         return costPrice
-                .divide(hundred, 0, java.math.RoundingMode.CEILING)
+                .divide(hundred, 0, java.math.RoundingMode.FLOOR)
+                .add(java.math.BigDecimal.ONE)
                 .multiply(hundred);
     }
 
