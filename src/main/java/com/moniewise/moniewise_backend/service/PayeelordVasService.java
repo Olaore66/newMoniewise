@@ -1,6 +1,5 @@
 package com.moniewise.moniewise_backend.service;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.moniewise.moniewise_backend.dto.request.AirtimePurchaseRequest;
 import com.moniewise.moniewise_backend.dto.request.DataPurchaseRequest;
@@ -197,6 +196,10 @@ public class PayeelordVasService {
 
     // ── Data purchase ─────────────────────────────────────────────────────────
 
+    // ── Data purchase ─────────────────────────────────────────────────────────
+
+    // ── Data purchase ─────────────────────────────────────────────────────────
+
     public PayeelordVasTransaction purchaseData(Long userId, DataPurchaseRequest request) {
         User user = loadUser(userId);
         verifyPin(user, request.getTransactionPin());
@@ -223,9 +226,8 @@ public class PayeelordVasService {
         PayeelordDataPurchaseResponse response;
 
         try {
-            // ==================== DEBUG LOG (Safe) ====================
+            // ==================== DEBUG LOG ====================
             PayeelordDataPurchaseRequest reqForLog = new PayeelordDataPurchaseRequest(
-                    plan.getNetworkId(),
                     String.valueOf(plan.getDataId()),
                     plan.getPlanType(),
                     mobileNumber
@@ -233,9 +235,15 @@ public class PayeelordVasService {
 
             logger.info("[Payeelord] REQUEST JSON BEING SENT:\n{}",
                     objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(reqForLog));
-            // ========================================================
+            // ===================================================
 
-            response = gateway.purchaseData(plan.getNetworkId(), plan.getDataId(), plan.getPlanType(), mobileNumber);
+            // Call gateway with String parameters (safer)
+            response = gateway.purchaseData(
+                    String.valueOf(plan.getNetworkId()),
+                    String.valueOf(plan.getDataId()),
+                    plan.getPlanType(),
+                    mobileNumber
+            );
 
         } catch (PayeelordGateway.PayeelordAmbiguousResponseException e) {
             self.markAmbiguous(txn.getId(), e.getMessage());
@@ -243,13 +251,13 @@ public class PayeelordVasService {
                     "We couldn't immediately confirm your data purchase with the provider — " +
                             "it may still go through. We'll update your transaction history shortly. " +
                             "If it doesn't reflect within a few minutes, contact support with reference " + reference + ".", e);
-        } catch (JsonProcessingException e) {
-            throw new RuntimeException(e);
+        } catch (Exception e) {
+            logger.error("[PayeelordVAS] Error preparing data purchase for ref={}", reference, e);
+            throw new RuntimeException("Failed to process data purchase request.", e);
         }
 
         return self.finalizeDataResult(txn.getId(), response);
     }
-
     @Transactional(readOnly = true)
     public List<PayeelordVasTransaction> getRecentTransactions(Long userId) {
         return transactionRepository.findTop20ByUserIdOrderByCreatedAtDesc(userId);

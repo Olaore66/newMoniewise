@@ -189,7 +189,23 @@ public class PayeelordGateway {
      */
     public PayeelordDataPurchaseResponse purchaseData(String networkId, String dataId, String dataType, String mobileNumber) {
         String url = baseUrl() + "/data";
-        PayeelordDataPurchaseRequest req = new PayeelordDataPurchaseRequest(networkId, dataId, dataType, mobileNumber);
+
+        // Create request using the latest DTO constructor
+        PayeelordDataPurchaseRequest req = new PayeelordDataPurchaseRequest(
+                dataId,         // String
+                dataType,
+                mobileNumber
+        );
+
+        // Debug log - very important
+        try {
+            logger.info("[Payeelord] REQUEST JSON BEING SENT:\n{}",
+                    new com.fasterxml.jackson.databind.ObjectMapper()
+                            .writerWithDefaultPrettyPrinter()
+                            .writeValueAsString(req));
+        } catch (Exception e) {
+            logger.warn("[Payeelord] Could not log request JSON", e);
+        }
 
         logger.info("[Payeelord] Buying data: networkId={} dataId={} dataType={} mobile={}",
                 networkId, dataId, dataType, mobileNumber);
@@ -203,9 +219,7 @@ public class PayeelordGateway {
             PayeelordDataPurchaseResponse body = response.getBody();
             if (body == null || body.getStatus() == null) {
                 throw new PayeelordAmbiguousResponseException(
-                        "Payeelord data purchase returned an empty/unreadable body — " +
-                                "outcome is AMBIGUOUS, the float may have been debited. " +
-                                "Reconcile via GET /data-transactions before reversing the user's wallet.");
+                        "Payeelord data purchase returned an empty/unreadable body — outcome is AMBIGUOUS.");
             }
 
             logger.info("[Payeelord] Data purchase result: mobile={} dataId={} status={} txnId={}",
@@ -218,9 +232,11 @@ public class PayeelordGateway {
             PayeelordDataPurchaseResponse parsed = tryParseFailureBody(e.getResponseBodyAsString(),
                     PayeelordDataPurchaseResponse.class, e);
             if (parsed != null) return parsed;
+
             if (isDefiniteRejection(e)) {
                 logger.error("[Payeelord] Data purchase REJECTED (HTTP {}) mobile={} payeelord_body={}",
                         e.getStatusCode(), mobileNumber, e.getResponseBodyAsString());
+
                 PayeelordDataPurchaseResponse failed = new PayeelordDataPurchaseResponse();
                 failed.setStatus("failed");
                 String providerMsg = extractProviderMessage(e.getResponseBodyAsString());
@@ -229,17 +245,16 @@ public class PayeelordGateway {
                 failed.setMessage(msg);
                 return failed;
             }
+
             logger.error("[Payeelord] Data purchase HTTP error (ambiguous outcome): mobile={} status={} body={}",
                     mobileNumber, e.getStatusCode(), e.getResponseBodyAsString());
             throw new PayeelordAmbiguousResponseException(
-                    "Payeelord data purchase returned HTTP " + e.getStatusCode() +
-                            " with an unparseable body — outcome is AMBIGUOUS.", e);
+                    "Payeelord data purchase returned HTTP " + e.getStatusCode() + " with unparseable body.", e);
         } catch (ResourceAccessException e) {
             logger.error("[Payeelord] Data purchase network error (ambiguous outcome): mobile={} error={}",
                     mobileNumber, e.getMessage());
             throw new PayeelordAmbiguousResponseException(
-                    "Payeelord data purchase timed out / connection failed — outcome is AMBIGUOUS. " +
-                            "Do NOT assume failure; reconcile via GET /data-transactions before reversing.", e);
+                    "Payeelord data purchase timed out / connection failed — outcome is AMBIGUOUS.", e);
         }
     }
 
