@@ -1,5 +1,6 @@
 package com.moniewise.moniewise_backend.service;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.moniewise.moniewise_backend.dto.request.AirtimePurchaseRequest;
 import com.moniewise.moniewise_backend.dto.request.DataPurchaseRequest;
@@ -11,10 +12,11 @@ import com.moniewise.moniewise_backend.enums.NotificationType;
 import com.moniewise.moniewise_backend.enums.VasTransactionStatus;
 import com.moniewise.moniewise_backend.enums.VasTransactionType;
 import com.moniewise.moniewise_backend.psp.payeelord.PayeelordGateway;
-import com.moniewise.moniewise_backend.psp.rubies.RubiesGateway;
 import com.moniewise.moniewise_backend.psp.payeelord.dto.PayeelordAirtimePurchaseResponse;
+import com.moniewise.moniewise_backend.psp.payeelord.dto.PayeelordDataPurchaseRequest;
 import com.moniewise.moniewise_backend.psp.payeelord.dto.PayeelordDataPurchaseResponse;
 import com.moniewise.moniewise_backend.psp.payeelord.dto.PayeelordWebhookPayload;
+import com.moniewise.moniewise_backend.psp.rubies.RubiesGateway;
 import com.moniewise.moniewise_backend.repository.PayeelordDataPlanRepository;
 import com.moniewise.moniewise_backend.repository.PayeelordVasTransactionRepository;
 import com.moniewise.moniewise_backend.repository.UserRepository;
@@ -154,6 +156,47 @@ public class PayeelordVasService {
 
     // ── Data purchase ─────────────────────────────────────────────────────────
 
+//    public PayeelordVasTransaction purchaseData(Long userId, DataPurchaseRequest request) {
+//        User user = loadUser(userId);
+//        verifyPin(user, request.getTransactionPin());
+//
+//        String mobileNumber = request.getMobileNumber().trim();
+//
+//        PayeelordDataPlan plan = dataPlanRepository.findByDataId(request.getDataId().trim())
+//                .orElseThrow(() -> new IllegalArgumentException("That data plan is no longer available. Please pick another."));
+//
+//        if (!plan.isActive()) {
+//            throw new IllegalArgumentException("That data plan is currently unavailable. Please pick another.");
+//        }
+//
+//        PayeelordPricingService.VasPricing pricing = pricingService.priceDataPlan(plan);
+//        String reference = buildReference("VAS-DT", userId);
+//
+//        logger.info("[PayeelordVAS] Opening data purchase: user={} ref={} plan={} ({}) {}",
+//                userId, reference, plan.getDataId(), plan.getPlanName(), pricing.displayText());
+//
+//        PayeelordVasTransaction txn = self.openPurchase(
+//                userId, user.getEmail(), request.getEnvelopeId(),
+//                VasTransactionType.DATA, reference, plan.getNetworkName(), mobileNumber, plan, pricing);
+//
+//        PayeelordDataPurchaseResponse response;
+//        try {
+//            response = gateway.purchaseData(plan.getNetworkId(), plan.getDataId(), plan.getPlanType(), mobileNumber);
+//        } catch (PayeelordGateway.PayeelordAmbiguousResponseException e) {
+//            self.markAmbiguous(txn.getId(), e.getMessage());
+//            throw new RuntimeException(
+//                    "We couldn't immediately confirm your data purchase with the provider — " +
+//                    "it may still go through. We'll update your transaction history shortly. " +
+//                    "If it doesn't reflect within a few minutes, contact support with reference " + reference + ".", e);
+//        }
+//
+//        return self.finalizeDataResult(txn.getId(), response);
+//    }
+
+    // ── Read-only queries ─────────────────────────────────────────────────────
+
+    // ── Data purchase ─────────────────────────────────────────────────────────
+
     public PayeelordVasTransaction purchaseData(Long userId, DataPurchaseRequest request) {
         User user = loadUser(userId);
         verifyPin(user, request.getTransactionPin());
@@ -178,20 +221,34 @@ public class PayeelordVasService {
                 VasTransactionType.DATA, reference, plan.getNetworkName(), mobileNumber, plan, pricing);
 
         PayeelordDataPurchaseResponse response;
+
         try {
+            // ==================== DEBUG LOG (Safe) ====================
+            PayeelordDataPurchaseRequest reqForLog = new PayeelordDataPurchaseRequest(
+                    plan.getNetworkId(),
+                    String.valueOf(plan.getDataId()),
+                    plan.getPlanType(),
+                    mobileNumber
+            );
+
+            logger.info("[Payeelord] REQUEST JSON BEING SENT:\n{}",
+                    objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(reqForLog));
+            // ========================================================
+
             response = gateway.purchaseData(plan.getNetworkId(), plan.getDataId(), plan.getPlanType(), mobileNumber);
+
         } catch (PayeelordGateway.PayeelordAmbiguousResponseException e) {
             self.markAmbiguous(txn.getId(), e.getMessage());
             throw new RuntimeException(
                     "We couldn't immediately confirm your data purchase with the provider — " +
-                    "it may still go through. We'll update your transaction history shortly. " +
-                    "If it doesn't reflect within a few minutes, contact support with reference " + reference + ".", e);
+                            "it may still go through. We'll update your transaction history shortly. " +
+                            "If it doesn't reflect within a few minutes, contact support with reference " + reference + ".", e);
+        } catch (JsonProcessingException e) {
+            throw new RuntimeException(e);
         }
 
         return self.finalizeDataResult(txn.getId(), response);
     }
-
-    // ── Read-only queries ─────────────────────────────────────────────────────
 
     @Transactional(readOnly = true)
     public List<PayeelordVasTransaction> getRecentTransactions(Long userId) {
