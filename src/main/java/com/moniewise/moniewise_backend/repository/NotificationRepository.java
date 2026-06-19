@@ -41,6 +41,8 @@ public interface NotificationRepository extends JpaRepository<Notification, Long
 
     Optional<Notification> findByIdAndUserId(Long id, Long userId);
 
+    List<Notification> findByUserIdAndPushSentFalseAndCreatedAtAfter(Long userId, LocalDateTime after);
+
     void deleteByCreatedAtBefore(LocalDateTime threshold);
 
     @Modifying

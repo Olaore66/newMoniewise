@@ -160,11 +160,15 @@ public class NotificationService {
             String message = generateMessage(event.getType(), event.getParams());
             NotificationPriority priority = getPriority(event.getType());
             boolean shouldSaveToDatabase = shouldPersistToDatabase(event.getType());
+            boolean pushEligible = priority == NotificationPriority.HIGH || priority == NotificationPriority.MEDIUM;
+
+            Long userId = Long.valueOf(event.getUserId());
+            List<String> fcmTokens = pushEligible ? authSessionService.getActiveFcmTokens(userId) : List.of();
 
             // 1. Save to App Inbox (If important)
             if (shouldSaveToDatabase) {
                 Notification notification = new Notification();
-                notification.setUserId(Long.valueOf(event.getUserId()));
+                notification.setUserId(userId);
                 notification.setMessage(message);
                 notification.setType(event.getType());
                 notification.setCreatedAt(LocalDateTime.now());
@@ -172,14 +176,14 @@ public class NotificationService {
                 notification.setEnvelopeId(event.getContextId2());
                 notification.setRedirectUrl(event.getActionUrl());
                 notification.setRead(false);
+                // No active token right now (e.g. mid logout/re-login) — flag so
+                // redeliverMissedPushes() can catch up once a fresh token registers.
+                notification.setPushSent(!pushEligible || !fcmTokens.isEmpty());
                 notificationRepository.save(notification);
             }
 
             // 2. Send FCM Push (Only for HIGH or MEDIUM priority)
-            if (priority == NotificationPriority.HIGH || priority == NotificationPriority.MEDIUM) {
-                Long userId = Long.valueOf(event.getUserId());
-                List<String> fcmTokens = authSessionService.getActiveFcmTokens(userId);
-
+            if (pushEligible) {
                 if ("stub".equals(activeProfile)) {
                     logger.info("ðŸ›‘ [STUB MODE] Simulated Push Notification to User {}: {}", userId, message);
                 } else if (!fcmTokens.isEmpty()) {
@@ -193,6 +197,8 @@ public class NotificationService {
                     } else {
                         logger.warn("âš ï¸ FCM is not initialized. Cannot send push.");
                     }
+                } else {
+                    logger.info("[FCM] No active token for user {} - queued for redelivery on next token registration", userId);
                 }
             }
         } catch (Exception e) {
@@ -365,6 +371,8 @@ public class NotificationService {
 
         try {
             Long uId = Long.valueOf(userId);
+            boolean pushEligible = priority == NotificationPriority.HIGH;
+            List<String> fcmTokens = pushEligible ? authSessionService.getActiveFcmTokens(uId) : List.of();
 
             // Save to DB
             Notification notification = new Notification();
@@ -377,13 +385,14 @@ public class NotificationService {
             notification.setEnvelopeId(envelopeId);
             notification.setActionType(actionType);
             notification.setRedirectUrl(redirectUrl);
+            // No active token right now (e.g. mid logout/re-login) — flag so
+            // redeliverMissedPushes() can catch up once a fresh token registers.
+            notification.setPushSent(!pushEligible || !fcmTokens.isEmpty());
 
             notificationRepository.save(notification);
 
             // Send Push
-            if (priority == NotificationPriority.HIGH) {
-                List<String> fcmTokens = authSessionService.getActiveFcmTokens(uId);
-
+            if (pushEligible) {
                 if (!fcmTokens.isEmpty() && !"stub".equals(activeProfile)) {
                     if (firebaseMessaging != null) {
                         String dynamicTitle = getNotificationTitle(type);
@@ -836,6 +845,9 @@ public class NotificationService {
         String message = generateMessage(type, params);
         NotificationPriority priority = getPriority(type);
         boolean shouldSaveToDatabase = shouldPersistToDatabase(type);
+        boolean pushEligible = priority == NotificationPriority.HIGH || priority == NotificationPriority.MEDIUM;
+
+        List<String> fcmTokens = pushEligible ? getPushTokensForUser(userId) : List.of();
 
         if (shouldSaveToDatabase) {
             Notification notification = new Notification();
@@ -847,14 +859,16 @@ public class NotificationService {
             notification.setEnvelopeId(envelopeId);
             notification.setRedirectUrl(redirectUrl);
             notification.setRead(false);
+            // No active token right now (e.g. mid logout/re-login, the exact gap
+            // that drops disbursement pushes) — flag so redeliverMissedPushes()
+            // catches up the moment a fresh token registers.
+            notification.setPushSent(!pushEligible || !fcmTokens.isEmpty());
             notificationRepository.save(notification);
 
             logger.info("Saved in-app notification type {} for user {}", type, userId);
         }
 
-        if (priority == NotificationPriority.HIGH || priority == NotificationPriority.MEDIUM) {
-            List<String> fcmTokens = getPushTokensForUser(userId);
-
+        if (pushEligible) {
             logger.info("Attempting push notification type {} for user {} to {} token(s)",
                     type, userId, fcmTokens.size());
 
@@ -864,6 +878,8 @@ public class NotificationService {
                 for (String token : fcmTokens) {
                     sendFCMMessage(token, title, message, null, redirectUrl, type, userId, envelopeId);
                 }
+            } else if (fcmTokens.isEmpty()) {
+                logger.info("[FCM] No active token for user {} - queued for redelivery on next token registration", userId);
             }
         }
     }
@@ -893,6 +909,58 @@ public class NotificationService {
                 .filter(token -> token != null && !token.isBlank())
                 .distinct()
                 .toList();
+    }
+
+    /**
+     * Sweeps recent notifications that were saved to the inbox but never pushed
+     * (pushSent=false — no active FCM token at send time) and redelivers them.
+     *
+     * Called right after a fresh FCM token registers (see UserController's
+     * POST /users/fcm-token), which is exactly the moment a device that was
+     * unreachable becomes reachable again — e.g. a user who got auto-logged-out
+     * by session timeout right as a scheduled disbursement fired, then logged
+     * back in a few minutes later.
+     *
+     * Bounded to a 2-hour lookback so this never resurfaces stale notifications
+     * (and, on first deploy, never floods a user with their entire history —
+     * every pre-existing row defaults pushSent=false but falls outside the window).
+     */
+    @Transactional
+    public void redeliverMissedPushes(Long userId) {
+        try {
+            LocalDateTime cutoff = LocalDateTime.now().minusHours(2);
+            List<Notification> missed = notificationRepository
+                    .findByUserIdAndPushSentFalseAndCreatedAtAfter(userId, cutoff);
+            if (missed.isEmpty()) return;
+
+            List<String> fcmTokens = getPushTokensForUser(userId);
+            if (fcmTokens.isEmpty()) return;
+
+            int redelivered = 0;
+            for (Notification n : missed) {
+                NotificationPriority priority = getPriority(n.getType());
+                if (priority != NotificationPriority.HIGH && priority != NotificationPriority.MEDIUM) {
+                    continue;
+                }
+                try {
+                    String title = getNotificationTitle(n.getType());
+                    for (String token : fcmTokens) {
+                        sendFCMMessage(token, title, n.getMessage(), n.getActionType(),
+                                n.getRedirectUrl(), n.getType(), userId, n.getEnvelopeId());
+                    }
+                    n.setPushSent(true);
+                    redelivered++;
+                } catch (Exception e) {
+                    logger.warn("[FCM] Redelivery attempt failed for notification {} (user {})",
+                            n.getId(), userId, e);
+                }
+            }
+            notificationRepository.saveAll(missed);
+            logger.info("[FCM] Redelivery sweep for user {}: {} of {} candidate(s) sent",
+                    userId, redelivered, missed.size());
+        } catch (Exception e) {
+            logger.warn("[FCM] Failed to redeliver missed pushes for user {}", userId, e);
+        }
     }
 }
 

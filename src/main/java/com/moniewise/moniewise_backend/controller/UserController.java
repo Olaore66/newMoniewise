@@ -43,6 +43,7 @@ public class UserController {
     private final JwtUtil jwtUtil;
     private final AuthSessionService authSessionService;
     private final AbuseProtectionService abuseProtectionService;
+    private final com.moniewise.moniewise_backend.service.NotificationService notificationService;
     private final TrustedDeviceRepository trustedDeviceRepository;
 
     @GetMapping("/me")
@@ -187,6 +188,18 @@ public class UserController {
             String email = authentication.getName();
             String sessionId = extractSessionId(authHeader);
             authSessionService.attachFcmToken(email, sessionId, token);
+
+            // This device just became reachable — catch up on anything that was
+            // saved to the inbox but never pushed because no token was active
+            // at the time (e.g. an auto-logout that happened to land on a
+            // scheduled disbursement).
+            try {
+                userRepository.findByEmail(email)
+                        .ifPresent(user -> notificationService.redeliverMissedPushes(user.getId()));
+            } catch (Exception e) {
+                // Best-effort — never block the token-registration response on this.
+            }
+
             return ResponseEntity.ok(Map.of("message", "FCM token updated successfully"));
         } catch (IllegalArgumentException | IllegalStateException e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
