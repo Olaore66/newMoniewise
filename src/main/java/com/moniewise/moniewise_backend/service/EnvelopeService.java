@@ -1104,6 +1104,7 @@ public class EnvelopeService {
                 .transactionType(TransactionType.ENVELOPE_TO_EXTERNAL)
                 .status(TransactionStatus.PENDING)
                 .reference(myReference)
+                .providerName(providerName)
                 .description(description)
                 .createdAt(LocalDateTime.now())
                 .build();

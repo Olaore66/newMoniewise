@@ -1553,6 +1553,7 @@ public class WalletService {
                     .reference(withdrawal.getClientReference())
                     .status(TransactionStatus.PROCESSING)
                     .transactionType(TransactionType.WALLET_WITHDRAWAL)
+                    .providerName(wallet.getProviderName())
                     .description(withdrawal.getNarration() + " | Recipient receives ₦" + formatMoney(withdrawal.getRecipientReceives()))
                     .createdAt(LocalDateTime.now())
                     .build();

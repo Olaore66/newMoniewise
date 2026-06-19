@@ -369,6 +369,25 @@ public class TransactionService {
         return "Wisemonie User";
     }
 
+    /**
+     * Older ENVELOPE_TO_EXTERNAL / WALLET_WITHDRAWAL rows were written before
+     * providerName was captured on the transaction log itself (a write-side
+     * gap now fixed in EnvelopeService / WalletService). For those legacy
+     * rows, fall back to the user's wallet provider — a user only ever has
+     * one BaaS provider, so this reliably recovers the correct value without
+     * needing a data migration.
+     */
+    private String resolveProviderName(TransactionLog transaction) {
+        String direct = transaction.getProviderName();
+        if (direct != null && !direct.isBlank()) {
+            return direct;
+        }
+        return userRepository.findById(transaction.getUserId())
+                .map(User::getWallet)
+                .map(Wallet::getProviderName)
+                .orElse(null);
+    }
+
     private TransactionDetailResponse mapToDetailResponse(TransactionLog transaction) {
         String sourceName = getEnvelopeName(transaction.getSourceEnvelopeId());
         String targetName = getEnvelopeName(transaction.getTargetEnvelopeId());
@@ -387,7 +406,7 @@ public class TransactionService {
         BigDecimal fee = transaction.getFee() != null ? transaction.getFee() : BigDecimal.ZERO;
         if ((transaction.getTransactionType() == ENVELOPE_TO_EXTERNAL
                 || transaction.getTransactionType() == WALLET_WITHDRAWAL)
-                && RubiesGateway.PROVIDER_NAME.equalsIgnoreCase(transaction.getProviderName())) {
+                && RubiesGateway.PROVIDER_NAME.equalsIgnoreCase(resolveProviderName(transaction))) {
             fee = fee.add(markupCalculatorService.calculateNipFee(absoluteAmount));
         }
         BigDecimal netAmount = debit ? absoluteAmount.add(fee) : absoluteAmount.subtract(fee);
