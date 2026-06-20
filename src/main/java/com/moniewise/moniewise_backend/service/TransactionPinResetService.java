@@ -3,6 +3,7 @@ package com.moniewise.moniewise_backend.service;
 import com.moniewise.moniewise_backend.entity.TransactionPinResetToken;
 import com.moniewise.moniewise_backend.repository.TransactionPinResetTokenRepository;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.security.SecureRandom;
 import java.time.LocalDateTime;
@@ -17,6 +18,7 @@ public class TransactionPinResetService {
         this.tokenRepository = tokenRepository;
     }
 
+    @Transactional
     public TransactionPinResetToken createResetToken(String email) {
         SecureRandom secureRandom = new SecureRandom();
         int otpCode = 100000 + secureRandom.nextInt(900000);
@@ -35,6 +37,7 @@ public class TransactionPinResetService {
         return findValidToken(email, token).isPresent();
     }
 
+    @Transactional
     public void markTokenAsUsed(String email, String token) {
         TransactionPinResetToken resetToken = findValidToken(email, token)
                 .orElseThrow(() -> new IllegalArgumentException("Invalid or expired OTP"));
