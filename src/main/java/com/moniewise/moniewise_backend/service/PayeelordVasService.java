@@ -382,8 +382,8 @@ public class PayeelordVasService {
             logger.info("[PayeelordVAS] Data purchase SUCCESSFUL: ref={} providerTxnId={}",
                     txn.getReference(), response.getTransactionId());
             notifyAsync(txn.getUserId(), String.format(
-                            "%s sent to %s on %s. Reference: %s",
-                            planLabel, txn.getMobileNumber(), txn.getNetwork(), txn.getReference()),
+                            "₦%,.2f data (%s) sent to %s on %s. Reference: %s",
+                            txn.getSellingAmount(), planLabel, txn.getMobileNumber(), txn.getNetwork(), txn.getReference()),
                     NotificationType.DATA_PURCHASE_SUCCESS);
             return txn;
         }
