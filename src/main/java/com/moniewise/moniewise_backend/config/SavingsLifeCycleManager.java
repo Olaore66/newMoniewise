@@ -19,6 +19,8 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
+import java.time.temporal.ChronoUnit;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -81,6 +83,18 @@ public class SavingsLifeCycleManager {
                     }
 
                     // ==========================================
+                    // 1.5 THE HEADS-UP CALL (7 days to maturity)
+                    // ==========================================
+                    if (!goal.isMaturityReminderSent()) {
+                        long daysUntilMaturity = ChronoUnit.DAYS.between(today, goal.getMaturityDate());
+                        if (daysUntilMaturity > 0 && daysUntilMaturity <= 7) {
+                            sendMaturingSoonEmail(goal, daysUntilMaturity);
+                            goal.setMaturityReminderSent(true);
+                            isUpdated = true;
+                        }
+                    }
+
+                    // ==========================================
                     // 2. THE ALARM CLOCK (Check for Maturity)
                     // ==========================================
                     if (!today.isBefore(goal.getMaturityDate())) { // If today is >= maturity date
@@ -109,6 +123,38 @@ public class SavingsLifeCycleManager {
         } while (page.hasNext());
 
         logger.info("💤 Savings Engine finished daily processing.");
+    }
+
+    /**
+     * Fires the "your savings is maturing soon" email, once per goal, ~7 days
+     * (or fewer, if the cron missed a day) before maturityDate.
+     */
+    private void sendMaturingSoonEmail(SavingsGoal goal, long daysRemaining) {
+        var user = goal.getUser();
+        if (user.getEmail() == null || user.getEmail().isBlank()) return;
+
+        String firstName = user.getName();
+        if (firstName == null || firstName.isBlank()) {
+            String username = user.getEmail().split("@")[0];
+            firstName = username.isEmpty() ? "there" : username.substring(0, 1).toUpperCase() + username.substring(1);
+        }
+
+        BigDecimal projectedPayout = goal.getCurrentBalance().add(goal.getAccruedInterest());
+        String maturityDateLabel = goal.getMaturityDate().format(DateTimeFormatter.ofPattern("d MMMM yyyy"));
+
+        notificationService.sendSavingsMaturingSoonEmail(
+                user.getEmail(),
+                firstName,
+                goal.getName(),
+                goal.getCurrentBalance(),
+                goal.getAccruedInterest(),
+                projectedPayout,
+                maturityDateLabel,
+                (int) daysRemaining
+        );
+
+        logger.info("📧 Sent 'maturing soon' email for Savings Goal '{}' (ID: {}) to {} — {} day(s) left",
+                goal.getName(), goal.getId(), user.getEmail(), daysRemaining);
     }
 
     /**

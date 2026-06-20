@@ -43,6 +43,7 @@ public enum NotificationType {
     DISBURSEMENT_REFUNDED,
     BUDGET_UNALLOCATED_REFUNDED,
     SAVINGS_MATURED,
+    SAVINGS_MATURING_SOON,     // 7 days left
 
     // ── Payeelord VAS (airtime & data) ──────────────────────────────────────
     AIRTIME_PURCHASE_SUCCESS,

@@ -701,6 +701,50 @@ public class NotificationService {
         }
     }
 
+    /**
+     * Sent once, ~7 days before a savings goal's maturityDate (see
+     * SavingsLifeCycleManager — guarded by SavingsGoal.maturityReminderSent so
+     * it never goes out twice for the same goal).
+     */
+    @Async
+    public void sendSavingsMaturingSoonEmail(String email, String firstName, String goalName,
+                                              BigDecimal principal, BigDecimal accruedInterest,
+                                              BigDecimal projectedPayout, String maturityDateLabel,
+                                              int daysRemaining) {
+        if ("stub".equals(activeProfile) || mailSender == null) {
+            logger.info("[STUB] Savings maturing-soon email for '{}' ({} day(s) left) to {}", goalName, daysRemaining, email);
+            return;
+        }
+        try {
+            Context context = new Context();
+            context.setVariable("logoUrl", logoUrl());
+            context.setVariable("firstName", firstName != null && !firstName.isBlank() ? firstName : "there");
+            context.setVariable("goalName", goalName);
+            context.setVariable("principal", formatAmount(principal));
+            context.setVariable("accruedInterest", formatAmount(accruedInterest));
+            context.setVariable("projectedPayout", formatAmount(projectedPayout));
+            context.setVariable("maturityDateLabel", maturityDateLabel);
+            context.setVariable("daysRemaining", daysRemaining);
+
+            String htmlContent = templateEngine.process("savings-maturing-soon", context);
+
+            MimeMessage mimeMessage = mailSender.createMimeMessage();
+            MimeMessageHelper helper = new MimeMessageHelper(mimeMessage, true);
+
+            helper.setFrom(fromEmail);
+            helper.setTo(email);
+            helper.setSubject("⏳ Your '" + goalName + "' savings is maturing soon");
+            helper.setText(htmlContent, true);
+            attachLogo(helper);
+
+            mailSender.send(mimeMessage);
+            logger.info("Sent savings-maturing-soon email for '{}' ({} day(s) left) to {}",
+                    goalName, daysRemaining, email);
+        } catch (MessagingException e) {
+            logger.error("Failed to send savings-maturing-soon email to {}", email, e);
+        }
+    }
+
     private String buildOnboardingReminderSubject(int daysSinceSignup, boolean urgent) {
         if (urgent) {
             return "⏳ Your Wisemonie account is waiting — don't lose your spot";
