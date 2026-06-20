@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Your savings has matured</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+      background-color: #F2F4F7;
+      padding: 40px 16px;
+      -webkit-text-size-adjust: none;
+      color: #344054;
+    }
+    .wrapper { max-width: 580px; margin: 0 auto; }
+
+    .logo-bar { text-align: center; padding-bottom: 24px; }
+    .logo-bar img { max-width: 160px; }
+
+    .card {
+      background: #FFFFFF;
+      border: 1px solid #E4E7EC;
+      border-radius: 12px;
+      overflow: hidden;
+    }
+
+    .card-header {
+      background-color: #0F4C4C;
+      padding: 32px 40px;
+      text-align: center;
+    }
+    .card-header .tag {
+      display: inline-block;
+      background-color: rgba(199, 243, 107, 0.15);
+      color: #C7F36B;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      padding: 4px 12px;
+      border-radius: 100px;
+      margin-bottom: 14px;
+    }
+    .card-header h1 { color: #FFFFFF; font-size: 22px; font-weight: 700; letter-spacing: -0.3px; }
+    .card-header p  { color: #A7C8C0; font-size: 14px; margin-top: 6px; }
+
+    .card-body { padding: 36px 40px; }
+    .greeting {
+      font-size: 16px;
+      color: #101828;
+      font-weight: 600;
+      margin-bottom: 12px;
+    }
+    .body-text {
+      font-size: 15px;
+      color: #475467;
+      line-height: 1.7;
+      margin-bottom: 22px;
+    }
+    .body-text strong { color: #101828; }
+
+    .summary {
+      background: #F8FCFA;
+      border: 1px solid #E0ECE7;
+      border-radius: 10px;
+      padding: 18px 20px;
+      margin-bottom: 24px;
+    }
+    .summary-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      padding: 6px 0;
+    }
+    .summary-row .label { font-size: 13px; color: #667085; }
+    .summary-row .value { font-size: 14px; color: #101828; font-weight: 600; }
+    .summary-row.total { border-top: 1px solid #E0ECE7; margin-top: 6px; padding-top: 12px; }
+    .summary-row.total .label { font-size: 13px; color: #0F4C4C; font-weight: 700; }
+    .summary-row.total .value { font-size: 18px; color: #0F4C4C; font-weight: 800; }
+
+    .divider { border: none; border-top: 1px solid #F2F4F7; margin: 24px 0; }
+
+    .info-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+    .info-icon {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      background: #F0FAF5;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 15px;
+      flex-shrink: 0;
+      line-height: 32px;
+      text-align: center;
+    }
+    .info-text { font-size: 14px; color: #475467; line-height: 1.6; }
+    .info-text strong { color: #101828; font-weight: 600; }
+
+    .card-footer {
+      border-top: 1px solid #F2F4F7;
+      padding: 20px 40px;
+      text-align: center;
+    }
+    .footer-brand { font-size: 13px; font-weight: 700; color: #0F4C4C; margin-bottom: 4px; }
+    .footer-text  { font-size: 12px; color: #98A2B3; line-height: 1.6; }
+    .footer-text a { color: #1F9E89; text-decoration: none; }
+
+    .outer-footer {
+      text-align: center;
+      margin-top: 24px;
+      font-size: 12px;
+      color: #98A2B3;
+    }
+
+    @media only screen and (max-width: 600px) {
+      body { padding: 20px 12px; }
+      .card-header { padding: 24px 24px; }
+      .card-body   { padding: 24px 24px; }
+      .card-footer { padding: 18px 24px; }
+    }
+  </style>
+</head>
+<body>
+<div class="wrapper">
+
+  <div class="logo-bar">
+    <img th:src="${logoUrl}" src="https://wisemonie.app/images/wisemonie-logo.png" alt="Wisemonie" style="height: 44px; width: auto; display: inline-block;">
+  </div>
+
+  <div class="card">
+
+    <div class="card-header">
+      <div class="tag">Matured 🎉</div>
+      <h1><span th:text="${goalName}">Wedding</span> is ready</h1>
+      <p>Your savings goal just matured</p>
+    </div>
+
+    <div class="card-body">
+
+      <p class="greeting">Hey <span th:text="${firstName}">there</span>,</p>
+
+      <p class="body-text">
+        Congratulations — <strong th:text="${goalName}">this goal</strong> has officially matured.
+        Every naira you set aside, plus the interest it earned along the way, is now ready for you.
+      </p>
+
+      <div class="summary">
+        <div class="summary-row">
+          <span class="label">Principal saved</span>
+          <span class="value">&#8358;<span th:text="${principal}">0.00</span></span>
+        </div>
+        <div class="summary-row">
+          <span class="label">Interest earned</span>
+          <span class="value">&#8358;<span th:text="${accruedInterest}">0.00</span></span>
+        </div>
+        <div class="summary-row total">
+          <span class="label">Total payout</span>
+          <span class="value">&#8358;<span th:text="${totalPayout}">0.00</span></span>
+        </div>
+      </div>
+
+      <p class="body-text" style="margin-bottom: 10px;">
+        <strong>Open the Wisemonie app → Savings tab</strong> and you'll find two ways to take it from here:
+      </p>
+
+      <div class="info-row">
+        <div class="info-icon">🏦</div>
+        <div class="info-text">
+          <strong>Send to your bank</strong><br>
+          Tap "Bank" on the goal card — it moves the full payout into your wallet, then walks you
+          straight into sending it to your linked bank account.
+        </div>
+      </div>
+      <div class="info-row">
+        <div class="info-icon">👛</div>
+        <div class="info-text">
+          <strong>Keep it in your wallet</strong><br>
+          Tap "Wallet" to bring the payout into your Wisemonie wallet — ready to spend, fund a budget,
+          or seed a new savings goal whenever you like.
+        </div>
+      </div>
+
+      <p class="body-text" style="margin-top: 4px; margin-bottom: 0;">
+        Either way, the money is yours and waiting. — The Wisemonie Team
+      </p>
+
+    </div>
+
+    <div class="card-footer">
+      <div class="footer-brand">Wisemonie</div>
+      <p class="footer-text">
+        You're receiving this because a savings goal on your Wisemonie account just matured.<br>
+        Questions? Reach us at <a href="mailto:wisemoniehelpdesk@gmail.com">wisemoniehelpdesk@gmail.com</a>
+      </p>
+    </div>
+
+  </div>
+
+  <div class="outer-footer">
+    &copy; 2026 Wisemonie. All rights reserved. &nbsp;·&nbsp; Ibadan, Nigeria
+  </div>
+
+</div>
+</body>
+</html>

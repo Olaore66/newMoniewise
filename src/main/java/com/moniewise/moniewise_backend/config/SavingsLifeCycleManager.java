@@ -104,8 +104,9 @@ public class SavingsLifeCycleManager {
                         logger.info("🎉 Savings Goal '{}' (ID: {}) for User {} has MATURED!", 
                                 goal.getName(), goal.getId(), goal.getUser().getId());
 
-                        // Send Push Notification
+                        // Send Push Notification + Email
                         sendMaturityNotification(goal);
+                        sendMaturedEmail(goal);
                     }
 
                     // Save if changes were made
@@ -155,6 +156,32 @@ public class SavingsLifeCycleManager {
 
         logger.info("📧 Sent 'maturing soon' email for Savings Goal '{}' (ID: {}) to {} — {} day(s) left",
                 goal.getName(), goal.getId(), user.getEmail(), daysRemaining);
+    }
+
+    /**
+     * Fires the "your savings has matured" email — distinct from
+     * sendMaturityNotification() below, which only sends the push/in-app one.
+     */
+    private void sendMaturedEmail(SavingsGoal goal) {
+        var user = goal.getUser();
+        if (user.getEmail() == null || user.getEmail().isBlank()) return;
+
+        String firstName = user.getName();
+        if (firstName == null || firstName.isBlank()) {
+            String username = user.getEmail().split("@")[0];
+            firstName = username.isEmpty() ? "there" : username.substring(0, 1).toUpperCase() + username.substring(1);
+        }
+
+        BigDecimal totalPayout = goal.getCurrentBalance().add(goal.getAccruedInterest());
+
+        notificationService.sendSavingsMaturedEmail(
+                user.getEmail(),
+                firstName,
+                goal.getName(),
+                goal.getCurrentBalance(),
+                goal.getAccruedInterest(),
+                totalPayout
+        );
     }
 
     /**

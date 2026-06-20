@@ -745,6 +745,46 @@ public class NotificationService {
         }
     }
 
+    /**
+     * Sent once, the day a savings goal's status flips to MATURED (see
+     * SavingsLifeCycleManager). Distinct from sendSavingsMaturingSoonEmail()
+     * above, which fires a week earlier as a heads-up, not on maturity itself.
+     */
+    @Async
+    public void sendSavingsMaturedEmail(String email, String firstName, String goalName,
+                                         BigDecimal principal, BigDecimal accruedInterest,
+                                         BigDecimal totalPayout) {
+        if ("stub".equals(activeProfile) || mailSender == null) {
+            logger.info("[STUB] Savings matured email for '{}' to {}", goalName, email);
+            return;
+        }
+        try {
+            Context context = new Context();
+            context.setVariable("logoUrl", logoUrl());
+            context.setVariable("firstName", firstName != null && !firstName.isBlank() ? firstName : "there");
+            context.setVariable("goalName", goalName);
+            context.setVariable("principal", formatAmount(principal));
+            context.setVariable("accruedInterest", formatAmount(accruedInterest));
+            context.setVariable("totalPayout", formatAmount(totalPayout));
+
+            String htmlContent = templateEngine.process("savings-matured", context);
+
+            MimeMessage mimeMessage = mailSender.createMimeMessage();
+            MimeMessageHelper helper = new MimeMessageHelper(mimeMessage, true);
+
+            helper.setFrom(fromEmail);
+            helper.setTo(email);
+            helper.setSubject("🎉 Your '" + goalName + "' savings has matured!");
+            helper.setText(htmlContent, true);
+            attachLogo(helper);
+
+            mailSender.send(mimeMessage);
+            logger.info("Sent savings-matured email for '{}' to {}", goalName, email);
+        } catch (MessagingException e) {
+            logger.error("Failed to send savings-matured email to {}", email, e);
+        }
+    }
+
     private String buildOnboardingReminderSubject(int daysSinceSignup, boolean urgent) {
         if (urgent) {
             return "⏳ Your Wisemonie account is waiting — don't lose your spot";
