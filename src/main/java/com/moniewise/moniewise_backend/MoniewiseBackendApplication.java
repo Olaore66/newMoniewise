@@ -1,5 +1,7 @@
 package com.moniewise.moniewise_backend;
 
+import java.util.TimeZone;
+
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.builder.SpringApplicationBuilder;
@@ -25,9 +27,15 @@ public class MoniewiseBackendApplication extends SpringBootServletInitializer {
 	}
 
 	public static void main(String[] args) {
+		// The JVM's default timezone is otherwise UTC (Render's container default).
+		// Every plain LocalDateTime.now() call across the codebase (notifications,
+		// transaction logs, etc.) reads this default, then gets serialized to the
+		// client with no offset/Z suffix — so Flutter's DateTime.parse() treats it
+		// as already being device-local time. Since every user is in Nigeria,
+		// pinning the JVM default here fixes every such call site at once instead
+		// of touching each one individually.
+		TimeZone.setDefault(TimeZone.getTimeZone("Africa/Lagos"));
 		SpringApplication.run(MoniewiseBackendApplication.class, args);
-
-
 	}
 
 	@Bean
