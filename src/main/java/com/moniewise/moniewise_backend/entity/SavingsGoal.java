@@ -54,7 +54,7 @@ public class SavingsGoal {
     private SavingsStatus status = SavingsStatus.ACTIVE;
 
     /** Set once the "maturing in a week" email has gone out, so the daily job never sends it twice. */
-    @Column(nullable = false)
+    @Column(nullable = false, columnDefinition = "boolean default false")
     private boolean maturityReminderSent = false;
 
     @CreationTimestamp
