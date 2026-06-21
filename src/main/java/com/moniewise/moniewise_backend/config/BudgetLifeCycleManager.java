@@ -245,9 +245,10 @@ public class BudgetLifeCycleManager {
     @Scheduled(cron = "0 0 9 * * ?", zone = "Africa/Lagos")
     @Transactional(readOnly = true)
     public void notifyExpiringBudgets() {
-        LocalDate threeDaysFromNow = fetchCurrentDateTimeFromDatabase().toLocalDate().plusDays(3);
-        List<Budget> nearingEnd = budgetRepository.findByStatusAndEndDate(BudgetStatus.ACTIVE, threeDaysFromNow);
+        LocalDate today = fetchCurrentDateTimeFromDatabase().toLocalDate();
+        LocalDate threeDaysFromNow = today.plusDays(3);
 
+        List<Budget> nearingEnd = budgetRepository.findByStatusAndEndDate(BudgetStatus.ACTIVE, threeDaysFromNow);
         for (Budget budget : nearingEnd) {
             Map<String, Object> payload = new HashMap<>();
             payload.put("budgetName", budget.getName() != null ? budget.getName() : "Your Budget");
@@ -262,6 +263,25 @@ public class BudgetLifeCycleManager {
             outboxEventRepository.save(event);
         }
         logger.info("Sent 3-day warning notifications to {} budgets.", nearingEnd.size());
+
+        // Same-day alert — distinct from the 3-day warning above. Budget stays
+        // ACTIVE through its actual endDate (see isBudgetPastEndDate/processBudgets),
+        // so this fires the day everything still works, not after it's already closed.
+        List<Budget> endingToday = budgetRepository.findByStatusAndEndDate(BudgetStatus.ACTIVE, today);
+        for (Budget budget : endingToday) {
+            Map<String, Object> payload = new HashMap<>();
+            payload.put("budgetName", budget.getName() != null ? budget.getName() : "Your Budget");
+            OutboxEvent event = buildOutboxEvent(
+                    NotificationType.BUDGET_ENDS_TODAY,
+                    budget.getUser().getId(),
+                    budget.getId(),
+                    null,
+                    payload
+            );
+
+            outboxEventRepository.save(event);
+        }
+        logger.info("Sent 'ends today' notifications to {} budgets.", endingToday.size());
     }
 
     private void refreshDynamicTasks(LocalDate today) {

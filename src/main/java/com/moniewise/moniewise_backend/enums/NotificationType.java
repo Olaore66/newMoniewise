@@ -20,6 +20,7 @@ public enum NotificationType {
     ENVELOPE_UPDATED,
     ENVELOPE_DELETED,
     BUDGET_END_SOON,           // 3 days left
+    BUDGET_ENDS_TODAY,         // 0 days left — the actual last day
     DISBURSEMENT_SUCCESS,      // Money released
     DISBURSEMENT_FAILED,       // Grace period expired
     LIMIT_REACHED,             // Daily/weekly cap

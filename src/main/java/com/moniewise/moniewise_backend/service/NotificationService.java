@@ -226,7 +226,7 @@ public class NotificationService {
                     LIMIT_REACHED, BUDGET_LIMIT_WARNING, EMERGENCY_USED,
                     BUDGET_CREATION, BUDGET_COMPLETED,
                     ENVELOPE_UPDATED, ENVELOPE_LOCKED, ENVELOPE_UNLOCKED,
-                    BUDGET_END, BUDGET_END_SOON, SYSTEM -> true;
+                    BUDGET_END, BUDGET_END_SOON, BUDGET_ENDS_TODAY, SYSTEM -> true;
 
             default -> true;
         };
@@ -307,6 +307,10 @@ public class NotificationService {
                 case EXPIRED_DISBURSEMENT -> {
                     String name = safeText(params.get("envelopeName"), "selected");
                     yield "The spending window for your '" + name + "' envelope has closed. The funds remain safely in your vault.";
+                }
+                case BUDGET_ENDS_TODAY -> {
+                    String name = safeText(params.get("budgetName"), "your");
+                    yield "Today is the last day of your '" + name + "' budget.";
                 }
                 default -> "You have a new update regarding your account.";
             };
@@ -563,6 +567,7 @@ public class NotificationService {
             case ENVELOPE_LOCKED -> "Envelope Locked 🔒";
             case BUDGET_END, BUDGET_EXPIRED -> "Budget Ended 🏁";
             case BUDGET_END_SOON, BUDGET_ENDING_SOON -> "Budget Ending Soon ⏳";
+            case BUDGET_ENDS_TODAY -> "Budget Ends Today ⏰";
             case MATURITY_ALERT -> "Maturity Alert 📅";
             case WEEKLY_SUMMARY -> "Weekly Recap 📊";
             case WELCOME -> "Welcome to Wisemonie 👋";
@@ -601,7 +606,7 @@ public class NotificationService {
                     LOW_BALANCE_WARNING, INSUFFICIENT_BALANCE, DISBURSEMENT, DISBURSEMENT_SUCCESS, DISBURSEMENT_READY, BUDGET_COMPLETED,
                     ADMIN_PAYEELORD_LOW_BALANCE -> NotificationPriority.HIGH;
 
-            case BUDGET_LIMIT_WARNING, BUDGET_END_SOON, DISBURSEMENT_FAILED,
+            case BUDGET_LIMIT_WARNING, BUDGET_END_SOON, BUDGET_ENDS_TODAY, DISBURSEMENT_FAILED,
                     GOAL_ACHIEVED, WELCOME -> NotificationPriority.MEDIUM;
             default -> NotificationPriority.LOW;
         };
