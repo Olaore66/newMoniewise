@@ -1342,8 +1342,11 @@ public class EnvelopeService {
 
         // Compute effective duration so the condition validator can reject
         // plans that make no sense for the budget length (e.g. weekly on a 1-day budget).
+        // +1: the Flutter date picker counts the start day as day 1 (e.g. today
+        // -> tomorrow = 2 days), but ChronoUnit.DAYS.between() is exclusive (1 day)
+        // - without the +1 this disagreed with the duration the user actually picked.
         long budgetDurationDays = (budget.getStartDate() != null && budget.getEndDate() != null)
-                ? java.time.temporal.ChronoUnit.DAYS.between(budget.getStartDate(), budget.getEndDate())
+                ? java.time.temporal.ChronoUnit.DAYS.between(budget.getStartDate(), budget.getEndDate()) + 1
                 : (budget.getDurationDays() != null ? budget.getDurationDays() : 30L);
         if (budgetDurationDays <= 0) budgetDurationDays = 1;
 
@@ -1450,8 +1453,10 @@ public class EnvelopeService {
         Envelope envelope = envelopeRepository.findByIdAndBudget_UserEmail(envelopeId, email)
                 .orElseThrow(() -> new EntityNotFoundException("Envelope not found or not accessible"));
         Budget b = envelope.getBudget();
+        // +1: see createEnvelope() above - matches the frontend's inclusive
+        // day count instead of ChronoUnit.DAYS.between()'s exclusive one.
         long updDuration = (b.getStartDate() != null && b.getEndDate() != null)
-                ? java.time.temporal.ChronoUnit.DAYS.between(b.getStartDate(), b.getEndDate())
+                ? java.time.temporal.ChronoUnit.DAYS.between(b.getStartDate(), b.getEndDate()) + 1
                 : (b.getDurationDays() != null ? b.getDurationDays() : 30L);
         if (updDuration <= 0) updDuration = 1;
         validateEnvelopeConditions(request, envelope.getAmount(), (int) updDuration);

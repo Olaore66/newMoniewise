@@ -515,7 +515,10 @@ public class BudgetService {
 
         // Duration — read max from system_config so it can be changed without a deploy.
         // Default 730 days (2 years) supports goal budgets and annual savings plans.
-        long durationDays = ChronoUnit.DAYS.between(request.getStartDate(), request.getEndDate());
+        // +1: the Flutter date picker counts the start day as day 1 (today -> tomorrow
+        // = 2 days), but ChronoUnit.DAYS.between() is exclusive (1 day) - without the
+        // +1 this disagreed with what the user picked and under-counted the fee.
+        long durationDays = ChronoUnit.DAYS.between(request.getStartDate(), request.getEndDate()) + 1;
         if (durationDays <= 0) durationDays = 1;
 
         int maxDurationDays = systemConfig.getInt(SystemConfigService.BUDGET_MAX_DURATION_DAYS, 730);
