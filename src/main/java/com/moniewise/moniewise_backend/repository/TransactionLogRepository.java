@@ -27,7 +27,7 @@ public interface TransactionLogRepository extends JpaRepository<TransactionLog, 
     Page<TransactionLog> findByBudgetIdOrderByCreatedAtDesc(Long budgetId, Pageable pageable);
 
     @Query("""
-        SELECT t FROM TransactionLog t 
+        SELECT t FROM TransactionLog t
         WHERE (t.sourceEnvelopeId = :envelopeId OR t.targetEnvelopeId = :envelopeId)
           AND t.userId = :userId
         ORDER BY t.createdAt DESC
@@ -35,6 +35,23 @@ public interface TransactionLogRepository extends JpaRepository<TransactionLog, 
     Page<TransactionLog> findByEnvelopeId(
             @Param("userId") Long userId,
             @Param("envelopeId") Long envelopeId,
+            Pageable pageable);
+
+    // Same as findByEnvelopeId but restricted to a caller-supplied set of
+    // user-visible types (mirrors findUserVisibleTransactions) — used for the
+    // envelope-scoped transaction history screen, which must not surface
+    // internal-only transaction types.
+    @Query("""
+        SELECT t FROM TransactionLog t
+        WHERE (t.sourceEnvelopeId = :envelopeId OR t.targetEnvelopeId = :envelopeId)
+          AND t.userId = :userId
+          AND t.transactionType IN :types
+        ORDER BY t.createdAt DESC
+        """)
+    Page<TransactionLog> findByEnvelopeIdAndTransactionTypeIn(
+            @Param("userId") Long userId,
+            @Param("envelopeId") Long envelopeId,
+            @Param("types") Set<TransactionType> types,
             Pageable pageable);
 
     Page<TransactionLog> findByUserIdAndCreatedAtBetweenOrderByCreatedAtDesc(

@@ -34,9 +34,13 @@ public class TransactionController {
     public ResponseEntity<Page<TransactionListResponse>> getUserTransactions(
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "30") int size,
+            @RequestParam(required = false) Long envelopeId,
             @AuthenticationPrincipal UserDetails userDetails) {
 
         Long userId = getUserId(userDetails);
+        if (envelopeId != null) {
+            return ResponseEntity.ok(transactionService.getTransactionsForEnvelope(userId, envelopeId, page, size));
+        }
         return ResponseEntity.ok(transactionService.getTransactionsForUser(userId, page, size));
     }
 

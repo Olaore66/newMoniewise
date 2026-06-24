@@ -195,6 +195,32 @@ public class TransactionService {
         return transactionPage.map(t -> mapToListResponse(t, envelopeNames));
     }
 
+    /** Same shape as {@link #getTransactionsForUser}, scoped to one envelope (source or target). */
+    public Page<TransactionListResponse> getTransactionsForEnvelope(Long userId, Long envelopeId, int page, int size) {
+        int boundedSize = Math.min(size, 100);
+        Pageable pageable = PageRequest.of(page, boundedSize);
+        Page<TransactionLog> transactionPage =
+                transactionLogRepo.findByEnvelopeIdAndTransactionTypeIn(userId, envelopeId, USER_VISIBLE_TYPES, pageable);
+
+        Set<Long> envelopeIds = new HashSet<>();
+        transactionPage.getContent().forEach(t -> {
+            if (t.getSourceEnvelopeId() != null) {
+                envelopeIds.add(t.getSourceEnvelopeId());
+            }
+            if (t.getTargetEnvelopeId() != null) {
+                envelopeIds.add(t.getTargetEnvelopeId());
+            }
+        });
+
+        Map<Long, String> envelopeNames = new HashMap<>();
+        if (!envelopeIds.isEmpty()) {
+            envelopeRepo.findAllById(envelopeIds)
+                    .forEach(envelope -> envelopeNames.put(envelope.getId(), envelope.getName()));
+        }
+
+        return transactionPage.map(t -> mapToListResponse(t, envelopeNames));
+    }
+
     public TransactionDetailResponse getTransactionDetail(Long transactionId, Long userId) {
         TransactionLog log = transactionLogRepo.findById(transactionId)
                 .orElseThrow(() -> new RuntimeException("Transaction not found"));
