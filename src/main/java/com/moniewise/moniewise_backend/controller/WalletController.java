@@ -131,22 +131,25 @@ public class WalletController {
     /**
      * GET: "Transferred before" auto-suggest list for the Transfer to Bank screen.
      *
-     * <p>Returns up to 10 distinct destination accounts the authenticated user
-     * has successfully sent money to before, most-recent-first — derived live
-     * from their own COMPLETED withdrawal history (see
-     * {@link WalletService#getRecentRecipients}). The frontend shows these as
-     * a dropdown while the user types the account number; selecting one
-     * auto-fills bank + account number + name.
+     * <p>Returns up to {@code limit} distinct destination accounts the
+     * authenticated user has successfully sent money to before, most-recent-
+     * first — derived live from their own COMPLETED withdrawal history (see
+     * {@link WalletService#getRecentRecipients}). Backs both the quick top-3
+     * dropdown on the Transfer to Bank screen and the "see more" full-list
+     * screen — same data, just a different limit.
      *
      * <p>No rate limiting — this purely reads the user's own transaction
      * history (same trust level as {@code GET /wallets/withdrawals}), no
      * external calls or enumeration risk like {@code resolve-account} has.
      */
     @GetMapping("/recent-recipients")
-    public ResponseEntity<?> getRecentRecipients(Authentication authentication) {
+    public ResponseEntity<?> getRecentRecipients(
+            Authentication authentication,
+            @RequestParam(defaultValue = "10") int limit) {
         try {
             Long userId = currentUser(authentication.getName()).getId();
-            return ResponseEntity.ok(walletService.getRecentRecipients(userId));
+            int clamped = Math.max(1, Math.min(limit, 50));
+            return ResponseEntity.ok(walletService.getRecentRecipients(userId, clamped));
         } catch (Exception e) {
             log.error("getRecentRecipients error: {}", e.getMessage());
             return ResponseEntity.internalServerError()

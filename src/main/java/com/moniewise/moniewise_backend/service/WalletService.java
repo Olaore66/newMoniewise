@@ -1361,15 +1361,17 @@ public class WalletService {
      *
      * <p>Dedupes by {@code bankCode + accountNumber} (a user may have sent to
      * the same account many times — we only want it to appear once, using the
-     * most recent — and verified — {@code accountName} on file), capped at 10
-     * for a clean dropdown. Note the destination name shown here is whatever
-     * Rubies verified at the time of that past transfer (see the server-side
-     * re-verification in {@code processWithdrawal}); the gateway is still
-     * re-resolved on submission regardless, so even a "trusted" suggestion
-     * gets the same fresh-name guarantee as a brand-new recipient.
+     * most recent — and verified — {@code accountName} on file), capped at
+     * {@code limit} — the same method backs both the quick top-3 dropdown and
+     * the "see more" full-list screen, just called with a different limit.
+     * Note the destination name shown here is whatever Rubies verified at the
+     * time of that past transfer (see the server-side re-verification in
+     * {@code processWithdrawal}); the gateway is still re-resolved on
+     * submission regardless, so even a "trusted" suggestion gets the same
+     * fresh-name guarantee as a brand-new recipient.
      */
     @Transactional(readOnly = true)
-    public List<Map<String, Object>> getRecentRecipients(Long userId) {
+    public List<Map<String, Object>> getRecentRecipients(Long userId, int limit) {
         // Primary dedup map keyed by "bankCode|accountNumber" — first entry for each key wins
         // (both sources are newest-first, so the most-recent transfer to a given account
         // is naturally preferred).
@@ -1379,7 +1381,7 @@ public class WalletService {
         List<Withdrawal> recentWithdrawals = withdrawalRepository
                 .findTop50ByUserIdAndStatusOrderByCreatedAtDesc(userId, WithdrawalStatus.COMPLETED);
         for (Withdrawal w : recentWithdrawals) {
-            if (deduped.size() >= 10) break;
+            if (deduped.size() >= limit) break;
             if (w.getBankCode() == null || w.getAccountNumber() == null) continue;
 
             String acc = w.getAccountNumber().trim();
@@ -1400,14 +1402,14 @@ public class WalletService {
         // These are stored on TransactionLog (not the Withdrawal table), so they
         // were previously invisible to this method — the dropdown would show empty
         // even if the user had many successful envelope-to-bank transfers.
-        if (deduped.size() < 10) {
+        if (deduped.size() < limit) {
             List<TransactionLog> recentExt = transactionLogRepository
                     .findRecentCompletedEnvelopeExternalTransfers(
                             userId,
                             org.springframework.data.domain.PageRequest.of(0, 50)
                     );
             for (TransactionLog t : recentExt) {
-                if (deduped.size() >= 10) break;
+                if (deduped.size() >= limit) break;
                 if (t.getExternalAccountNumber() == null) continue;
 
                 // bankCode may be null for historical records (before V19 migration).
