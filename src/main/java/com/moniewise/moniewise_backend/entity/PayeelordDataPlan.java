@@ -154,7 +154,11 @@ public class PayeelordDataPlan {
             base = base.substring(0, eq); // drop "= N80 1day"
         }
         // Drop provider category words we don't want to surface.
-        base = base.replaceAll("(?i)\\b(corporate gifting|corporate|gifting|awoof|sme|cg)\\b", " ");
+        base = base.replaceAll("(?i)\\b(corporate gifting|corporate|gifting|awoof|data ?share|sme|cg)\\b", " ");
+        // Drop a currency-prefixed price left inline (e.g. "N80", "₦1,000") for plans
+        // that embed the price without an "=". The lookbehind avoids matching an "N"
+        // in the middle of a word (e.g. the "N5" in "MTN5G").
+        base = base.replaceAll("(?i)(?<![\\p{Alnum}])[₦n]\\s*\\d[\\d,]*(\\.\\d+)?", " ");
         // Drop any leftover embedded raw validity like "1day"/"30days".
         base = base.replaceAll("(?i)\\b\\d+(\\.\\d+)?\\s*days?\\b", " ");
         base = base.replaceAll("\\s+", " ").trim();
