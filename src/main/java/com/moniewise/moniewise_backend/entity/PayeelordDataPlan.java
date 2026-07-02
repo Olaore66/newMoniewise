@@ -137,4 +137,44 @@ public class PayeelordDataPlan {
 
     public LocalDateTime getUpdatedAt()              { return updatedAt; }
     public void setUpdatedAt(LocalDateTime updatedAt) { this.updatedAt = updatedAt; }
+
+    /**
+     * Clean, user-facing label derived from the raw Payeelord description. Strips the
+     * appended "= ₦price", the provider category words (e.g. "Gifting"/"SME") and any
+     * leftover raw validity, then appends a tidy "for &lt;validity&gt;".
+     *
+     * <p>e.g. {@code "150mb daily airtel gifting = N80 1day"} → {@code "150mb daily airtel for 1 day"}.
+     * Used everywhere a plan is shown (picker, review, receipt, notification, history)
+     * so the label stays consistent.
+     */
+    public String getDisplayLabel() {
+        String base = planName != null ? planName : "";
+        int eq = base.indexOf('=');
+        if (eq >= 0) {
+            base = base.substring(0, eq); // drop "= N80 1day"
+        }
+        // Drop provider category words we don't want to surface.
+        base = base.replaceAll("(?i)\\b(corporate gifting|corporate|gifting|awoof|sme|cg)\\b", " ");
+        // Drop any leftover embedded raw validity like "1day"/"30days".
+        base = base.replaceAll("(?i)\\b\\d+(\\.\\d+)?\\s*days?\\b", " ");
+        base = base.replaceAll("\\s+", " ").trim();
+
+        String validity = prettyValidity(validityLabel);
+        if (validity != null && !validity.isBlank()) {
+            base = base.isBlank() ? validity : base + " for " + validity;
+        }
+        return base.isBlank() ? (planName != null ? planName : "Data plan") : base;
+    }
+
+    /** Public formatted validity for display, e.g. {@code "1day"} → {@code "1 day"}. */
+    public String getValidityDisplay() {
+        return prettyValidity(validityLabel);
+    }
+
+    /** "1day" → "1 day", "2weeks" → "2 weeks"; already-spaced values kept. */
+    private static String prettyValidity(String raw) {
+        if (raw == null || raw.isBlank()) return null;
+        return raw.trim().toLowerCase()
+                .replaceAll("(?i)(\\d+)\\s*(days?|weeks?|months?|hours?|hrs?)", "$1 $2");
+    }
 }

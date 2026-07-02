@@ -408,9 +408,9 @@ public class PayeelordVasService {
         txn.setRawResponse(serialize(response));
         txn.setUpdatedAt(LocalDateTime.now());
 
-        String planLabel = response.getPlanName() != null
-                ? response.getPlanName()
-                : (txn.getDataPlan() != null ? txn.getDataPlan().getPlanName() : "data plan");
+        String planLabel = txn.getDataPlan() != null
+                ? txn.getDataPlan().getDisplayLabel()
+                : (response.getPlanName() != null ? response.getPlanName() : "data plan");
 
         if (response.isSuccessful()) {
             txn.setStatus(VasTransactionStatus.SUCCESSFUL);

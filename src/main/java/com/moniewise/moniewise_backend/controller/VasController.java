@@ -162,7 +162,7 @@ public class VasController {
         m.put("status",        txn.getStatus().name());
         m.put("network",       txn.getNetwork());
         m.put("mobileNumber",  txn.getMobileNumber());
-        m.put("planName",      txn.getDataPlan() != null ? txn.getDataPlan().getPlanName() : null);
+        m.put("planName",      txn.getDataPlan() != null ? txn.getDataPlan().getDisplayLabel() : null);
         m.put("faceAmount",    txn.getFaceAmount());
         m.put("amountCharged", txn.getSellingAmount());
         m.put("failureReason", txn.getFailureReason());
@@ -176,9 +176,9 @@ public class VasController {
         m.put("networkId",      plan.getNetworkId());
         m.put("network",        plan.getNetworkName());
         m.put("planType",       plan.getPlanType());
-        m.put("planName",       plan.getPlanName());
+        m.put("planName",       plan.getDisplayLabel());
         m.put("size",           plan.getSizeLabel());
-        m.put("validity",       plan.getValidityLabel());
+        m.put("validity",       plan.getValidityDisplay());
         m.put("price",          plan.getSellingPrice());
         return m;
     }
