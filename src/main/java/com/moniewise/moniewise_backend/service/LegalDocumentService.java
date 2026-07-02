@@ -13,35 +13,61 @@ import com.moniewise.moniewise_backend.repository.LegalDocumentRepository;
 import com.moniewise.moniewise_backend.repository.UserLegalAcceptanceRepository;
 import com.moniewise.moniewise_backend.repository.UserRepository;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.util.concurrent.TimeUnit;
 
 @Service
 public class LegalDocumentService {
 
+    private static final Logger logger = LoggerFactory.getLogger(LegalDocumentService.class);
+
+    /** Active legal docs change rarely, so cache them in Redis for quick reads.
+     *  Key: {@code legal:active:{DOC_TYPE}}. Refreshed on publish, else via TTL. */
+    private static final String CACHE_KEY_PREFIX = "legal:active:";
+    private static final long CACHE_TTL_HOURS = 24L;
+
     private final LegalDocumentRepository legalDocumentRepository;
     private final UserLegalAcceptanceRepository acceptanceRepository;
     private final UserRepository userRepository;
+    private final StringRedisTemplate redisTemplate;
+    private final ObjectMapper objectMapper;
 
     public LegalDocumentService(
             LegalDocumentRepository legalDocumentRepository,
-            UserLegalAcceptanceRepository acceptanceRepository, UserRepository userRepository
+            UserLegalAcceptanceRepository acceptanceRepository,
+            UserRepository userRepository,
+            StringRedisTemplate redisTemplate,
+            ObjectMapper objectMapper
     ) {
         this.legalDocumentRepository = legalDocumentRepository;
         this.acceptanceRepository = acceptanceRepository;
         this.userRepository = userRepository;
+        this.redisTemplate = redisTemplate;
+        this.objectMapper = objectMapper;
     }
 
     public LegalDocumentResponse getActiveDocument(LegalDocumentType docType) {
+        LegalDocumentResponse cached = readFromCache(docType);
+        if (cached != null) {
+            return cached;
+        }
+
         LegalDocument document = legalDocumentRepository
                 .findFirstByDocTypeAndActiveTrueOrderByEffectiveAtDesc(docType)
                 .orElseThrow(() -> new ResourceNotFoundException(
                         "Active legal document not found: " + docType
                 ));
 
-        return mapToResponse(document);
+        LegalDocumentResponse response = mapToResponse(document);
+        writeToCache(docType, response);
+        return response;
     }
 
     public LegalAcceptanceStatusResponse getAcceptanceStatus(
@@ -206,6 +232,54 @@ public LegalDocumentResponse publishNewVersion(
 
     LegalDocument savedDocument = legalDocumentRepository.save(newDocument);
 
-    return mapToResponse(savedDocument);
+    LegalDocumentResponse response = mapToResponse(savedDocument);
+    writeToCache(docType, response); // refresh cache with the newly published active version
+    return response;
 }
+
+    /**
+     * Publishes {@code content} as a new active version only if {@code version} isn't
+     * already present. Idempotent — safe to call on every startup (used by the seeder).
+     */
+    @Transactional
+    public void seedVersionIfAbsent(
+            LegalDocumentType docType, String title, String content, String version
+    ) {
+        if (legalDocumentRepository.findByDocTypeAndVersion(docType, version).isPresent()) {
+            logger.info("Legal seed skipped — {} v{} already present.", docType, version);
+            return;
+        }
+        publishNewVersion(docType, title, content, version);
+        logger.info("Legal seed published — {} v{}.", docType, version);
+    }
+
+    // ── Redis cache helpers ─────────────────────────────────────────────────────
+    private String cacheKey(LegalDocumentType docType) {
+        return CACHE_KEY_PREFIX + docType.name();
+    }
+
+    private LegalDocumentResponse readFromCache(LegalDocumentType docType) {
+        try {
+            String json = redisTemplate.opsForValue().get(cacheKey(docType));
+            if (json == null || json.isBlank()) {
+                return null;
+            }
+            return objectMapper.readValue(json, LegalDocumentResponse.class);
+        } catch (Exception e) {
+            logger.warn("Legal cache read failed for {} — falling back to DB: {}", docType, e.getMessage());
+            return null;
+        }
+    }
+
+    private void writeToCache(LegalDocumentType docType, LegalDocumentResponse response) {
+        try {
+            redisTemplate.opsForValue().set(
+                    cacheKey(docType),
+                    objectMapper.writeValueAsString(response),
+                    CACHE_TTL_HOURS, TimeUnit.HOURS
+            );
+        } catch (Exception e) {
+            logger.warn("Legal cache write failed for {}: {}", docType, e.getMessage());
+        }
+    }
 }
