@@ -23,6 +23,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -138,18 +139,37 @@ public class PayeelordVasService {
                 userId, user.getEmail(), request.getEnvelopeId(),
                 VasTransactionType.AIRTIME, reference, network, mobileNumber, null, pricing);
 
-        PayeelordAirtimePurchaseResponse response;
-        try {
-            response = gateway.purchaseAirtime(network, mobileNumber, amount);
-        } catch (PayeelordGateway.PayeelordAmbiguousResponseException e) {
-            self.markAmbiguous(txn.getId(), e.getMessage());
-            throw new RuntimeException(
-                    "We couldn't immediately confirm your airtime purchase with the provider — " +
-                    "it may still go through. We'll update your transaction history shortly. " +
-                    "If it doesn't reflect within a few minutes, contact support with reference " + reference + ".", e);
-        }
+        // The funds are already validated + held above. Hand the slow provider
+        // call (up to ~45s) off to a background thread and return PENDING now, so
+        // we never hold the client's request open for the whole delivery. The user
+        // is notified on completion (finalizeAirtimeResult) and the outcome lands
+        // in their transaction history.
+        self.completeAirtimeAsync(txn.getId(), network, mobileNumber, amount, reference);
 
-        return self.finalizeAirtimeResult(txn.getId(), response);
+        return txn; // PENDING — client shows "processing", real result arrives async
+    }
+
+    /**
+     * Background completion of an airtime purchase. Makes the slow synchronous
+     * Payeelord call off the request thread and applies the result. Every
+     * exception must be handled here — there is no caller to propagate to.
+     */
+    @Async
+    public void completeAirtimeAsync(Long txnId, String network, String mobileNumber,
+                                     BigDecimal amount, String reference) {
+        try {
+            PayeelordAirtimePurchaseResponse response =
+                    gateway.purchaseAirtime(network, mobileNumber, amount);
+            self.finalizeAirtimeResult(txnId, response);
+        } catch (PayeelordGateway.PayeelordAmbiguousResponseException e) {
+            // Provider outcome unknown — leave the debit in place (it may have gone
+            // through) and flag for reconciliation rather than a blind refund.
+            self.markAmbiguous(txnId, e.getMessage());
+        } catch (Exception e) {
+            logger.error("[PayeelordVAS] Async airtime completion failed for ref={}: {}",
+                    reference, e.getMessage(), e);
+            self.markAmbiguous(txnId, "Unexpected error during completion: " + e.getMessage());
+        }
     }
 
     // ── Data purchase ─────────────────────────────────────────────────────────
@@ -216,27 +236,38 @@ public class PayeelordVasService {
                 userId, user.getEmail(), request.getEnvelopeId(),
                 VasTransactionType.DATA, reference, plan.getNetworkName(), mobileNumber, plan, pricing);
 
-        PayeelordDataPurchaseResponse response;
+        // Funds validated + held above. Deliver in the background and return
+        // PENDING immediately (pass plan primitives, not the detached entity, so
+        // nothing is lazily loaded across threads).
+        self.completeDataAsync(
+                txn.getId(),
+                String.valueOf(plan.getNetworkId()),
+                String.valueOf(plan.getDataId()),
+                plan.getPlanType(),
+                mobileNumber,
+                reference);
 
+        return txn; // PENDING — client shows "processing", real result arrives async
+    }
+
+    /**
+     * Background completion of a data purchase. See {@link #completeAirtimeAsync}
+     * for the threading/exception contract.
+     */
+    @Async
+    public void completeDataAsync(Long txnId, String networkId, String dataId, String planType,
+                                  String mobileNumber, String reference) {
         try {
-            response = gateway.purchaseData(
-                    String.valueOf(plan.getNetworkId()),
-                    String.valueOf(plan.getDataId()),
-                    plan.getPlanType(),
-                    mobileNumber
-            );
+            PayeelordDataPurchaseResponse response =
+                    gateway.purchaseData(networkId, dataId, planType, mobileNumber);
+            self.finalizeDataResult(txnId, response);
         } catch (PayeelordGateway.PayeelordAmbiguousResponseException e) {
-            self.markAmbiguous(txn.getId(), e.getMessage());
-            throw new RuntimeException(
-                    "We couldn't immediately confirm your data purchase with the provider — " +
-                            "it may still go through. We'll update your transaction history shortly. " +
-                            "If it doesn't reflect within a few minutes, contact support with reference " + reference + ".", e);
+            self.markAmbiguous(txnId, e.getMessage());
         } catch (Exception e) {
-            logger.error("[PayeelordVAS] Error preparing data purchase for ref={}", reference, e);
-            throw new RuntimeException("Failed to process data purchase request.", e);
+            logger.error("[PayeelordVAS] Async data completion failed for ref={}: {}",
+                    reference, e.getMessage(), e);
+            self.markAmbiguous(txnId, "Unexpected error during completion: " + e.getMessage());
         }
-
-        return self.finalizeDataResult(txn.getId(), response);
     }
     @Transactional(readOnly = true)
     public List<PayeelordVasTransaction> getRecentTransactions(Long userId) {
@@ -492,6 +523,70 @@ public class PayeelordVasService {
                         "(event={}) — could be a casing/format mismatch with what we stored, or a " +
                         "transaction that never reached finalize*Result; nothing to reverse from an audit ping",
                 providerTxnId, payload.getEvent()));
+    }
+
+    /**
+     * Recovery for a purchase left {@code PENDING} past the normal completion window
+     * (≈45s) — e.g. the server restarted mid-delivery so the background finalize was
+     * lost. Called by {@code VasPurchaseRecoveryScheduler}.
+     *
+     * <p>Payeelord exposes no transaction-status re-query endpoint (its purchase
+     * response is the source of truth), so we cannot ask "did this go through?".
+     * We therefore resolve <b>conservatively</b>:
+     * <ul>
+     *   <li><b>Auto-reverse (refund)</b> only when Payeelord clearly never registered
+     *       the purchase — no provider transaction id, no webhook ping, and not flagged
+     *       ambiguous. Those never delivered, so releasing the envelope hold is safe.</li>
+     *   <li><b>Escalate for manual reconciliation</b> otherwise (ambiguous, or Payeelord
+     *       acknowledged it via an id/webhook): auto-refunding could hand the user free
+     *       airtime/data on a delivery that actually happened AND still cost our float.</li>
+     * </ul>
+     * Idempotent: re-checks {@code PENDING} inside the transaction, so a concurrent
+     * webhook/finalize that already resolved the row wins and this becomes a no-op.
+     */
+    @Transactional
+    public void recoverStalePurchase(Long txnId) {
+        PayeelordVasTransaction txn = transactionRepository.findById(txnId).orElse(null);
+        if (txn == null || txn.getStatus() != VasTransactionStatus.PENDING) {
+            return; // already resolved through another path
+        }
+
+        boolean ambiguous = txn.getFailureReason() != null
+                && txn.getFailureReason().contains("AMBIGUOUS");
+        boolean providerAcknowledged =
+                (txn.getPayeelordTransactionId() != null && !txn.getPayeelordTransactionId().isBlank())
+                || txn.getWebhookConfirmedAt() != null;
+
+        if (ambiguous || providerAcknowledged) {
+            logger.error("[PayeelordVAS][CRITICAL][NEEDS-RECONCILIATION] Stale PENDING purchase cannot be " +
+                            "safely auto-resolved (provider may have delivered): ref={} userId={} type={} " +
+                            "sellingAmount={} ambiguous={} providerTxnId={} webhookConfirmedAt={} — " +
+                            "manual reconciliation required.",
+                    txn.getReference(), txn.getUserId(), txn.getType(), txn.getSellingAmount(),
+                    ambiguous, txn.getPayeelordTransactionId(), txn.getWebhookConfirmedAt());
+            return;
+        }
+
+        // Safe to reverse — Payeelord never registered this purchase.
+        envelopeService.releaseEnvelopeVasHold(txn.getEnvelopeId(), txn.getSellingAmount());
+        txn.setStatus(VasTransactionStatus.REVERSED);
+        txn.setFailureReason("Auto-reversed by recovery sweeper — provider never confirmed the purchase " +
+                "within the recovery window; envelope hold released.");
+        txn.setUpdatedAt(LocalDateTime.now());
+        transactionRepository.save(txn);
+
+        logger.warn("[PayeelordVAS][RECOVERY] Auto-reversed stale PENDING purchase → envelope refunded: " +
+                        "ref={} userId={} sellingAmount={}",
+                txn.getReference(), txn.getUserId(), txn.getSellingAmount());
+
+        boolean isAirtime = txn.getType() == VasTransactionType.AIRTIME;
+        notifyAsync(txn.getUserId(), String.format(
+                        "We couldn't confirm your %s purchase of ₦%,.2f to %s, so ₦%,.2f has been refunded " +
+                        "to your envelope. Reference: %s",
+                        isAirtime ? "airtime" : "data", txn.getFaceAmount(), txn.getMobileNumber(),
+                        txn.getSellingAmount(), txn.getReference()),
+                isAirtime ? NotificationType.AIRTIME_PURCHASE_FAILED
+                          : NotificationType.DATA_PURCHASE_FAILED);
     }
 
     // ── Private helpers ───────────────────────────────────────────────────────

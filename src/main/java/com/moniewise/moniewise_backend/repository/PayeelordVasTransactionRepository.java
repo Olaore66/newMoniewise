@@ -21,6 +21,11 @@ public interface PayeelordVasTransactionRepository extends JpaRepository<Payeelo
 
     List<PayeelordVasTransaction> findTop20ByUserIdOrderByCreatedAtDesc(Long userId);
 
+    /** Purchases left in a given status (e.g. PENDING) since before {@code cutoff} —
+     *  used by the recovery sweeper to find deliveries that never finalized. */
+    List<PayeelordVasTransaction> findByStatusAndCreatedAtBefore(VasTransactionStatus status,
+                                                                 LocalDateTime cutoff);
+
     @Query("SELECT SUM(v.sellingAmount) FROM PayeelordVasTransaction v " +
            "WHERE v.envelopeId = :envelopeId AND v.status = :status AND v.createdAt >= :since")
     BigDecimal sumSettledSellingAmount(@Param("envelopeId") Long envelopeId,
