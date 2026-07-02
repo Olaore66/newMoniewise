@@ -45,6 +45,8 @@ public enum NotificationType {
     BUDGET_UNALLOCATED_REFUNDED,
     SAVINGS_MATURED,
     SAVINGS_MATURING_SOON,     // 7 days left
+    SAVINGS_GOAL_CREATED,      // a new savings goal was opened
+    SAVINGS_DEPOSIT,           // top-up / envelope-sweep into a savings goal
 
     // ── Payeelord VAS (airtime & data) ──────────────────────────────────────
     AIRTIME_PURCHASE_SUCCESS,

@@ -1,6 +1,7 @@
 package com.moniewise.moniewise_backend.service;
 
 import com.moniewise.moniewise_backend.entity.*;
+import com.moniewise.moniewise_backend.enums.NotificationType;
 import com.moniewise.moniewise_backend.enums.SavingsStatus;
 import com.moniewise.moniewise_backend.enums.TransactionStatus;
 import com.moniewise.moniewise_backend.enums.TransactionType;
@@ -17,6 +18,7 @@ import java.time.ZoneId;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 
 @Service
 public class SavingsService {
@@ -27,17 +29,31 @@ public class SavingsService {
     private final WalletService walletService;
     private final TransactionLogRepository transactionLogRepository;
     private final EnvelopeRepository envelopeRepository;
+    private final NotificationService notificationService;
 
     public SavingsService(SavingsGoalRepository savingsGoalRepository,
                           UserRepository userRepository,
                           WalletService walletService,
                           TransactionLogRepository transactionLogRepository,
-                          EnvelopeRepository envelopeRepository) {
+                          EnvelopeRepository envelopeRepository,
+                          NotificationService notificationService) {
         this.savingsGoalRepository = savingsGoalRepository;
         this.userRepository = userRepository;
         this.walletService = walletService;
         this.transactionLogRepository = transactionLogRepository;
         this.envelopeRepository = envelopeRepository;
+        this.notificationService = notificationService;
+    }
+
+    /** Fire-and-forget push — a notification failure must never roll back a savings transaction. */
+    private void notifyAsync(Long userId, String message, NotificationType type) {
+        CompletableFuture.runAsync(() -> {
+            try {
+                notificationService.sendNotification(userId.toString(), message, type);
+            } catch (Exception e) {
+                logger.error("Failed to send {} savings notification for userId={}", type, userId, e);
+            }
+        });
     }
 
     /**
@@ -87,8 +103,17 @@ public class SavingsService {
             goal.setCurrentBalance(BigDecimal.ZERO);
         }
 
-        logger.info("Created Savings Goal '{}' for User {} with initial balance ₦{}", name, userId, goal.getCurrentBalance());
-        return savingsGoalRepository.save(goal);
+        SavingsGoal saved = savingsGoalRepository.save(goal);
+        logger.info("Created Savings Goal '{}' for User {} with initial balance ₦{}", name, userId, saved.getCurrentBalance());
+
+        boolean funded = initialDeposit != null && initialDeposit.compareTo(BigDecimal.ZERO) > 0;
+        notifyAsync(userId,
+                funded
+                        ? String.format("You created your savings goal '%s' and funded ₦%,.2f from your wallet.", name, initialDeposit)
+                        : String.format("Your savings goal '%s' is set up with a target of ₦%,.2f. Time to start saving!", name, targetAmount),
+                NotificationType.SAVINGS_GOAL_CREATED);
+
+        return saved;
     }
 
     /**
@@ -127,6 +152,11 @@ public class SavingsService {
         transactionLogRepository.save(log);
 
         logger.info("Swept ₦{} from envelope '{}' (budget={}) into Savings Goal {}", amount, envelopeName, budgetId, savingsGoalId);
+
+        notifyAsync(userId,
+                String.format("₦%,.2f moved from your '%s' envelope into your savings goal '%s'.",
+                        amount, envelopeName, goal.getName()),
+                NotificationType.SAVINGS_DEPOSIT);
     }
 
     public List<SavingsGoal> getActiveSavingsForUser(Long userId) {
@@ -256,11 +286,19 @@ public class SavingsService {
 
         logger.info("User {} manually topped up ₦{} into Savings Goal {}", userId, amount, savingsGoalId);
 
-        // 4. (Optional UX Bonus) Check if they just hit their target!
+        // 4. Push: money added to the pot from the wallet.
+        notifyAsync(userId,
+                String.format("₦%,.2f added to your savings goal '%s' from your wallet. Balance: ₦%,.2f.",
+                        amount, goal.getName(), updatedGoal.getCurrentBalance()),
+                NotificationType.SAVINGS_DEPOSIT);
+
+        // 5. Celebrate hitting the target.
         if (updatedGoal.getCurrentBalance().compareTo(updatedGoal.getTargetAmount()) >= 0) {
             logger.info("🎉 User {} just hit their savings target for {}!", userId, goal.getName());
-            // You can trigger a push notification here if you want:
-            // notificationService.sendNotification(userId.toString(), "🎉 You hit your " + goal.getName() + " target!", NotificationType.SAVINGS_TARGET_REACHED);
+            notifyAsync(userId,
+                    String.format("🎉 You hit your ₦%,.2f target for '%s'! Congratulations.",
+                            updatedGoal.getTargetAmount(), goal.getName()),
+                    NotificationType.GOAL_ACHIEVED);
         }
 
         return updatedGoal;

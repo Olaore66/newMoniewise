@@ -604,10 +604,11 @@ public class NotificationService {
         return switch (type) {
             case WALLET_DEPOSIT, WALLET_FUNDED, ENVELOPE_TRANSFER, EXTERNAL_TRANSFER,
                     LOW_BALANCE_WARNING, INSUFFICIENT_BALANCE, DISBURSEMENT, DISBURSEMENT_SUCCESS, DISBURSEMENT_READY, BUDGET_COMPLETED,
+                    SAVINGS_GOAL_CREATED, SAVINGS_DEPOSIT, GOAL_ACHIEVED,
                     ADMIN_PAYEELORD_LOW_BALANCE -> NotificationPriority.HIGH;
 
             case BUDGET_LIMIT_WARNING, BUDGET_END_SOON, BUDGET_ENDS_TODAY, DISBURSEMENT_FAILED,
-                    GOAL_ACHIEVED, WELCOME -> NotificationPriority.MEDIUM;
+                    WELCOME -> NotificationPriority.MEDIUM;
             default -> NotificationPriority.LOW;
         };
     }
