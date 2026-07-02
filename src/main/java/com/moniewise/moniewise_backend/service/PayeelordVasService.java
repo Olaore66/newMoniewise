@@ -5,9 +5,12 @@ import com.moniewise.moniewise_backend.dto.request.AirtimePurchaseRequest;
 import com.moniewise.moniewise_backend.dto.request.DataPurchaseRequest;
 import com.moniewise.moniewise_backend.entity.PayeelordDataPlan;
 import com.moniewise.moniewise_backend.entity.PayeelordVasTransaction;
+import com.moniewise.moniewise_backend.entity.TransactionLog;
 import com.moniewise.moniewise_backend.entity.User;
 import com.moniewise.moniewise_backend.entity.Wallet;
 import com.moniewise.moniewise_backend.enums.NotificationType;
+import com.moniewise.moniewise_backend.enums.TransactionStatus;
+import com.moniewise.moniewise_backend.enums.TransactionType;
 import com.moniewise.moniewise_backend.enums.VasTransactionStatus;
 import com.moniewise.moniewise_backend.enums.VasTransactionType;
 import com.moniewise.moniewise_backend.psp.payeelord.PayeelordGateway;
@@ -17,6 +20,7 @@ import com.moniewise.moniewise_backend.psp.payeelord.dto.PayeelordWebhookPayload
 import com.moniewise.moniewise_backend.psp.rubies.RubiesGateway;
 import com.moniewise.moniewise_backend.repository.PayeelordDataPlanRepository;
 import com.moniewise.moniewise_backend.repository.PayeelordVasTransactionRepository;
+import com.moniewise.moniewise_backend.repository.TransactionLogRepository;
 import com.moniewise.moniewise_backend.repository.UserRepository;
 import com.moniewise.moniewise_backend.repository.WalletRepository;
 import org.slf4j.Logger;
@@ -89,6 +93,7 @@ public class PayeelordVasService {
     private final PayeelordPricingService pricingService;
     private final PayeelordDataPlanRepository dataPlanRepository;
     private final PayeelordVasTransactionRepository transactionRepository;
+    private final TransactionLogRepository transactionLogRepository;
     private final NotificationService notificationService;
     private final MonnieCacheInvalidationService monnieCacheInvalidationService;
     private final ObjectMapper objectMapper;
@@ -102,6 +107,7 @@ public class PayeelordVasService {
                                PayeelordPricingService pricingService,
                                PayeelordDataPlanRepository dataPlanRepository,
                                PayeelordVasTransactionRepository transactionRepository,
+                               TransactionLogRepository transactionLogRepository,
                                NotificationService notificationService,
                                MonnieCacheInvalidationService monnieCacheInvalidationService,
                                ObjectMapper objectMapper) {
@@ -114,6 +120,7 @@ public class PayeelordVasService {
         this.pricingService = pricingService;
         this.dataPlanRepository = dataPlanRepository;
         this.transactionRepository = transactionRepository;
+        this.transactionLogRepository = transactionLogRepository;
         this.notificationService = notificationService;
         this.monnieCacheInvalidationService = monnieCacheInvalidationService;
         this.objectMapper = objectMapper;
@@ -357,6 +364,8 @@ public class PayeelordVasService {
             // money from the user's Rubies wallet into Moniewise's Rubies account.
             envelopeService.settleEnvelopeVas(txn.getEnvelopeId(), txn.getSellingAmount());
             collectRubiesPayment(txn);
+            recordLedgerEntry(txn, String.format("%s airtime — ₦%,.2f to %s",
+                    txn.getNetwork(), txn.getFaceAmount(), txn.getMobileNumber()));
             logger.info("[PayeelordVAS] Airtime purchase SUCCESSFUL: ref={} providerTxnId={}",
                     txn.getReference(), response.getTransactionId());
             notifyAsync(txn.getUserId(), String.format(
@@ -410,6 +419,8 @@ public class PayeelordVasService {
             // money from the user's Rubies wallet into Moniewise's Rubies account.
             envelopeService.settleEnvelopeVas(txn.getEnvelopeId(), txn.getSellingAmount());
             collectRubiesPayment(txn);
+            recordLedgerEntry(txn, String.format("%s data (%s) to %s",
+                    txn.getNetwork(), planLabel, txn.getMobileNumber()));
             logger.info("[PayeelordVAS] Data purchase SUCCESSFUL: ref={} providerTxnId={}",
                     txn.getReference(), response.getTransactionId());
             notifyAsync(txn.getUserId(), String.format(
@@ -644,6 +655,30 @@ public class PayeelordVasService {
         } catch (Exception e) {
             logger.warn("[PayeelordVAS] Could not serialize provider response for audit log: {}", e.getMessage());
             return null;
+        }
+    }
+
+    /**
+     * Records the user-facing spend in the shared ledger ({@code transaction_logs})
+     * so a completed purchase shows up in the Activity screen and the funding
+     * envelope's history. Best-effort — the airtime/data was already delivered, so
+     * a ledger write hiccup must never fail the purchase.
+     */
+    private void recordLedgerEntry(PayeelordVasTransaction txn, String description) {
+        try {
+            TransactionLog log = new TransactionLog();
+            log.setUserId(txn.getUserId());
+            log.setSourceEnvelopeId(txn.getEnvelopeId());
+            log.setAmount(txn.getSellingAmount());
+            log.setTransactionType(TransactionType.VAS_PURCHASE);
+            log.setDescription(description);
+            log.setStatus(TransactionStatus.COMPLETED);
+            log.setReference(txn.getReference());
+            log.setCreatedAt(LocalDateTime.now());
+            transactionLogRepository.save(log);
+        } catch (Exception e) {
+            logger.error("[PayeelordVAS] Failed to write ledger entry for ref={}: {}",
+                    txn.getReference(), e.getMessage());
         }
     }
 

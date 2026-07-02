@@ -51,7 +51,9 @@ public class TransactionService {
             WALLET_WITHDRAWAL,
             // Wallet-side fee debit for envelope-to-bank transfers.
             // Shown so users understand why their wallet balance dropped.
-            WALLET_ENVELOPE_TRANSFER_FEE
+            WALLET_ENVELOPE_TRANSFER_FEE,
+            // Airtime & data purchases (Payeelord VAS).
+            VAS_PURCHASE
     );
 
     private static final Set<TransactionType> USER_VISIBLE_OUTGOING_TYPES = EnumSet.of(
@@ -338,6 +340,13 @@ public class TransactionService {
                 subtitle = sourceName;
                 iconType = "CASH";
                 break;
+            case VAS_PURCHASE:
+                title = transaction.getDescription() != null
+                        ? transaction.getDescription()
+                        : "Airtime & Data";
+                subtitle = "Airtime & Data";
+                iconType = "AIRTIME";
+                break;
             default:
                 title = formatEnumName(transaction.getTransactionType());
                 subtitle = "Transaction";
@@ -580,7 +589,8 @@ public class TransactionService {
                     WALLET_ENVELOPE_TRANSFER_FEE,
                     BUDGET_CREATION_FEE,
                     BUDGET_ALLOCATION,
-                    WALLET_WITHDRAWAL -> true;
+                    WALLET_WITHDRAWAL,
+                    VAS_PURCHASE -> true;
             default -> false;
         };
     }

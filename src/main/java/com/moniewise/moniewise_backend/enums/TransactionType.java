@@ -54,6 +54,14 @@ public enum TransactionType {
      * revenue/internal wallet. Platform-internal — must NOT appear in user-facing
      * history. Reference pattern: REV-{vasReference}
      */
-    VAS_PAYMENT_COLLECTION
+    VAS_PAYMENT_COLLECTION,
+
+    /**
+     * User-facing airtime/data (VAS) purchase — the debit that left the funding
+     * envelope. Unlike {@link #VAS_PAYMENT_COLLECTION} (platform-internal), this IS
+     * shown in the user's Activity and the envelope's history.
+     * Reference pattern: {@code VAS-AT-...} / {@code VAS-DT-...}
+     */
+    VAS_PURCHASE
 
     }
