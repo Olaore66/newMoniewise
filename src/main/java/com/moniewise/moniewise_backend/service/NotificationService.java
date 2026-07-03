@@ -377,49 +377,33 @@ public class NotificationService {
             Long envelopeId,
             String actionType,
             String redirectUrl) {
-
-        NotificationPriority priority = getPriority(type);
-
+        // Enqueue onto the transactional outbox -- the single canonical delivery path.
+        // Called inside a business @Transactional method, the outbox row commits/rolls
+        // back atomically with that change (no ghost notifications). The outbox worker
+        // then delivers it with retries + idempotency + one consistent priority rule.
+        // The pre-formatted message rides in the payload so the worker doesn't re-build it.
         try {
             Long uId = Long.valueOf(userId);
-            boolean pushEligible = priority == NotificationPriority.HIGH;
-            List<String> fcmTokens = pushEligible ? authSessionService.getActiveFcmTokens(uId) : List.of();
 
-            // Save to DB
-            Notification notification = new Notification();
-            notification.setUserId(uId);
-            notification.setMessage(message);
-            notification.setType(type);
-            notification.setCreatedAt(LocalDateTime.now());
-            notification.setRead(false);
-            notification.setBudgetId(budgetId);
-            notification.setEnvelopeId(envelopeId);
-            notification.setActionType(actionType);
-            notification.setRedirectUrl(redirectUrl);
-            // No active token right now (e.g. mid logout/re-login) — flag so
-            // redeliverMissedPushes() can catch up once a fresh token registers.
-            notification.setPushSent(!pushEligible || !fcmTokens.isEmpty());
+            Map<String, Object> payload = new java.util.HashMap<>();
+            if (message != null) payload.put("__message", message);
+            if (actionType != null) payload.put("__actionType", actionType);
+            if (redirectUrl != null) payload.put("__redirectUrl", redirectUrl);
 
-            notificationRepository.save(notification);
-
-            // Send Push
-            if (pushEligible) {
-                if (!fcmTokens.isEmpty() && !"stub".equals(activeProfile)) {
-                    if (firebaseMessaging != null) {
-                        String dynamicTitle = getNotificationTitle(type);
-                        for (String fcmToken : fcmTokens) {
-                            sendFCMMessage(fcmToken, dynamicTitle, message, actionType, redirectUrl, type, uId, envelopeId);
-                        }
-                    } else {
-                        logger.warn("âš ï¸ Skipping FCM: Firebase is not initialized.");
-                    }
-                }
-            } else {
-                logger.info("Skipping LOW/MEDIUM priority FCM push: {}", type);
-            }
-
+            OutboxEvent event = new OutboxEvent();
+            event.setEventType(type.name());
+            event.setUserId(uId);
+            event.setBudgetId(budgetId);
+            event.setEnvelopeId(envelopeId);
+            event.setPayload(payload);
+            event.setStatus("PENDING");
+            event.setCreatedAt(LocalDateTime.now());
+            // Generous default TTL so nothing is dropped during offline / worker-downtime windows.
+            event.setTtlSeconds(259_200L); // 72h
+            outboxEventRepository.save(event);
         } catch (Exception e) {
-            logger.error("Notification error for user {}", userId, e);
+            // A notification enqueue failure must never roll back the business change.
+            logger.error("Failed to enqueue notification type {} for user {}", type, userId, e);
         }
     }
 
@@ -965,8 +949,9 @@ public class NotificationService {
         try {
             NotificationType type = NotificationType.valueOf(event.getEventType());
             Map<String, Object> params = event.getPayload();
-            String message = generateMessage(type, params);
-            String redirectUrl = buildRedirectUrl(event);
+            String message = resolveMessage(type, params);
+            String redirectUrl = resolveRedirectUrl(event, params);
+            String actionType = paramString(params, "__actionType");
             NotificationPriority priority = getPriority(type);
             boolean pushEligible = priority == NotificationPriority.HIGH
                     || priority == NotificationPriority.MEDIUM;
@@ -982,6 +967,7 @@ public class NotificationService {
                 notification.setCreatedAt(LocalDateTime.now());
                 notification.setBudgetId(event.getBudgetId());
                 notification.setEnvelopeId(event.getEnvelopeId());
+                notification.setActionType(actionType);
                 notification.setRedirectUrl(redirectUrl);
                 notification.setRead(false);
                 // No active token right now (e.g. mid logout/re-login) — flag so
@@ -1004,7 +990,7 @@ public class NotificationService {
                             continue; // already pushed on a prior attempt
                         }
                         try {
-                            sendFCMMessage(token, title, message, null, redirectUrl, type,
+                            sendFCMMessage(token, title, message, actionType, redirectUrl, type,
                                     event.getUserId(), event.getEnvelopeId());
                             delivered.add(token); // delivered (or dead token cleaned) — don't resend
                         } catch (RuntimeException fcmError) {
@@ -1045,6 +1031,31 @@ public class NotificationService {
             logger.warn("[OUTBOX] Event {} type={} attempt {} failed — will retry: {}",
                     event.getId(), event.getEventType(), retryCount, error);
         }
+    }
+
+    /** Prefer the caller's pre-formatted message ("__message"); else generate one from params. */
+    private String resolveMessage(NotificationType type, Map<String, Object> params) {
+        String pre = paramString(params, "__message");
+        return (pre != null) ? pre : generateMessage(type, params);
+    }
+
+    /** Prefer an explicit "__redirectUrl" from the payload; else derive one from context ids. */
+    private String resolveRedirectUrl(OutboxEvent event, Map<String, Object> params) {
+        String pre = paramString(params, "__redirectUrl");
+        return (pre != null) ? pre : buildRedirectUrl(event);
+    }
+
+    /** Null-safe read of a string payload value; returns null for a missing/blank entry. */
+    private static String paramString(Map<String, Object> params, String key) {
+        if (params == null) {
+            return null;
+        }
+        Object v = params.get(key);
+        if (v == null) {
+            return null;
+        }
+        String s = v.toString();
+        return s.isBlank() ? null : s;
     }
 
     private String buildRedirectUrl(OutboxEvent event) {
