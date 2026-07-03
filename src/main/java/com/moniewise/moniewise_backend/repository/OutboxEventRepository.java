@@ -28,4 +28,17 @@ public interface OutboxEventRepository extends JpaRepository<OutboxEvent, Long> 
             FOR UPDATE SKIP LOCKED
             """, nativeQuery = true)
     List<OutboxEvent> claimPendingEvents(@Param("limit") int limit);
+
+    /** Count of events in a given status — used for dead-letter (FAILED) visibility. */
+    long countByStatus(String status);
+
+    /** Per-type breakdown of permanently-FAILED (dead-letter) events, busiest first. */
+    @Query(value = """
+            SELECT event_type AS type, COUNT(*) AS cnt
+            FROM outbox_events
+            WHERE status = 'FAILED'
+            GROUP BY event_type
+            ORDER BY cnt DESC
+            """, nativeQuery = true)
+    List<Object[]> countFailedByType();
 }

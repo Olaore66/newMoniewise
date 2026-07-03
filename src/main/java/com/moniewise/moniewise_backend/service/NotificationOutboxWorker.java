@@ -77,6 +77,35 @@ public class NotificationOutboxWorker {
     }
 
     /**
+     * Dead-letter visibility: periodically surfaces events that exhausted their retries
+     * (status {@code FAILED}). Without this they'd sit silently in the table after the
+     * original error log scrolled off. An ERROR-level summary here is picked up by
+     * log-based alerting; the per-type breakdown says where the failures cluster.
+     */
+    @Scheduled(fixedDelayString = "${moniewise.outbox.deadletter.alert-ms:900000}") // 15 min
+    public void alertOnDeadLetters() {
+        long failed;
+        try {
+            failed = outboxEventRepository.countByStatus("FAILED");
+        } catch (Exception e) {
+            logger.error("[OUTBOX] Dead-letter check failed", e);
+            return;
+        }
+        if (failed == 0) {
+            return;
+        }
+        StringBuilder breakdown = new StringBuilder();
+        for (Object[] row : outboxEventRepository.countFailedByType()) {
+            if (breakdown.length() > 0) {
+                breakdown.append(", ");
+            }
+            breakdown.append(row[0]).append('=').append(row[1]);
+        }
+        logger.error("[OUTBOX][DEAD-LETTER] {} notification event(s) permanently FAILED and need attention: {}",
+                failed, breakdown);
+    }
+
+    /**
      * Atomically claims a batch and flips it to PROCESSING in a short transaction.
      * The {@code FOR UPDATE SKIP LOCKED} query makes this safe across multiple app
      * instances — each claims a disjoint set of rows.
