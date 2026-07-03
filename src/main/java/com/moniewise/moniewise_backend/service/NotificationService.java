@@ -28,8 +28,12 @@ import javax.mail.MessagingException;
 import javax.mail.internet.MimeMessage;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import com.moniewise.moniewise_backend.entity.OutboxEvent;
+import com.moniewise.moniewise_backend.repository.OutboxEventRepository;
+
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 @Service
 public class NotificationService {
@@ -39,6 +43,7 @@ public class NotificationService {
     private final FirebaseMessaging firebaseMessaging;
     private final UserRepository userRepository;
     private final NotificationRepository notificationRepository;
+    private final OutboxEventRepository outboxEventRepository;
     private final AuthSessionService authSessionService;
     private final JavaMailSender mailSender;
     private final TemplateEngine templateEngine;
@@ -66,12 +71,14 @@ public class NotificationService {
             @Autowired(required = false) FirebaseMessaging firebaseMessaging,
             UserRepository userRepository,
             NotificationRepository notificationRepository,
+            OutboxEventRepository outboxEventRepository,
             AuthSessionService authSessionService,
             @Autowired(required = false) JavaMailSender mailSender,
             TemplateEngine templateEngine) {
         this.firebaseMessaging = firebaseMessaging;
         this.userRepository = userRepository;
         this.notificationRepository = notificationRepository;
+        this.outboxEventRepository = outboxEventRepository;
         this.authSessionService = authSessionService;
         this.mailSender = mailSender;
         this.templateEngine = templateEngine;
@@ -921,57 +928,144 @@ public class NotificationService {
         }
     }
 
+    /**
+     * Delivers a single outbox event, idempotently. Safe to retry:
+     * <ul>
+     *   <li>the in-app inbox row is written at most once ({@code inboxSaved});</li>
+     *   <li>each device token is pushed at most once ({@code deliveredTokens});</li>
+     *   <li>failures update status/retry inline and are never rethrown, so a bad
+     *       token or event can't roll back or poison anything.</li>
+     * </ul>
+     */
     @Transactional
-    public void processOutboxNotification(
-            Long userId,
-            NotificationType type,
-            Map<String, Object> params,
-            Long budgetId,
-            Long envelopeId,
-            String redirectUrl
-    ) {
-        logger.info("Processing notification type {} for user {}", type, userId);
-
-        String message = generateMessage(type, params);
-        NotificationPriority priority = getPriority(type);
-        boolean shouldSaveToDatabase = shouldPersistToDatabase(type);
-        boolean pushEligible = priority == NotificationPriority.HIGH || priority == NotificationPriority.MEDIUM;
-
-        List<String> fcmTokens = pushEligible ? getPushTokensForUser(userId) : List.of();
-
-        if (shouldSaveToDatabase) {
-            Notification notification = new Notification();
-            notification.setUserId(userId);
-            notification.setMessage(message);
-            notification.setType(type);
-            notification.setCreatedAt(LocalDateTime.now());
-            notification.setBudgetId(budgetId);
-            notification.setEnvelopeId(envelopeId);
-            notification.setRedirectUrl(redirectUrl);
-            notification.setRead(false);
-            // No active token right now (e.g. mid logout/re-login, the exact gap
-            // that drops disbursement pushes) — flag so redeliverMissedPushes()
-            // catches up the moment a fresh token registers.
-            notification.setPushSent(!pushEligible || !fcmTokens.isEmpty());
-            notificationRepository.save(notification);
-
-            logger.info("Saved in-app notification type {} for user {}", type, userId);
+    public void deliverOutboxEvent(Long eventId) {
+        OutboxEvent event = outboxEventRepository.findById(eventId).orElse(null);
+        if (event == null) {
+            return;
+        }
+        String currentStatus = event.getStatus();
+        if ("PROCESSED".equals(currentStatus) || "STALE".equals(currentStatus)
+                || "FAILED".equals(currentStatus)) {
+            return; // already resolved by another pass
         }
 
-        if (pushEligible) {
-            logger.info("Attempting push notification type {} for user {} to {} token(s)",
-                    type, userId, fcmTokens.size());
+        // Staleness guard — don't deliver an alert whose relevance window has passed.
+        Long ttlSeconds = event.getTtlSeconds();
+        if (ttlSeconds != null && ttlSeconds > 0
+                && LocalDateTime.now().isAfter(event.getCreatedAt().plusSeconds(ttlSeconds))) {
+            event.setStatus("STALE");
+            event.setProcessedAt(LocalDateTime.now());
+            event.setLastError("Skipped: expired (ttl=" + ttlSeconds + "s, type="
+                    + event.getEventType() + ")");
+            outboxEventRepository.save(event);
+            logger.info("[OUTBOX] Skipping stale event {} type={}", event.getId(), event.getEventType());
+            return;
+        }
 
-            if (!"stub".equals(activeProfile) && !fcmTokens.isEmpty() && firebaseMessaging != null) {
-                String title = getNotificationTitle(type);
+        try {
+            NotificationType type = NotificationType.valueOf(event.getEventType());
+            Map<String, Object> params = event.getPayload();
+            String message = generateMessage(type, params);
+            String redirectUrl = buildRedirectUrl(event);
+            NotificationPriority priority = getPriority(type);
+            boolean pushEligible = priority == NotificationPriority.HIGH
+                    || priority == NotificationPriority.MEDIUM;
 
-                for (String token : fcmTokens) {
-                    sendFCMMessage(token, title, message, null, redirectUrl, type, userId, envelopeId);
-                }
-            } else if (fcmTokens.isEmpty()) {
-                logger.info("[FCM] No active token for user {} - queued for redelivery on next token registration", userId);
+            List<String> tokens = pushEligible ? getPushTokensForUser(event.getUserId()) : List.of();
+
+            // 1. In-app inbox — write once.
+            if (!event.isInboxSaved() && shouldPersistToDatabase(type)) {
+                Notification notification = new Notification();
+                notification.setUserId(event.getUserId());
+                notification.setMessage(message);
+                notification.setType(type);
+                notification.setCreatedAt(LocalDateTime.now());
+                notification.setBudgetId(event.getBudgetId());
+                notification.setEnvelopeId(event.getEnvelopeId());
+                notification.setRedirectUrl(redirectUrl);
+                notification.setRead(false);
+                // No active token right now (e.g. mid logout/re-login) — flag so
+                // redeliverMissedPushes() catches up once a fresh token registers.
+                notification.setPushSent(!pushEligible || !tokens.isEmpty());
+                notificationRepository.save(notification);
+                event.setInboxSaved(true);
             }
+
+            // 2. Push — each token at most once.
+            if (pushEligible && !"stub".equals(activeProfile) && firebaseMessaging != null) {
+                if (tokens.isEmpty()) {
+                    logger.info("[OUTBOX] No active token for user {} — will redeliver on next token registration",
+                            event.getUserId());
+                } else {
+                    Set<String> delivered = parseTokenSet(event.getDeliveredTokens());
+                    String title = getNotificationTitle(type);
+                    for (String token : tokens) {
+                        if (delivered.contains(token)) {
+                            continue; // already pushed on a prior attempt
+                        }
+                        try {
+                            sendFCMMessage(token, title, message, null, redirectUrl, type,
+                                    event.getUserId(), event.getEnvelopeId());
+                            delivered.add(token); // delivered (or dead token cleaned) — don't resend
+                        } catch (RuntimeException fcmError) {
+                            // Transient FCM error — persist what did deliver, retry later, stop here.
+                            event.setDeliveredTokens(joinTokens(delivered));
+                            scheduleRetry(event, fcmError.getMessage());
+                            outboxEventRepository.save(event);
+                            return;
+                        }
+                    }
+                    event.setDeliveredTokens(joinTokens(delivered));
+                }
+            }
+
+            event.setStatus("PROCESSED");
+            event.setProcessedAt(LocalDateTime.now());
+            event.setLastError(null);
+            outboxEventRepository.save(event);
+            logger.info("[OUTBOX] Delivered event {} type={}", event.getId(), event.getEventType());
+
+        } catch (Exception e) {
+            scheduleRetry(event, e.getMessage());
+            outboxEventRepository.save(event);
         }
+    }
+
+    /** Bumps retry count and moves the event to PENDING (retry) or FAILED (exhausted). */
+    private void scheduleRetry(OutboxEvent event, String error) {
+        int retryCount = event.getRetryCount() + 1;
+        event.setRetryCount(retryCount);
+        event.setLastError(error);
+        if (retryCount >= 5) {
+            event.setStatus("FAILED");
+            logger.error("[OUTBOX] Event {} type={} FAILED permanently after {} attempts: {}",
+                    event.getId(), event.getEventType(), retryCount, error);
+        } else {
+            event.setStatus("PENDING");
+            logger.warn("[OUTBOX] Event {} type={} attempt {} failed — will retry: {}",
+                    event.getId(), event.getEventType(), retryCount, error);
+        }
+    }
+
+    private String buildRedirectUrl(OutboxEvent event) {
+        if (event.getEnvelopeId() != null) {
+            return "/envelopes/" + event.getEnvelopeId();
+        }
+        if (event.getBudgetId() != null) {
+            return "/budgets/" + event.getBudgetId();
+        }
+        return "/notifications";
+    }
+
+    private static Set<String> parseTokenSet(String joined) {
+        if (joined == null || joined.isBlank()) {
+            return new java.util.LinkedHashSet<>();
+        }
+        return new java.util.LinkedHashSet<>(java.util.Arrays.asList(joined.split("\\|\\|")));
+    }
+
+    private static String joinTokens(Set<String> tokens) {
+        return tokens.isEmpty() ? null : String.join("||", tokens);
     }
 
     private List<String> getPushTokensForUser(Long userId) {

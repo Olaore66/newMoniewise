@@ -79,5 +79,15 @@ public class OutboxEvent {
     @Column(name = "ttl_seconds")
     private Long ttlSeconds;
 
+    /** True once the in-app inbox row has been written for this event — makes a
+     *  retry skip re-inserting it (idempotent inbox). */
+    @Column(name = "inbox_saved", nullable = false)
+    private boolean inboxSaved = false;
+
+    /** Device FCM tokens already pushed for this event ("||"-joined) so a retry
+     *  never re-pushes to a device that already got it (idempotent push). */
+    @Column(name = "delivered_tokens", columnDefinition = "TEXT")
+    private String deliveredTokens;
+
     // getters and setters
 }

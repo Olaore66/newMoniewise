@@ -1,25 +1,45 @@
 package com.moniewise.moniewise_backend.service;
 
 import com.moniewise.moniewise_backend.entity.OutboxEvent;
-import com.moniewise.moniewise_backend.enums.NotificationType;
 import com.moniewise.moniewise_backend.repository.OutboxEventRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import javax.transaction.Transactional;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 
+/**
+ * Drains the notification outbox. Each run:
+ * <ol>
+ *   <li>Claims a batch in a <b>short</b> transaction ({@code FOR UPDATE SKIP LOCKED},
+ *       marks them {@code PROCESSING}) — no FCM work is done while a DB transaction /
+ *       row locks are held.</li>
+ *   <li>Delivers each event in its <b>own</b> transaction via
+ *       {@link NotificationService#deliverOutboxEvent(Long)}, which is idempotent
+ *       (writes the inbox row once, pushes each token once) and never rethrows — so
+ *       one bad event can't poison the whole batch.</li>
+ * </ol>
+ */
 @Service
 public class NotificationOutboxWorker {
 
     private static final Logger logger = LoggerFactory.getLogger(NotificationOutboxWorker.class);
 
+    private static final int BATCH_SIZE = 200;
+
     private final OutboxEventRepository outboxEventRepository;
     private final NotificationService notificationService;
+
+    /** Self-proxy so {@link #claimBatch()} runs in its own committed transaction. */
+    @Autowired
+    @Lazy
+    private NotificationOutboxWorker self;
 
     public NotificationOutboxWorker(
             OutboxEventRepository outboxEventRepository,
@@ -30,99 +50,51 @@ public class NotificationOutboxWorker {
     }
 
     @Scheduled(fixedDelayString = "${moniewise.outbox.worker.fixed-delay-ms:5000}")
-    @Transactional
     public void processOutboxEvents() {
-        List<OutboxEvent> events = outboxEventRepository.claimPendingEvents(200);
-
-        if (events.isEmpty()) {
+        List<Long> ids;
+        try {
+            ids = self.claimBatch();
+        } catch (Exception e) {
+            logger.error("[OUTBOX] Failed to claim a batch of events", e);
             return;
         }
 
-        logger.info("Found {} pending notification outbox event(s)", events.size());
+        if (ids.isEmpty()) {
+            return;
+        }
 
+        logger.info("[OUTBOX] Claimed {} event(s) for delivery", ids.size());
+
+        for (Long id : ids) {
+            try {
+                notificationService.deliverOutboxEvent(id);
+            } catch (Exception e) {
+                // deliverOutboxEvent handles its own failures + retry state; this only
+                // guards against a hard crash so the rest of the batch still runs.
+                logger.error("[OUTBOX] Unexpected failure delivering event {}", id, e);
+            }
+        }
+    }
+
+    /**
+     * Atomically claims a batch and flips it to PROCESSING in a short transaction.
+     * The {@code FOR UPDATE SKIP LOCKED} query makes this safe across multiple app
+     * instances — each claims a disjoint set of rows.
+     */
+    @Transactional
+    public List<Long> claimBatch() {
+        List<OutboxEvent> events = outboxEventRepository.claimPendingEvents(BATCH_SIZE);
+        if (events.isEmpty()) {
+            return List.of();
+        }
+        LocalDateTime now = LocalDateTime.now();
+        List<Long> ids = new ArrayList<>(events.size());
         for (OutboxEvent event : events) {
-            processSingleEvent(event);
-        }
-
-        outboxEventRepository.saveAll(events);
-    }
-
-    private void processSingleEvent(OutboxEvent event) {
-        try {
-            logger.info("Processing outbox event {} type {}", event.getId(), event.getEventType());
-
-            // ── STALENESS GUARD ──────────────────────────────────────────────────────
-            // If the event carries a TTL and that window has already passed, skip
-            // delivery entirely. Delivering a "funds unlocking soon" alert 3 hours
-            // late is worse than silence — it confuses users and undermines trust.
-            // Financial events (DISBURSEMENT_SUCCESS etc.) have a 72-hour TTL so
-            // they are never suppressed by normal offline periods.
-            Long ttlSeconds = event.getTtlSeconds();
-            if (ttlSeconds != null && ttlSeconds > 0) {
-                LocalDateTime expiresAt = event.getCreatedAt().plusSeconds(ttlSeconds);
-                if (LocalDateTime.now().isAfter(expiresAt)) {
-                    event.setStatus("STALE");
-                    event.setProcessedAt(LocalDateTime.now());
-                    event.setLastError("Skipped: event expired at " + expiresAt
-                            + " (ttl=" + ttlSeconds + "s, type=" + event.getEventType() + ")");
-                    logger.info("[OUTBOX] Skipping stale event {} type={} (expired {} ago)",
-                            event.getId(), event.getEventType(), expiresAt);
-                    return;
-                }
-            }
-            // ────────────────────────────────────────────────────────────────────────
-
             event.setStatus("PROCESSING");
-            event.setLockedAt(LocalDateTime.now());
-
-            Map<String, Object> payload = event.getPayload();
-
-            String redirectUrl = buildRedirectUrl(event);
-
-            NotificationType notificationType = NotificationType.valueOf(event.getEventType());
-
-            notificationService.processOutboxNotification(
-                    event.getUserId(),
-                    notificationType,
-                    payload,
-                    event.getBudgetId(),
-                    event.getEnvelopeId(),
-                    redirectUrl
-            );
-
-            event.setStatus("PROCESSED");
-            event.setProcessedAt(LocalDateTime.now());
-            event.setLastError(null);
-
-            logger.info("Processed outbox event {} type {}", event.getId(), event.getEventType());
-
-        } catch (Exception e) {
-            int retryCount = event.getRetryCount() + 1;
-
-            event.setRetryCount(retryCount);
-            event.setLastError(e.getMessage());
-
-            if (retryCount >= 5) {
-                event.setStatus("FAILED");
-                logger.error("Outbox event {} failed permanently after {} attempts",
-                        event.getId(), retryCount, e);
-            } else {
-                event.setStatus("PENDING");
-                logger.warn("Outbox event {} failed attempt {}. It will be retried. Error: {}",
-                        event.getId(), retryCount, e.getMessage());
-            }
+            event.setLockedAt(now);
+            ids.add(event.getId());
         }
-    }
-
-    private String buildRedirectUrl(OutboxEvent event) {
-        if (event.getEnvelopeId() != null) {
-            return "/envelopes/" + event.getEnvelopeId();
-        }
-
-        if (event.getBudgetId() != null) {
-            return "/budgets/" + event.getBudgetId();
-        }
-
-        return "/notifications";
+        outboxEventRepository.saveAll(events);
+        return ids;
     }
 }
