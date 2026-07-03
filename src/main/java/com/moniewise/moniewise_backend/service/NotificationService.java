@@ -13,6 +13,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.mail.javamail.MimeMessageHelper;
 import org.springframework.scheduling.annotation.Async;
@@ -31,6 +32,7 @@ import java.time.LocalDateTime;
 import com.moniewise.moniewise_backend.entity.OutboxEvent;
 import com.moniewise.moniewise_backend.repository.OutboxEventRepository;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -47,6 +49,13 @@ public class NotificationService {
     private final AuthSessionService authSessionService;
     private final JavaMailSender mailSender;
     private final TemplateEngine templateEngine;
+
+    /** Self-proxy so the short prepare/finalize transactions below actually get their
+     *  own transaction when called from the (non-transactional) deliverOutboxEvent
+     *  orchestrator — self-invocation would otherwise bypass the proxy. */
+    @Autowired
+    @Lazy
+    private NotificationService self;
 
     @Value("${spring.profiles.active:prod}")
     private String activeProfile;
@@ -913,24 +922,68 @@ public class NotificationService {
     }
 
     /**
-     * Delivers a single outbox event, idempotently. Safe to retry:
-     * <ul>
-     *   <li>the in-app inbox row is written at most once ({@code inboxSaved});</li>
-     *   <li>each device token is pushed at most once ({@code deliveredTokens});</li>
-     *   <li>failures update status/retry inline and are never rethrown, so a bad
-     *       token or event can't roll back or poison anything.</li>
-     * </ul>
+     * Delivers a single outbox event, idempotently, keeping FCM <b>outside</b> any DB
+     * transaction:
+     * <ol>
+     *   <li>{@link #prepareDelivery} (short txn) applies the terminal/stale guards and
+     *       writes the in-app inbox row atomically with the {@code inboxSaved} flag,
+     *       then returns the push plan (or {@code null} when there's nothing to push);</li>
+     *   <li>the FCM push loop runs here holding no transaction / row lock, so slow or
+     *       failing FCM calls never tie up a DB connection;</li>
+     *   <li>{@link #finalizeDelivery} (short txn) records which tokens were delivered and
+     *       marks the event PROCESSED, or schedules a retry.</li>
+     * </ol>
+     * Safe to retry: the inbox row is written at most once, each device token is pushed
+     * at most once, and failures never rethrow.
+     */
+    public void deliverOutboxEvent(Long eventId) {
+        DeliveryPlan plan;
+        try {
+            plan = self.prepareDelivery(eventId);
+        } catch (Exception e) {
+            logger.error("[OUTBOX] Failed to prepare event {}", eventId, e);
+            return;
+        }
+        if (plan == null) {
+            return; // terminal, stale, or nothing to push — already finalized in-txn
+        }
+
+        // --- FCM push: NO DB transaction / row lock is held across these network calls ---
+        Set<String> delivered = new java.util.LinkedHashSet<>(plan.alreadyDelivered);
+        String transientError = null;
+        for (String token : plan.tokensToPush) {
+            try {
+                sendFCMMessage(token, plan.title, plan.message, plan.actionType, plan.redirectUrl,
+                        plan.type, plan.userId, plan.envelopeId);
+                delivered.add(token); // delivered (or dead token cleaned) — don't resend
+            } catch (RuntimeException fcmError) {
+                transientError = fcmError.getMessage(); // stop; persist progress + retry below
+                break;
+            }
+        }
+
+        try {
+            self.finalizeDelivery(eventId, delivered, transientError);
+        } catch (Exception e) {
+            logger.error("[OUTBOX] Failed to finalize event {}", eventId, e);
+        }
+    }
+
+    /**
+     * Short transaction: terminal/stale guards, atomic inbox write (+ inboxSaved), and
+     * computes the push plan. Returns {@code null} when nothing needs pushing (in which
+     * case the event is finalized here).
      */
     @Transactional
-    public void deliverOutboxEvent(Long eventId) {
+    public DeliveryPlan prepareDelivery(Long eventId) {
         OutboxEvent event = outboxEventRepository.findById(eventId).orElse(null);
         if (event == null) {
-            return;
+            return null;
         }
         String currentStatus = event.getStatus();
         if ("PROCESSED".equals(currentStatus) || "STALE".equals(currentStatus)
                 || "FAILED".equals(currentStatus)) {
-            return; // already resolved by another pass
+            return null; // already resolved by another pass
         }
 
         // Staleness guard — don't deliver an alert whose relevance window has passed.
@@ -943,78 +996,114 @@ public class NotificationService {
                     + event.getEventType() + ")");
             outboxEventRepository.save(event);
             logger.info("[OUTBOX] Skipping stale event {} type={}", event.getId(), event.getEventType());
-            return;
+            return null;
         }
 
-        try {
-            NotificationType type = NotificationType.valueOf(event.getEventType());
-            Map<String, Object> params = event.getPayload();
-            String message = resolveMessage(type, params);
-            String redirectUrl = resolveRedirectUrl(event, params);
-            String actionType = paramString(params, "__actionType");
-            NotificationPriority priority = getPriority(type);
-            boolean pushEligible = priority == NotificationPriority.HIGH
-                    || priority == NotificationPriority.MEDIUM;
+        NotificationType type = NotificationType.valueOf(event.getEventType());
+        Map<String, Object> params = event.getPayload();
+        String message = resolveMessage(type, params);
+        String redirectUrl = resolveRedirectUrl(event, params);
+        String actionType = paramString(params, "__actionType");
+        NotificationPriority priority = getPriority(type);
+        boolean pushEligible = priority == NotificationPriority.HIGH
+                || priority == NotificationPriority.MEDIUM;
 
-            List<String> tokens = pushEligible ? getPushTokensForUser(event.getUserId()) : List.of();
+        List<String> tokens = pushEligible ? getPushTokensForUser(event.getUserId()) : List.of();
 
-            // 1. In-app inbox — write once.
-            if (!event.isInboxSaved() && shouldPersistToDatabase(type)) {
-                Notification notification = new Notification();
-                notification.setUserId(event.getUserId());
-                notification.setMessage(message);
-                notification.setType(type);
-                notification.setCreatedAt(LocalDateTime.now());
-                notification.setBudgetId(event.getBudgetId());
-                notification.setEnvelopeId(event.getEnvelopeId());
-                notification.setActionType(actionType);
-                notification.setRedirectUrl(redirectUrl);
-                notification.setRead(false);
-                // No active token right now (e.g. mid logout/re-login) — flag so
-                // redeliverMissedPushes() catches up once a fresh token registers.
-                notification.setPushSent(!pushEligible || !tokens.isEmpty());
-                notificationRepository.save(notification);
-                event.setInboxSaved(true);
-            }
+        // In-app inbox — written once, atomically with the inboxSaved flag.
+        if (!event.isInboxSaved() && shouldPersistToDatabase(type)) {
+            Notification notification = new Notification();
+            notification.setUserId(event.getUserId());
+            notification.setMessage(message);
+            notification.setType(type);
+            notification.setCreatedAt(LocalDateTime.now());
+            notification.setBudgetId(event.getBudgetId());
+            notification.setEnvelopeId(event.getEnvelopeId());
+            notification.setActionType(actionType);
+            notification.setRedirectUrl(redirectUrl);
+            notification.setRead(false);
+            // No active token right now (e.g. mid logout/re-login) — flag so
+            // redeliverMissedPushes() catches up once a fresh token registers.
+            notification.setPushSent(!pushEligible || !tokens.isEmpty());
+            notificationRepository.save(notification);
+            event.setInboxSaved(true);
+        }
 
-            // 2. Push — each token at most once.
-            if (pushEligible && !"stub".equals(activeProfile) && firebaseMessaging != null) {
-                if (tokens.isEmpty()) {
-                    logger.info("[OUTBOX] No active token for user {} — will redeliver on next token registration",
-                            event.getUserId());
-                } else {
-                    Set<String> delivered = parseTokenSet(event.getDeliveredTokens());
-                    String title = getNotificationTitle(type);
-                    for (String token : tokens) {
-                        if (delivered.contains(token)) {
-                            continue; // already pushed on a prior attempt
-                        }
-                        try {
-                            sendFCMMessage(token, title, message, actionType, redirectUrl, type,
-                                    event.getUserId(), event.getEnvelopeId());
-                            delivered.add(token); // delivered (or dead token cleaned) — don't resend
-                        } catch (RuntimeException fcmError) {
-                            // Transient FCM error — persist what did deliver, retry later, stop here.
-                            event.setDeliveredTokens(joinTokens(delivered));
-                            scheduleRetry(event, fcmError.getMessage());
-                            outboxEventRepository.save(event);
-                            return;
-                        }
-                    }
-                    event.setDeliveredTokens(joinTokens(delivered));
+        // Which tokens still need a push (skip any a prior attempt already delivered).
+        Set<String> alreadyDelivered = parseTokenSet(event.getDeliveredTokens());
+        List<String> tokensToPush = new ArrayList<>();
+        if (pushEligible && !"stub".equals(activeProfile) && firebaseMessaging != null) {
+            for (String token : tokens) {
+                if (!alreadyDelivered.contains(token)) {
+                    tokensToPush.add(token);
                 }
             }
+        }
 
+        if (tokensToPush.isEmpty()) {
+            // Nothing to push (not eligible, no active token, or all already delivered).
+            // redeliverMissedPushes() covers the no-token case via the pushSent=false flag.
+            if (pushEligible && tokens.isEmpty()) {
+                logger.info("[OUTBOX] No active token for user {} — will redeliver on next token registration",
+                        event.getUserId());
+            }
             event.setStatus("PROCESSED");
             event.setProcessedAt(LocalDateTime.now());
             event.setLastError(null);
             outboxEventRepository.save(event);
-            logger.info("[OUTBOX] Delivered event {} type={}", event.getId(), event.getEventType());
-
-        } catch (Exception e) {
-            scheduleRetry(event, e.getMessage());
-            outboxEventRepository.save(event);
+            logger.info("[OUTBOX] Delivered event {} type={} (no push)", event.getId(), event.getEventType());
+            return null;
         }
+
+        // Persist the inboxSaved flag now; the actual FCM happens outside this transaction.
+        outboxEventRepository.save(event);
+
+        DeliveryPlan plan = new DeliveryPlan();
+        plan.message = message;
+        plan.title = getNotificationTitle(type);
+        plan.redirectUrl = redirectUrl;
+        plan.actionType = actionType;
+        plan.type = type;
+        plan.userId = event.getUserId();
+        plan.envelopeId = event.getEnvelopeId();
+        plan.tokensToPush = tokensToPush;
+        plan.alreadyDelivered = alreadyDelivered;
+        return plan;
+    }
+
+    /**
+     * Short transaction: records the tokens actually delivered and marks the event
+     * PROCESSED, or schedules a retry when a transient FCM error interrupted the push.
+     */
+    @Transactional
+    public void finalizeDelivery(Long eventId, Set<String> deliveredTokens, String transientError) {
+        OutboxEvent event = outboxEventRepository.findById(eventId).orElse(null);
+        if (event == null) {
+            return;
+        }
+        event.setDeliveredTokens(joinTokens(deliveredTokens));
+        if (transientError != null) {
+            scheduleRetry(event, transientError);
+        } else {
+            event.setStatus("PROCESSED");
+            event.setProcessedAt(LocalDateTime.now());
+            event.setLastError(null);
+            logger.info("[OUTBOX] Delivered event {} type={}", event.getId(), event.getEventType());
+        }
+        outboxEventRepository.save(event);
+    }
+
+    /** Push plan produced by {@link #prepareDelivery}, consumed by the FCM loop. */
+    private static final class DeliveryPlan {
+        String message;
+        String title;
+        String redirectUrl;
+        String actionType;
+        NotificationType type;
+        Long userId;
+        Long envelopeId;
+        List<String> tokensToPush;
+        Set<String> alreadyDelivered;
     }
 
     /** Bumps retry count and moves the event to PENDING (retry) or FAILED (exhausted). */
