@@ -77,6 +77,9 @@ public class SecurityConfig {
                 .antMatchers("/auth/signup", "/auth/verify-signup-otp", "/auth/resend-signup-otp", "/auth/bvn/pre-verify", "/auth/login", "/auth/oauth2/**", "/tnc/**", "/users/otp/generate", "/users/otp/verify", "/auth/forgot-password", "/auth/verify-reset-otp", "/auth/reset-password", "/auth/google").permitAll()
                 .antMatchers("/api/webhooks/monnify", "/api/webhooks/securewave",
                              "/api/webhooks/providus", "/api/webhooks/rubies").permitAll()   // Rubies webhook must be open — no JWT
+                // Public brand assets (email logo etc.). Email clients fetch the logo
+                // with no JWT — without this, every email renders a broken image (401).
+                .antMatchers("/images/**").permitAll()
                 .antMatchers("/admin/**").hasRole("ADMIN")   // URL-level guard (defence-in-depth alongside @PreAuthorize)
                 .antMatchers("/auth/logout", "/auth/refresh", "/auth/delete").authenticated()
                 .antMatchers("/users/**", "/notifications/**", "/disbursements/**", "/transactions/**", "/legal/**", "/ai/**", "/budgets/**", "/envelopes/**", "/wallets/**", "/transactions/pin/**", "/beneficiaries/**", "/savings/**").authenticated()
