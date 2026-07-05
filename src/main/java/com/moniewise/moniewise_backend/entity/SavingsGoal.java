@@ -53,9 +53,21 @@ public class SavingsGoal {
     @Column(nullable = false)
     private SavingsStatus status = SavingsStatus.ACTIVE;
 
-    /** Set once the "maturing in a week" email has gone out, so the daily job never sends it twice. */
+    /** Set once the "maturing in a week" reminder (email + push) has gone out, so the job never sends it twice. */
     @Column(nullable = false, columnDefinition = "boolean default false")
     private boolean maturityReminderSent = false;
+
+    /** Set once the "matures tomorrow" reminder (email + push) has gone out — separate flag from the 7-day one. */
+    @Column(nullable = false, columnDefinition = "boolean default false")
+    private boolean maturityEveReminderSent = false;
+
+    /**
+     * Last calendar day (Africa/Lagos) the lifecycle job processed this goal.
+     * Lets the job run every few hours (self-healing after missed runs / instance
+     * sleep) while guaranteeing interest is applied at most once per day.
+     */
+    @Column(name = "last_processed_date")
+    private LocalDate lastProcessedDate;
 
     @CreationTimestamp
     private LocalDateTime createdAt;

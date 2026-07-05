@@ -605,9 +605,13 @@ public class NotificationService {
             case WALLET_DEPOSIT, WALLET_FUNDED, ENVELOPE_TRANSFER, EXTERNAL_TRANSFER,
                     LOW_BALANCE_WARNING, INSUFFICIENT_BALANCE, DISBURSEMENT, DISBURSEMENT_SUCCESS, DISBURSEMENT_READY, BUDGET_COMPLETED,
                     SAVINGS_GOAL_CREATED, SAVINGS_DEPOSIT, GOAL_ACHIEVED,
+                    // "Your money is ready" is the single most important savings push —
+                    // it was missing here, falling to default LOW = push never sent.
+                    SAVINGS_MATURED,
                     ADMIN_PAYEELORD_LOW_BALANCE -> NotificationPriority.HIGH;
 
             case BUDGET_LIMIT_WARNING, BUDGET_END_SOON, BUDGET_ENDS_TODAY, DISBURSEMENT_FAILED,
+                    SAVINGS_MATURING_SOON,
                     WELCOME -> NotificationPriority.MEDIUM;
             default -> NotificationPriority.LOW;
         };

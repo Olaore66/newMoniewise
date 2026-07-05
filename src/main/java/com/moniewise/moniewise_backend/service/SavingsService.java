@@ -1,5 +1,6 @@
 package com.moniewise.moniewise_backend.service;
 
+import com.moniewise.moniewise_backend.config.SavingsLifeCycleManager;
 import com.moniewise.moniewise_backend.entity.*;
 import com.moniewise.moniewise_backend.enums.NotificationType;
 import com.moniewise.moniewise_backend.enums.SavingsStatus;
@@ -30,19 +31,45 @@ public class SavingsService {
     private final TransactionLogRepository transactionLogRepository;
     private final EnvelopeRepository envelopeRepository;
     private final NotificationService notificationService;
+    private final SavingsLifeCycleManager savingsLifeCycleManager;
 
     public SavingsService(SavingsGoalRepository savingsGoalRepository,
                           UserRepository userRepository,
                           WalletService walletService,
                           TransactionLogRepository transactionLogRepository,
                           EnvelopeRepository envelopeRepository,
-                          NotificationService notificationService) {
+                          NotificationService notificationService,
+                          SavingsLifeCycleManager savingsLifeCycleManager) {
         this.savingsGoalRepository = savingsGoalRepository;
         this.userRepository = userRepository;
         this.walletService = walletService;
         this.transactionLogRepository = transactionLogRepository;
         this.envelopeRepository = envelopeRepository;
         this.notificationService = notificationService;
+        this.savingsLifeCycleManager = savingsLifeCycleManager;
+    }
+
+    /**
+     * Lazy maturity reconciliation: any ACTIVE goal whose maturityDate has passed
+     * is flipped to MATURED (with its comms fired once) the moment the user's goals
+     * are read — so the "Ready to Withdraw" UI never depends on the scheduled job
+     * having run. The status flip inside matureGoal() is the once-only guard: the
+     * scheduled job no longer sees the goal as ACTIVE, and vice versa.
+     */
+    private void reconcileMaturedGoals(Long userId) {
+        LocalDate today = LocalDate.now(ZoneId.of("Africa/Lagos"));
+        List<SavingsGoal> activeGoals =
+                savingsGoalRepository.findByUserIdAndStatus(userId, SavingsStatus.ACTIVE);
+        for (SavingsGoal goal : activeGoals) {
+            try {
+                if (!today.isBefore(goal.getMaturityDate())) {
+                    savingsLifeCycleManager.matureGoal(goal);
+                }
+            } catch (Exception e) {
+                // Never let a reconciliation hiccup break the goals screen.
+                logger.error("Failed to lazily mature Savings Goal ID: {}", goal.getId(), e);
+            }
+        }
     }
 
     /** Fire-and-forget push — a notification failure must never roll back a savings transaction. */
@@ -159,7 +186,9 @@ public class SavingsService {
                 NotificationType.SAVINGS_DEPOSIT);
     }
 
+    @Transactional
     public List<SavingsGoal> getActiveSavingsForUser(Long userId) {
+        reconcileMaturedGoals(userId);
         return savingsGoalRepository.findByUserIdAndStatus(userId, SavingsStatus.ACTIVE);
     }
 
@@ -198,7 +227,9 @@ public class SavingsService {
                 .orElseThrow(() -> new RuntimeException("Savings goal not found after sweep."));
     }
 
+    @Transactional
     public List<SavingsGoal> getAllSavingsForUser(Long userId) {
+        reconcileMaturedGoals(userId);
         return savingsGoalRepository.findByUserIdOrderByCreatedAtDesc(userId);
     }
 
