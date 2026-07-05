@@ -2,6 +2,7 @@ package com.moniewise.moniewise_backend.controller;
 
 import com.moniewise.moniewise_backend.dto.request.CreateSavingsGoalRequest;
 import com.moniewise.moniewise_backend.dto.request.FundSavingsRequest;
+import com.moniewise.moniewise_backend.dto.request.SavingsP2PTransferRequest;
 import com.moniewise.moniewise_backend.entity.SavingsGoal;
 import com.moniewise.moniewise_backend.entity.User;
 import com.moniewise.moniewise_backend.service.SavingsService;
@@ -108,6 +109,27 @@ public class SavingsController {
         } catch (Exception e) {
             logger.error("System error during savings withdrawal", e);
             return ResponseEntity.internalServerError().body("An error occurred while processing your withdrawal.");
+        }
+    }
+
+    /**
+     * POST: Send money from a MATURED savings pot to another Wisemonie user (P2P).
+     */
+    @PostMapping("/{id}/transfer/p2p")
+    public ResponseEntity<?> transferSavingsToUser(
+            @PathVariable("id") Long savingsGoalId,
+            @RequestBody SavingsP2PTransferRequest request,
+            Principal principal) {
+        try {
+            User user = userService.findByEmail(principal.getName());
+            SavingsGoal result = savingsService.transferSavingsToUser(user.getId(), savingsGoalId, request);
+            return ResponseEntity.ok(result);
+        } catch (SecurityException | IllegalArgumentException | IllegalStateException e) {
+            logger.warn("Savings P2P failed for {}: {}", principal.getName(), e.getMessage());
+            return ResponseEntity.badRequest().body(e.getMessage());
+        } catch (Exception e) {
+            logger.error("System error during savings P2P transfer", e);
+            return ResponseEntity.internalServerError().body("An error occurred while sending your savings.");
         }
     }
 

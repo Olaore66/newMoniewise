@@ -148,7 +148,7 @@
 
       <p class="body-text">
         Congratulations — <strong th:text="${goalName}">this goal</strong> has officially matured.
-        Every naira you set aside, plus the interest it earned along the way, is now ready for you.
+        Every naira you set aside is now ready for you.
       </p>
 
       <div class="summary">
@@ -156,7 +156,7 @@
           <span class="label">Principal saved</span>
           <span class="value">&#8358;<span th:text="${principal}">0.00</span></span>
         </div>
-        <div class="summary-row">
+        <div class="summary-row" th:if="${hasInterest}">
           <span class="label">Interest earned</span>
           <span class="value">&#8358;<span th:text="${accruedInterest}">0.00</span></span>
         </div>
@@ -166,8 +166,14 @@
         </div>
       </div>
 
+      <p th:unless="${hasInterest}"
+         style="font-size: 12.5px; line-height: 1.55; color: #6B7C77; background: #F2F7F5; border-radius: 10px; padding: 10px 14px; margin: 0 0 18px;">
+        <strong>Please note:</strong> Wisemonie savings goals do not earn interest at this time —
+        your payout is exactly what you saved. Interest-earning savings are on our roadmap.
+      </p>
+
       <p class="body-text" style="margin-bottom: 10px;">
-        <strong>Open the Wisemonie app → Savings tab</strong> and you'll find two ways to take it from here:
+        <strong>Open the Wisemonie app → Savings tab</strong> and you'll find three ways to take it from here:
       </p>
 
       <div class="info-row">
@@ -184,6 +190,14 @@
           <strong>Keep it in your wallet</strong><br>
           Tap "Wallet" to bring the payout into your Wisemonie wallet — ready to spend, fund a budget,
           or seed a new savings goal whenever you like.
+        </div>
+      </div>
+      <div class="info-row">
+        <div class="info-icon">🤝</div>
+        <div class="info-text">
+          <strong>Send to a friend</strong><br>
+          Send some (or all) of it straight to another Wisemonie user — perfect for shared goals,
+          gifts, or settling up.
         </div>
       </div>
 

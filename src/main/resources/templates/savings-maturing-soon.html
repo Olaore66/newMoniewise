@@ -182,7 +182,7 @@
           <span class="label">Principal saved</span>
           <span class="value">&#8358;<span th:text="${principal}">0.00</span></span>
         </div>
-        <div class="summary-row">
+        <div class="summary-row" th:if="${hasInterest}">
           <span class="label">Interest earned so far</span>
           <span class="value">&#8358;<span th:text="${accruedInterest}">0.00</span></span>
         </div>
@@ -191,6 +191,12 @@
           <span class="value">&#8358;<span th:text="${projectedPayout}">0.00</span></span>
         </div>
       </div>
+
+      <p th:unless="${hasInterest}"
+         style="font-size: 12.5px; line-height: 1.55; color: #6B7C77; background: #F2F7F5; border-radius: 10px; padding: 10px 14px; margin: 0 0 18px;">
+        <strong>Please note:</strong> Wisemonie savings goals do not earn interest at this time —
+        your payout is exactly what you saved. Interest-earning savings are on our roadmap.
+      </p>
 
       <p class="body-text">
         It might be tempting to pull all of it out the moment it lands and start fresh from zero —
@@ -206,8 +212,8 @@
         <div class="info-icon">🌱</div>
         <div class="info-text">
           <strong>Roll it into a new goal</strong><br>
-          Start a fresh savings goal with your principal + interest already inside it — your money
-          keeps compounding instead of resetting to zero.
+          Start a fresh savings goal with your full payout already inside it — the saving habit
+          keeps building instead of resetting to zero.
         </div>
       </div>
       <div class="info-row">
@@ -227,9 +233,9 @@
       </div>
 
       <div class="notice">
-        <strong>💡 Good to know:</strong> withdrawing pays your principal + interest straight into
+        <strong>💡 Good to know:</strong> withdrawing pays your full balance straight into
         your Wisemonie wallet — instantly, not your bank account. From your wallet, you're free to
-        transfer to your bank, fund a budget, or start a new goal whenever you're ready.
+        transfer to your bank, send to a friend, fund a budget, or start a new goal whenever you're ready.
       </div>
 
       <p class="body-text" style="margin-top: 4px; margin-bottom: 0;">

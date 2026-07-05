@@ -735,6 +735,10 @@ public class NotificationService {
             context.setVariable("projectedPayout", formatAmount(projectedPayout));
             context.setVariable("maturityDateLabel", maturityDateLabel);
             context.setVariable("daysRemaining", daysRemaining);
+            // Zero interest → the template hides the interest row and shows the
+            // "savings do not earn interest yet" disclaimer instead.
+            context.setVariable("hasInterest",
+                    accruedInterest != null && accruedInterest.compareTo(BigDecimal.ZERO) > 0);
 
             String htmlContent = templateEngine.process("savings-maturing-soon", context);
 
@@ -776,6 +780,9 @@ public class NotificationService {
             context.setVariable("principal", formatAmount(principal));
             context.setVariable("accruedInterest", formatAmount(accruedInterest));
             context.setVariable("totalPayout", formatAmount(totalPayout));
+            // Zero interest → hide the interest row, show the no-interest disclaimer.
+            context.setVariable("hasInterest",
+                    accruedInterest != null && accruedInterest.compareTo(BigDecimal.ZERO) > 0);
 
             String htmlContent = templateEngine.process("savings-matured", context);
 

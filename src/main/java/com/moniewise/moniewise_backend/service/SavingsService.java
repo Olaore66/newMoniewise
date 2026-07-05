@@ -1,11 +1,16 @@
 package com.moniewise.moniewise_backend.service;
 
 import com.moniewise.moniewise_backend.config.SavingsLifeCycleManager;
+import com.moniewise.moniewise_backend.dto.request.SavingsP2PTransferRequest;
 import com.moniewise.moniewise_backend.entity.*;
 import com.moniewise.moniewise_backend.enums.NotificationType;
 import com.moniewise.moniewise_backend.enums.SavingsStatus;
 import com.moniewise.moniewise_backend.enums.TransactionStatus;
 import com.moniewise.moniewise_backend.enums.TransactionType;
+import com.moniewise.moniewise_backend.exception.EntityNotFoundException;
+import com.moniewise.moniewise_backend.psp.PaymentGateway;
+import com.moniewise.moniewise_backend.psp.PaymentGatewayResolver;
+import com.moniewise.moniewise_backend.psp.rubies.RubiesGateway;
 import com.moniewise.moniewise_backend.repository.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -32,6 +37,12 @@ public class SavingsService {
     private final EnvelopeRepository envelopeRepository;
     private final NotificationService notificationService;
     private final SavingsLifeCycleManager savingsLifeCycleManager;
+    private final UserService userService;
+    private final PaymentGatewayResolver paymentGatewayResolver;
+    private final BeneficiaryService beneficiaryService;
+
+    private static final String RUBIES_BANK_CODE = "090175";
+    private static final String RUBIES_BANK_NAME = "Rubies MFB";
 
     public SavingsService(SavingsGoalRepository savingsGoalRepository,
                           UserRepository userRepository,
@@ -39,7 +50,10 @@ public class SavingsService {
                           TransactionLogRepository transactionLogRepository,
                           EnvelopeRepository envelopeRepository,
                           NotificationService notificationService,
-                          SavingsLifeCycleManager savingsLifeCycleManager) {
+                          SavingsLifeCycleManager savingsLifeCycleManager,
+                          UserService userService,
+                          PaymentGatewayResolver paymentGatewayResolver,
+                          BeneficiaryService beneficiaryService) {
         this.savingsGoalRepository = savingsGoalRepository;
         this.userRepository = userRepository;
         this.walletService = walletService;
@@ -47,6 +61,9 @@ public class SavingsService {
         this.envelopeRepository = envelopeRepository;
         this.notificationService = notificationService;
         this.savingsLifeCycleManager = savingsLifeCycleManager;
+        this.userService = userService;
+        this.paymentGatewayResolver = paymentGatewayResolver;
+        this.beneficiaryService = beneficiaryService;
     }
 
     /**
@@ -273,6 +290,228 @@ public class SavingsService {
 
         logger.info("User {} withdrew ₦{} from savings goal {} ({})", userId, totalPayout, savingsGoalId, goal.getName());
         return saved;
+    }
+
+    /**
+     * P2P from a MATURED savings pot straight to another Wisemonie user.
+     * Faithful adaptation of EnvelopeService.transferToMonieWiseUser with the
+     * savings pot as the source instead of an envelope:
+     * <ul>
+     *   <li>Same PIN verification, recipient resolution and self-transfer guard.</li>
+     *   <li>Same two money paths: Rubies-to-Rubies internal book transfer
+     *       (recipient credited by the CR webhook — never here, to avoid the
+     *       double-credit) or the internal DB-only ledger path.</li>
+     *   <li>Partial sends allowed. Accrued interest is folded into the balance on
+     *       the first send; when the pot empties it flips to WITHDRAWN.</li>
+     * </ul>
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public SavingsGoal transferSavingsToUser(Long userId, Long savingsGoalId,
+                                             SavingsP2PTransferRequest request) {
+        BigDecimal amount = request.getAmount();
+        if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new IllegalArgumentException("Amount must be positive");
+        }
+
+        User sender = userRepository.findById(userId)
+                .orElseThrow(() -> new EntityNotFoundException("User not found"));
+
+        if (request.getTransactionPin() == null || request.getTransactionPin().isBlank()) {
+            throw new IllegalArgumentException("Transaction PIN is required");
+        }
+        if (!userService.verifyTransactionPin(sender, request.getTransactionPin())) {
+            throw new IllegalArgumentException("Invalid transaction PIN");
+        }
+
+        User recipient = userService.findByEmailOrPhone(request.getRecipientIdentity())
+                .orElseThrow(() -> new EntityNotFoundException("Recipient not found"));
+
+        if (sender.getId().equals(recipient.getId())) {
+            throw new IllegalArgumentException("You cannot transfer to yourself.");
+        }
+
+        SavingsGoal goal = savingsGoalRepository.findById(savingsGoalId)
+                .orElseThrow(() -> new EntityNotFoundException("Savings goal not found"));
+
+        if (!goal.getUser().getId().equals(userId)) {
+            throw new SecurityException("You do not have permission to withdraw this savings goal.");
+        }
+        if (goal.getStatus() != SavingsStatus.MATURED) {
+            throw new IllegalStateException(
+                    "Only matured savings can be sent to a friend. Current status: " + goal.getStatus());
+        }
+
+        BigDecimal principal = goal.getCurrentBalance() != null ? goal.getCurrentBalance() : BigDecimal.ZERO;
+        BigDecimal interest  = goal.getAccruedInterest() != null ? goal.getAccruedInterest() : BigDecimal.ZERO;
+        BigDecimal available = principal.add(interest);
+
+        if (amount.compareTo(available) > 0) {
+            throw new IllegalStateException(
+                    String.format("Insufficient funds in this savings pot. Available: ₦%,.2f", available));
+        }
+
+        String senderName    = walletService.resolveDisplayName(sender);
+        String recipientName = walletService.resolveDisplayName(recipient);
+
+        boolean providerBackedP2p = shouldUseProviderBackedP2p(sender, recipient);
+        String providerReference = null;
+        String logRefPrefix    = "P2P-SV-DB-";
+        String logCrRefPrefix  = "P2P-SV-CR-";
+        String logProviderName = null;
+
+        if (providerBackedP2p) {
+            // ── Rubies-to-Rubies internal book transfer ──────────────────────────
+            // The pot's money physically sits in the sender's Rubies wallet (the
+            // app-level pot is a ledger partition), so the PSP moves wallet→wallet.
+            Wallet senderWallet    = walletService.getWalletByUserId(sender.getId());
+            Wallet recipientWallet = walletService.getWalletByUserId(recipient.getId());
+
+            String p2pReference = "P2P-RB-SV-" + sender.getId() + "-" + System.currentTimeMillis();
+
+            logger.info("[P2P-SAVINGS-RUBIES] Initiating internal transfer ref={} from={} to={} amount={}",
+                    p2pReference, senderWallet.getProviderWalletRef(),
+                    recipientWallet.getProviderWalletRef(), amount);
+
+            PaymentGateway gateway = paymentGatewayResolver.resolveByProviderName(RubiesGateway.PROVIDER_NAME);
+            try {
+                providerReference = gateway.initiateTransferWithContext(
+                        senderWallet.getProviderWalletRef(),
+                        walletService.resolveDisplayName(sender),
+                        RUBIES_BANK_CODE,
+                        RUBIES_BANK_NAME,
+                        recipientWallet.getProviderWalletRef(),
+                        walletService.resolveDisplayName(recipient),
+                        amount,
+                        p2pReference,
+                        "Wisemonie P2P (savings): " + senderName + " to " + recipientName
+                );
+            } catch (RuntimeException ex) {
+                // Sanitise Rubies float-related errors — don't expose internal float state to users.
+                String rawCause = ex.getMessage() != null ? ex.getMessage().toLowerCase() : "";
+                if (rawCause.contains("insufficient float")
+                        || rawCause.contains("not enough float")
+                        || (rawCause.contains("insufficient balance") && rawCause.contains("rubies"))) {
+                    throw new RuntimeException(
+                            "Transfer temporarily unavailable. Please try again in a few minutes or contact support.");
+                }
+                throw ex;
+            }
+
+            // DO NOT credit the recipient here — the Rubies CR webhook does it.
+            logRefPrefix    = "P2P-RB-SV-DB-";
+            logCrRefPrefix  = "P2P-RB-SV-CR-";
+            logProviderName = RubiesGateway.PROVIDER_NAME;
+
+            logger.info("[P2P-SAVINGS-RUBIES] Transfer accepted: ref={} sessionId={}", p2pReference, providerReference);
+        } else {
+            // ── Internal DB-only path ────────────────────────────────────────────
+            walletService.fundWallet(recipient.getId(), amount, null, true);
+        }
+
+        // Debit the pot: interest folds into the balance on the first send;
+        // an emptied pot flips to WITHDRAWN (same terminal state as withdraw).
+        BigDecimal remaining = available.subtract(amount);
+        goal.setAccruedInterest(BigDecimal.ZERO);
+        goal.setCurrentBalance(remaining);
+        if (remaining.compareTo(BigDecimal.ZERO) == 0) {
+            goal.setStatus(SavingsStatus.WITHDRAWN);
+        }
+        SavingsGoal saved = savingsGoalRepository.save(goal);
+
+        String baseRef = providerReference != null && !providerReference.isBlank()
+                ? providerReference
+                : recipient.getId() + "-" + System.currentTimeMillis();
+
+        String description = request.getNote() != null && !request.getNote().isBlank()
+                ? request.getNote()
+                : "Sent to " + recipientName + " from savings: " + goal.getName();
+
+        LocalDateTime now = LocalDateTime.now();
+
+        TransactionLog senderLog = TransactionLog.builder()
+                .userId(sender.getId())
+                .counterpartyUserId(recipient.getId())
+                .amount(amount.negate())
+                .fee(BigDecimal.ZERO)
+                .transactionType(TransactionType.SAVINGS_WITHDRAWAL)
+                .status(TransactionStatus.COMPLETED)
+                .reference(logRefPrefix + baseRef)
+                .providerName(logProviderName)
+                .providerReference(providerReference)
+                .description(description)
+                .createdAt(now)
+                .build();
+        transactionLogRepository.save(senderLog);
+
+        TransactionLog recipientLog = TransactionLog.builder()
+                .userId(recipient.getId())
+                .counterpartyUserId(sender.getId())
+                .amount(amount)
+                .fee(BigDecimal.ZERO)
+                .transactionType(TransactionType.USER_TO_USER)
+                .status(TransactionStatus.COMPLETED)
+                .reference(logCrRefPrefix + baseRef)
+                .providerName(logProviderName)
+                .providerReference(providerReference)
+                .description("Received from " + senderName)
+                .createdAt(now)
+                .build();
+        transactionLogRepository.save(recipientLog);
+
+        // Sender notification (outbox — commits atomically with this transfer).
+        notificationService.sendNotification(
+                sender.getId().toString(),
+                String.format("You sent ₦%,.2f to %s from your savings '%s'.%s",
+                        amount, recipientName, goal.getName(),
+                        remaining.compareTo(BigDecimal.ZERO) > 0
+                                ? String.format(" ₦%,.2f left in the pot.", remaining)
+                                : " The pot is now closed."),
+                NotificationType.EXTERNAL_TRANSFER,
+                null,
+                null,
+                "VIEW_SAVINGS",
+                "/savings/" + goal.getId()
+        );
+
+        // Recipient notification — only on the internal path; Rubies P2P recipient
+        // alerts are sent by the CR webhook after the balance is actually credited.
+        if (!providerBackedP2p) {
+            notificationService.sendNotification(
+                    recipient.getId().toString(),
+                    String.format("%s sent you ₦%,.2f.", senderName, amount),
+                    NotificationType.WALLET_DEPOSIT,
+                    null,
+                    null,
+                    "VIEW_WALLET",
+                    "/dashboard"
+            );
+        }
+
+        try {
+            beneficiaryService.addBeneficiary(sender.getId(), recipient.getEmail(), recipientName);
+        } catch (Exception e) {
+            // Beneficiary bookkeeping must never fail the transfer.
+        }
+
+        logger.info("User {} sent ₦{} from savings goal {} ({}) to user {}",
+                userId, amount, savingsGoalId, goal.getName(), recipient.getId());
+        return saved;
+    }
+
+    /** Rubies-to-Rubies pairs use the provider-backed book transfer; anything else falls back to the internal ledger path. */
+    private boolean shouldUseProviderBackedP2p(User sender, User recipient) {
+        try {
+            Wallet senderWallet    = walletService.getWalletByUserId(sender.getId());
+            Wallet recipientWallet = walletService.getWalletByUserId(recipient.getId());
+            return senderWallet    != null
+                && recipientWallet != null
+                && RubiesGateway.PROVIDER_NAME.equalsIgnoreCase(senderWallet.getProviderName())
+                && RubiesGateway.PROVIDER_NAME.equalsIgnoreCase(recipientWallet.getProviderName());
+        } catch (Exception e) {
+            logger.warn("[P2P-SAVINGS] Could not determine provider-backed eligibility — falling back to internal path: {}",
+                    e.getMessage());
+            return false;
+        }
     }
 
     /**
