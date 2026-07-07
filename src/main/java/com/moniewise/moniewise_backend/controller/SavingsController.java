@@ -3,6 +3,7 @@ package com.moniewise.moniewise_backend.controller;
 import com.moniewise.moniewise_backend.dto.request.CreateSavingsGoalRequest;
 import com.moniewise.moniewise_backend.dto.request.FundSavingsRequest;
 import com.moniewise.moniewise_backend.dto.request.SavingsP2PTransferRequest;
+import com.moniewise.moniewise_backend.dto.request.WithdrawSavingsRequest;
 import com.moniewise.moniewise_backend.entity.SavingsGoal;
 import com.moniewise.moniewise_backend.entity.User;
 import com.moniewise.moniewise_backend.service.SavingsService;
@@ -93,15 +94,18 @@ public class SavingsController {
     }
 
     /**
-     * POST: Withdraw a matured savings goal — pays out principal + interest to wallet
+     * POST: Withdraw from a matured savings goal to the wallet.
+     * Optional body {"amount": ...} = partial withdrawal; no body = full payout.
      */
     @PostMapping("/{id}/withdraw")
     public ResponseEntity<?> withdrawSavings(
             @PathVariable("id") Long savingsGoalId,
+            @RequestBody(required = false) WithdrawSavingsRequest body,
             Principal principal) {
         try {
             User user = userService.findByEmail(principal.getName());
-            SavingsGoal result = savingsService.withdrawSavings(user.getId(), savingsGoalId);
+            SavingsGoal result = savingsService.withdrawSavings(
+                    user.getId(), savingsGoalId, body != null ? body.getAmount() : null);
             return ResponseEntity.ok(result);
         } catch (SecurityException | IllegalArgumentException | IllegalStateException e) {
             logger.warn("Withdrawal failed for {}: {}", principal.getName(), e.getMessage());

@@ -250,8 +250,21 @@ public class SavingsService {
         return savingsGoalRepository.findByUserIdOrderByCreatedAtDesc(userId);
     }
 
+    /** Full withdrawal — kept for existing callers; delegates to the amount-aware version. */
     @Transactional(rollbackFor = Exception.class)
     public SavingsGoal withdrawSavings(Long userId, Long savingsGoalId) {
+        return withdrawSavings(userId, savingsGoalId, null);
+    }
+
+    /**
+     * Withdraws from a MATURED pot to the wallet. {@code requestedAmount} null =
+     * the full payout (original behavior). A partial amount leaves the pot
+     * MATURED with the remainder still withdrawable; interest folds into the
+     * balance on the first withdrawal (same math as the P2P path). The pot flips
+     * to WITHDRAWN only when emptied.
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public SavingsGoal withdrawSavings(Long userId, Long savingsGoalId, BigDecimal requestedAmount) {
         SavingsGoal goal = savingsGoalRepository.findById(savingsGoalId)
                 .orElseThrow(() -> new IllegalArgumentException("Savings goal not found"));
 
@@ -265,30 +278,53 @@ public class SavingsService {
 
         BigDecimal principal = goal.getCurrentBalance() != null ? goal.getCurrentBalance() : BigDecimal.ZERO;
         BigDecimal interest  = goal.getAccruedInterest() != null ? goal.getAccruedInterest() : BigDecimal.ZERO;
-        BigDecimal totalPayout = principal.add(interest);
+        BigDecimal available = principal.add(interest);
 
-        if (totalPayout.compareTo(BigDecimal.ZERO) > 0) {
-            String msg = String.format("Savings withdrawal: %s (₦%,.2f principal + ₦%,.2f interest)",
-                    goal.getName(), principal, interest);
-            walletService.fundWallet(userId, totalPayout, msg, false);
+        BigDecimal amount = requestedAmount != null ? requestedAmount : available;
+        boolean isFull = amount.compareTo(available) == 0;
+
+        // Explicit partial requests must be positive; a FULL withdrawal of an
+        // empty pot stays allowed — it simply closes the pot (original behavior).
+        if (requestedAmount != null && requestedAmount.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new IllegalArgumentException("Withdrawal amount must be greater than zero.");
+        }
+        if (amount.compareTo(available) > 0) {
+            throw new IllegalStateException(
+                    String.format("Insufficient funds in this savings pot. Available: ₦%,.2f", available));
+        }
+
+        if (amount.compareTo(BigDecimal.ZERO) > 0) {
+            String msg = isFull
+                    ? String.format("Savings withdrawal: %s (₦%,.2f principal + ₦%,.2f interest)",
+                            goal.getName(), principal, interest)
+                    : String.format("Partial savings withdrawal: %s (₦%,.2f of ₦%,.2f)",
+                            goal.getName(), amount, available);
+            walletService.fundWallet(userId, amount, msg, false);
         }
 
         TransactionLog log = new TransactionLog();
         log.setUserId(userId);
-        log.setAmount(totalPayout);
+        log.setAmount(amount);
         log.setTransactionType(TransactionType.SAVINGS_WITHDRAWAL);
-        log.setDescription("Withdrawal from matured savings: " + goal.getName());
+        log.setDescription((isFull ? "Withdrawal from matured savings: " : "Partial withdrawal from matured savings: ")
+                + goal.getName());
         log.setStatus(TransactionStatus.COMPLETED);
         log.setReference("SAVE-OUT-" + UUID.randomUUID().toString());
         log.setCreatedAt(LocalDateTime.now());
         transactionLogRepository.save(log);
 
-        goal.setCurrentBalance(BigDecimal.ZERO);
+        // Interest folds into the balance on the first withdrawal; the pot stays
+        // MATURED (still withdrawable) until it is actually empty.
+        BigDecimal remaining = available.subtract(amount);
         goal.setAccruedInterest(BigDecimal.ZERO);
-        goal.setStatus(SavingsStatus.WITHDRAWN);
+        goal.setCurrentBalance(remaining);
+        if (remaining.compareTo(BigDecimal.ZERO) == 0) {
+            goal.setStatus(SavingsStatus.WITHDRAWN);
+        }
         SavingsGoal saved = savingsGoalRepository.save(goal);
 
-        logger.info("User {} withdrew ₦{} from savings goal {} ({})", userId, totalPayout, savingsGoalId, goal.getName());
+        logger.info("User {} withdrew ₦{} ({}) from savings goal {} ({})",
+                userId, amount, isFull ? "full" : "partial", savingsGoalId, goal.getName());
         return saved;
     }
 
