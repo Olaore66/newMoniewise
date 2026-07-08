@@ -25,6 +25,15 @@
 	<dependencies>
 
 
+		<!-- Markdown -> HTML for the public legal pages (/privacy-policy, /terms-of-use) -->
+		<dependency>
+			<groupId>org.commonmark</groupId>
+			<artifactId>commonmark</artifactId>
+			<version>0.21.0</version>
+		</dependency>
+
+
+
 		<!-- Core Spring Boot -->
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
