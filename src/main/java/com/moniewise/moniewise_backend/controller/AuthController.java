@@ -236,7 +236,10 @@ public class AuthController {
             String deviceId = httpRequest.getHeader("X-Device-Id");
             boolean deviceTrusted = deviceId != null && !deviceId.isBlank()
                     && trustedDeviceRepository.existsByUserIdAndDeviceId(user.getId(), deviceId.trim());
-            if (!deviceTrusted) {
+            // The seeded app-review account skips the per-device OTP (a store
+            // reviewer can't receive it). Password was already verified above;
+            // this only affects the single row flagged test_account = true.
+            if (!deviceTrusted && !user.isTestAccount()) {
                 // Valid credentials — reset the failure counter, then ask for OTP.
                 abuseProtectionService.recordSuccess(AbuseProtectionService.LOGIN, throttleKey);
                 return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of("error", "OTP verification required"));

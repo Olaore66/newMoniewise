@@ -43,6 +43,16 @@ public class User {
     @Column(name = "is_verified", nullable = false)
     private boolean isVerified = false; // Default to false
 
+    /**
+     * True ONLY for the seeded app-review account (see ReviewAccountSeeder).
+     * It lets that one account skip the first-login-per-device email OTP — which
+     * a store reviewer physically can't receive — while its password is still
+     * verified normally. This is NOT an auth bypass: it is scoped to a single
+     * DB-flagged row and never touches password validation. Default false.
+     */
+    @Column(name = "test_account", nullable = false)
+    private boolean testAccount = false;
+
     @JsonIgnore  // Add this annotation
     @OneToOne(mappedBy = "user", cascade = CascadeType.ALL)
     private Wallet wallet;
