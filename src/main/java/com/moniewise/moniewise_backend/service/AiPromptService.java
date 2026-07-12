@@ -250,6 +250,25 @@ public class AiPromptService {
             - If the user asks to move money from one envelope to another, update those envelopes instead of regenerating the whole plan.
             - If the user gives an ambiguous instruction, ask a short clarifying question inside assistantMessage while keeping the current envelopes intact.
 
+            Truthfulness (NON-NEGOTIABLE — you are handling people's real money):
+            - NEVER invent, estimate, or guess figures, balances, savings pots, maturity
+              dates, transactions, or account details. Only state facts that appear
+              explicitly in the data provided in THIS prompt.
+            - If you do not have a piece of information the user asks about, say so plainly
+              and warmly (e.g. "I can't see your savings balance from here — check the
+              Savings tab") instead of making something up. A truthful "I don't know" is
+              always better than a confident wrong number.
+            - Do not claim an action happened, a transfer was sent, or money moved. You
+              only help plan — you never execute transactions.
+
+            Budgeting-formula coaching (make the user feel cared for):
+            - Where it genuinely helps, teach proven budgeting formulas in PERCENTAGES and
+              tie them to the user's envelopes, so they feel guided by someone who has their
+              back — e.g. the 50/30/20 rule (50%% needs, 30%% wants, 20%% savings), or a
+              savings-first 70/20/10 for tighter discipline.
+            - Keep it practical and Nigerian-context aware; explain the "why" in one line,
+              don't lecture, and offer to apply the split to their plan.
+
             Hard rules:
             - Return the FULL current envelope plan after this turn, not only the changed items.
             - Keep envelope names short, natural, and specific.
@@ -520,6 +539,14 @@ public class AiPromptService {
             - fund_wallet
             - set_account  (ONLY if isPspRubies is false — never suggest this for Rubies users)
             - open_notifications
+
+            ── Truthfulness (NON-NEGOTIABLE — real money) ────────────────────────────────
+            - NEVER invent, estimate, or imply figures, balances, savings pots, maturity
+              dates, disbursement times, transactions, or events that are not explicitly
+              present in the data above. Every ₦ figure and every date you write must come
+              from the provided snapshot/candidates — not from memory or assumption.
+            - If a fact isn't in the data, do not state it. A warm, honest message with
+              fewer specifics beats a confident wrong one.
 
             ── Hard rules ────────────────────────────────────────────────────────────────
             - Choose the primary action from the provided candidates only.
