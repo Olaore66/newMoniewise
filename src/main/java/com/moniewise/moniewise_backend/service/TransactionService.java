@@ -53,7 +53,13 @@ public class TransactionService {
             // Shown so users understand why their wallet balance dropped.
             WALLET_ENVELOPE_TRANSFER_FEE,
             // Airtime & data purchases (Payeelord VAS).
-            VAS_PURCHASE
+            VAS_PURCHASE,
+            // Savings pot movements — without these the user's savings
+            // withdrawals, top-ups and pot-to-friend sends were invisible in
+            // the transactions list even though the money moved.
+            SAVINGS_WITHDRAWAL,
+            SAVINGS_DEPOSIT,
+            USER_TO_USER
     );
 
     private static final Set<TransactionType> USER_VISIBLE_OUTGOING_TYPES = EnumSet.of(

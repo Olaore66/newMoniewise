@@ -300,7 +300,11 @@ public class SavingsService {
                             goal.getName(), principal, interest)
                     : String.format("Partial savings withdrawal: %s (₦%,.2f of ₦%,.2f)",
                             goal.getName(), amount, available);
-            walletService.fundWallet(userId, amount, msg, false);
+            // Suppress the wallet-side deposit log: the SAVINGS_WITHDRAWAL entry
+            // below is now the single user-visible record for this move, so we
+            // don't want a duplicate WALLET_DEPOSIT for the same ₦ making it look
+            // like the money doubled.
+            walletService.fundWallet(userId, amount, msg, true);
         }
 
         TransactionLog log = new TransactionLog();
