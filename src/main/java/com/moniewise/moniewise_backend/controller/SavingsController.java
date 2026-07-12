@@ -4,6 +4,7 @@ import com.moniewise.moniewise_backend.dto.request.CreateSavingsGoalRequest;
 import com.moniewise.moniewise_backend.dto.request.FundSavingsRequest;
 import com.moniewise.moniewise_backend.dto.request.SavingsP2PTransferRequest;
 import com.moniewise.moniewise_backend.dto.request.WithdrawSavingsRequest;
+import com.moniewise.moniewise_backend.dto.request.WithdrawalRequest;
 import com.moniewise.moniewise_backend.entity.SavingsGoal;
 import com.moniewise.moniewise_backend.entity.User;
 import com.moniewise.moniewise_backend.service.SavingsService;
@@ -113,6 +114,29 @@ public class SavingsController {
         } catch (Exception e) {
             logger.error("System error during savings withdrawal", e);
             return ResponseEntity.internalServerError().body("An error occurred while processing your withdrawal.");
+        }
+    }
+
+    /**
+     * POST: Send money from a MATURED savings pot to an external bank account.
+     * Body is the same WithdrawalRequest the wallet endpoint uses (amount +
+     * inline destination bank + PIN). Reuses the tested wallet withdrawal.
+     */
+    @PostMapping("/{id}/transfer/bank")
+    public ResponseEntity<?> transferSavingsToBank(
+            @PathVariable("id") Long savingsGoalId,
+            @RequestBody WithdrawalRequest request,
+            Principal principal) {
+        try {
+            User user = userService.findByEmail(principal.getName());
+            SavingsGoal result = savingsService.transferSavingsToBank(user.getId(), savingsGoalId, request);
+            return ResponseEntity.ok(result);
+        } catch (SecurityException | IllegalArgumentException | IllegalStateException e) {
+            logger.warn("Savings bank transfer failed for {}: {}", principal.getName(), e.getMessage());
+            return ResponseEntity.badRequest().body(e.getMessage());
+        } catch (Exception e) {
+            logger.error("System error during savings bank transfer", e);
+            return ResponseEntity.internalServerError().body("An error occurred while sending your savings to bank.");
         }
     }
 

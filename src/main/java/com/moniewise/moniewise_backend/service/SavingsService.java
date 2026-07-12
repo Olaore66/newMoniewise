@@ -2,6 +2,7 @@ package com.moniewise.moniewise_backend.service;
 
 import com.moniewise.moniewise_backend.config.SavingsLifeCycleManager;
 import com.moniewise.moniewise_backend.dto.request.SavingsP2PTransferRequest;
+import com.moniewise.moniewise_backend.dto.request.WithdrawalRequest;
 import com.moniewise.moniewise_backend.entity.*;
 import com.moniewise.moniewise_backend.enums.NotificationType;
 import com.moniewise.moniewise_backend.enums.SavingsStatus;
@@ -548,6 +549,77 @@ public class SavingsService {
                     e.getMessage());
             return false;
         }
+    }
+
+    /**
+     * Send money from a MATURED savings pot straight to an external bank account.
+     *
+     * <p>This deliberately does NOT touch the envelope external-transfer rail.
+     * Instead it composes existing, tested pieces: it debits the pot, credits the
+     * user's wallet (the pot's funds physically live there), then hands off to
+     * {@link WalletService#processWithdrawal} — which already verifies the PIN,
+     * re-verifies the destination account name with the bank, quotes fees, and
+     * runs the proven settlement/reversal lifecycle. So no new async/webhook code
+     * exists here and nothing that already works is modified.
+     *
+     * <p>Safety: everything runs in one transaction. If the withdrawal throws
+     * (bad account, insufficient fee balance, provider reject) the whole thing
+     * rolls back and the pot is restored. If it later fails at the provider
+     * webhook, the existing withdrawal reversal returns the funds to the wallet —
+     * never lost. Matured-only; partial allowed; the pot flips to WITHDRAWN when
+     * emptied. {@code request} is the same WithdrawalRequest the wallet endpoint
+     * uses (amount + inline destination bank + PIN).
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public SavingsGoal transferSavingsToBank(Long userId, Long savingsGoalId, WithdrawalRequest request) {
+        BigDecimal amount = request.getAmount();
+        if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new IllegalArgumentException("Amount must be positive");
+        }
+
+        SavingsGoal goal = savingsGoalRepository.findById(savingsGoalId)
+                .orElseThrow(() -> new EntityNotFoundException("Savings goal not found"));
+
+        if (!goal.getUser().getId().equals(userId)) {
+            throw new SecurityException("You do not have permission to withdraw this savings goal.");
+        }
+        if (goal.getStatus() != SavingsStatus.MATURED) {
+            throw new IllegalStateException(
+                    "Only matured savings can be sent to a bank. Current status: " + goal.getStatus());
+        }
+
+        BigDecimal principal = goal.getCurrentBalance() != null ? goal.getCurrentBalance() : BigDecimal.ZERO;
+        BigDecimal interest  = goal.getAccruedInterest() != null ? goal.getAccruedInterest() : BigDecimal.ZERO;
+        BigDecimal available = principal.add(interest);
+
+        if (amount.compareTo(available) > 0) {
+            throw new IllegalStateException(
+                    String.format("Insufficient funds in this savings pot. Available: ₦%,.2f", available));
+        }
+
+        // 1) Debit the pot; interest folds into the balance on the first exit, and
+        //    emptying the pot closes it (same terminal state as the other exits).
+        BigDecimal remaining = available.subtract(amount);
+        goal.setAccruedInterest(BigDecimal.ZERO);
+        goal.setCurrentBalance(remaining);
+        if (remaining.compareTo(BigDecimal.ZERO) == 0) {
+            goal.setStatus(SavingsStatus.WITHDRAWN);
+        }
+        savingsGoalRepository.save(goal);
+
+        // 2) Credit the wallet (suppress the generic notification/log — the
+        //    withdrawal below is the user-facing transaction).
+        walletService.fundWallet(userId, amount,
+                "Savings withdrawal to bank: " + goal.getName(), true);
+
+        // 3) Hand off to the existing, tested wallet withdrawal. Fees come from the
+        //    wallet exactly as they do for a normal withdrawal.
+        walletService.processWithdrawal(userId, request);
+
+        logger.info("User {} sent ₦{} from savings goal {} ({}) to external bank {} / {}",
+                userId, amount, savingsGoalId, goal.getName(),
+                request.getBankCode(), request.getAccountNumber());
+        return goal;
     }
 
     /**
