@@ -840,6 +840,21 @@ public class AiInsightService {
                 BigDecimal availableAmount = resolveSpendableAmount(envelope);
                 double score = scoreSpendableEnvelope(budget, envelope, now, availableAmount);
                 boolean disbursementReached = hasDisbursementReached(envelope, now) || wasRecentlyReleased(envelope, now);
+
+                // A scheduled envelope whose disbursement time hasn't arrived is LOCKED —
+                // its money is not spendable yet (this is exactly what the app shows with
+                // the padlock icon). It must NEVER be surfaced as a "spend now / available
+                // now / unlocked" candidate — doing so is what made Monnie tell the user a
+                // locked Offering envelope was unlocked and ₦X was ready. When it's locked
+                // we skip it here; the upcoming-disbursement path below still announces the
+                // exact time it unlocks.
+                boolean lockedUntilDisbursement = !disbursementReached
+                    && envelope.getNextDisbursementAt() != null
+                    && envelope.getNextDisbursementAt().isAfter(now);
+                if (lockedUntilDisbursement) {
+                    continue;
+                }
+
                 String message = disbursementReached
                     ? envelope.getName() + " has reached disbursement time. NGN "
                         + formatMoney(availableAmount) + " is ready to spend from " + budget.getName() + "."
