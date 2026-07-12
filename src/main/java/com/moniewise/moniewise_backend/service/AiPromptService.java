@@ -364,6 +364,7 @@ public class AiPromptService {
         int budgetPctElapsed,
         java.util.List<String> activeBudgetNames,
         java.util.List<?> allEnvelopes,
+        String savingsSnapshot,
         String candidatesJson
     ) {
         String envelopesNearLimitStr = (envelopesNearLimit == null || envelopesNearLimit.isEmpty())
@@ -585,6 +586,16 @@ public class AiPromptService {
             - envelopeSnapshot (ALL envelopes with exact ₦ figures — use these for specific advice):
 %s
 
+            ── Savings snapshot (the user's locked savings pots) ─────────────────────────
+            These are SEPARATE from budgets/envelopes. Use them ONLY as truthful context —
+            you have no "savings" action to offer, so never tell the user to spend or
+            withdraw a pot from this card. You MAY warmly reference a pot's progress or an
+            upcoming/passed maturity when it genuinely fits (e.g. "your Wedding pot matures
+            in 12 days — staying the course 💚"). NEVER invent a pot, balance, or date not
+            listed here. A pot marked LOCKED cannot be spent until its maturity date.
+            Savings pots:
+%s
+
             Ranked candidates JSON:
             %s
 
@@ -656,6 +667,7 @@ public class AiPromptService {
                 budgetProgressStr,
                 budgetNamesStr,
                 envelopeSnapshotStr,
+                (savingsSnapshot == null || savingsSnapshot.isBlank()) ? "none" : savingsSnapshot,
                 candidatesJson
         );
     }

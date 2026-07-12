@@ -5,6 +5,9 @@ import com.moniewise.moniewise_backend.dto.response.AiDashboardNextActionRespons
 import com.moniewise.moniewise_backend.entity.TransactionLog;
 import com.moniewise.moniewise_backend.enums.Gender;
 import com.moniewise.moniewise_backend.repository.TransactionLogRepository;
+import com.moniewise.moniewise_backend.entity.SavingsGoal;
+import com.moniewise.moniewise_backend.enums.SavingsStatus;
+import com.moniewise.moniewise_backend.repository.SavingsGoalRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import com.moniewise.moniewise_backend.entity.Budget;
@@ -86,6 +89,7 @@ public class AiInsightService {
     private final ObjectMapper objectMapper;
     private final SystemConfigService systemConfigService;
     private final TransactionLogRepository transactionLogRepository;
+    private final SavingsGoalRepository savingsGoalRepository;
     private final RedisTemplate<String, String> redisTemplate;
 
     public AiInsightService(
@@ -97,6 +101,7 @@ public class AiInsightService {
         ObjectMapper objectMapper,
         SystemConfigService systemConfigService,
         TransactionLogRepository transactionLogRepository,
+        SavingsGoalRepository savingsGoalRepository,
         RedisTemplate<String, String> redisTemplate
     ) {
         this.userService = userService;
@@ -107,6 +112,7 @@ public class AiInsightService {
         this.objectMapper = objectMapper;
         this.systemConfigService = systemConfigService;
         this.transactionLogRepository = transactionLogRepository;
+        this.savingsGoalRepository = savingsGoalRepository;
         this.redisTemplate = redisTemplate;
     }
 
@@ -207,6 +213,7 @@ public class AiInsightService {
                 context.budgetPctElapsed,
                 context.activeBudgetNames,
                 context.allEnvelopes,
+                context.savingsSnapshot,
                 candidatesJson
             );
 
@@ -232,6 +239,55 @@ public class AiInsightService {
         }
 
         return result;
+    }
+
+    /**
+     * A truthful, compact summary of the user's savings pots for Monnie — one
+     * line each: balance saved, target, status, and (for active pots) the exact
+     * maturity date + days remaining. Withdrawn/cancelled pots are omitted.
+     * Returns "none" when there are no live pots. Never throws — a savings hiccup
+     * must not break the dashboard card.
+     */
+    private String buildSavingsSnapshot(Long userId) {
+        try {
+            List<SavingsGoal> goals = savingsGoalRepository.findByUserIdOrderByCreatedAtDesc(userId);
+            if (goals == null || goals.isEmpty()) return "none";
+
+            java.time.LocalDate today = java.time.LocalDate.now(LAGOS_ZONE);
+            StringBuilder sb = new StringBuilder();
+            for (SavingsGoal g : goals) {
+                if (g.getStatus() == SavingsStatus.WITHDRAWN || g.getStatus() == SavingsStatus.CANCELLED) {
+                    continue; // closed pots aren't actionable context
+                }
+                BigDecimal balance = g.getCurrentBalance() != null ? g.getCurrentBalance() : BigDecimal.ZERO;
+                BigDecimal interest = g.getAccruedInterest() != null ? g.getAccruedInterest() : BigDecimal.ZERO;
+                BigDecimal value = balance.add(interest);
+                BigDecimal target = g.getTargetAmount() != null ? g.getTargetAmount() : BigDecimal.ZERO;
+
+                if (sb.length() > 0) sb.append('\n');
+                sb.append("  • ").append(g.getName())
+                  .append(" — ₦").append(String.format("%,.0f", value))
+                  .append(" saved of ₦").append(String.format("%,.0f", target)).append(" target");
+
+                if (g.getStatus() == SavingsStatus.MATURED) {
+                    sb.append(" | MATURED — ready to withdraw");
+                } else if (g.getMaturityDate() != null) {
+                    long days = java.time.temporal.ChronoUnit.DAYS.between(today, g.getMaturityDate());
+                    String when = g.getMaturityDate().format(
+                            java.time.format.DateTimeFormatter.ofPattern("d MMM yyyy"));
+                    if (days <= 0) {
+                        sb.append(" | matures today (").append(when).append(")");
+                    } else {
+                        sb.append(" | matures ").append(when)
+                          .append(" (").append(days).append(days == 1 ? " day" : " days").append(" left) — LOCKED until then");
+                    }
+                }
+            }
+            return sb.length() == 0 ? "none" : sb.toString();
+        } catch (Exception e) {
+            logger.warn("[Monnie] savings snapshot failed for user {}: {}", userId, e.getMessage());
+            return "none";
+        }
     }
 
     private DashboardActionContext buildContext(String email) {
@@ -279,6 +335,7 @@ public class AiInsightService {
         LocalDateTime nowWat = LocalDateTime.now(LAGOS_ZONE);
 
         DashboardActionContext context = new DashboardActionContext();
+        context.savingsSnapshot = buildSavingsSnapshot(userId);
 
         // ── Identity ──────────────────────────────────────────────────────────
         context.userName = user.getName() != null && !user.getName().isBlank()
@@ -1780,6 +1837,10 @@ public class AiInsightService {
         private int budgetPctElapsed               = -1;
         /** Names of all currently active budgets */
         private List<String> activeBudgetNames     = List.of();
+
+        /** One line per savings pot (name, balance, target, status, maturity + days),
+         *  or "none". Lets Monnie speak truthfully about savings instead of guessing. */
+        private String savingsSnapshot = "none";
 
         // ── Full envelope snapshot ────────────────────────────────────────────
         /** Every envelope across all active budgets — gives Gemini specific ₦ figures */
