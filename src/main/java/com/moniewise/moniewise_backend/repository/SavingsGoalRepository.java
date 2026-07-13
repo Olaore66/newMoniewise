@@ -5,12 +5,20 @@ import com.moniewise.moniewise_backend.enums.SavingsStatus;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Query;
 import org.springframework.stereotype.Repository;
 
+import javax.persistence.LockModeType;
 import java.util.List;
+import java.util.Optional;
 
 @Repository
 public interface SavingsGoalRepository extends JpaRepository<SavingsGoal, Long> {
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT s FROM SavingsGoal s WHERE s.id = :id")
+    Optional<SavingsGoal> findByIdForUpdate(Long id);
 
     // For the Mobile Dashboard: Get all savings pots for a specific user
     List<SavingsGoal> findByUserIdOrderByCreatedAtDesc(Long userId);

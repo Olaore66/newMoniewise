@@ -41,9 +41,13 @@ public class SavingsService {
     private final UserService userService;
     private final PaymentGatewayResolver paymentGatewayResolver;
     private final BeneficiaryService beneficiaryService;
+    private final MarkupCalculatorService markupCalculatorService;
 
     private static final String RUBIES_BANK_CODE = "090175";
     private static final String RUBIES_BANK_NAME = "Rubies MFB";
+    private static final BigDecimal SAVINGS_BANK_FEE_UNDER_50K = new BigDecimal("100");
+    private static final BigDecimal SAVINGS_BANK_FEE_50K_AND_ABOVE = new BigDecimal("200");
+    private static final BigDecimal SAVINGS_BANK_FEE_THRESHOLD = new BigDecimal("50000");
 
     public SavingsService(SavingsGoalRepository savingsGoalRepository,
                           UserRepository userRepository,
@@ -54,7 +58,8 @@ public class SavingsService {
                           SavingsLifeCycleManager savingsLifeCycleManager,
                           UserService userService,
                           PaymentGatewayResolver paymentGatewayResolver,
-                          BeneficiaryService beneficiaryService) {
+                          BeneficiaryService beneficiaryService,
+                          MarkupCalculatorService markupCalculatorService) {
         this.savingsGoalRepository = savingsGoalRepository;
         this.userRepository = userRepository;
         this.walletService = walletService;
@@ -65,6 +70,7 @@ public class SavingsService {
         this.userService = userService;
         this.paymentGatewayResolver = paymentGatewayResolver;
         this.beneficiaryService = beneficiaryService;
+        this.markupCalculatorService = markupCalculatorService;
     }
 
     /**
@@ -266,7 +272,7 @@ public class SavingsService {
      */
     @Transactional(rollbackFor = Exception.class)
     public SavingsGoal withdrawSavings(Long userId, Long savingsGoalId, BigDecimal requestedAmount) {
-        SavingsGoal goal = savingsGoalRepository.findById(savingsGoalId)
+        SavingsGoal goal = savingsGoalRepository.findByIdForUpdate(savingsGoalId)
                 .orElseThrow(() -> new IllegalArgumentException("Savings goal not found"));
 
         if (!goal.getUser().getId().equals(userId)) {
@@ -371,7 +377,7 @@ public class SavingsService {
             throw new IllegalArgumentException("You cannot transfer to yourself.");
         }
 
-        SavingsGoal goal = savingsGoalRepository.findById(savingsGoalId)
+        SavingsGoal goal = savingsGoalRepository.findByIdForUpdate(savingsGoalId)
                 .orElseThrow(() -> new EntityNotFoundException("Savings goal not found"));
 
         if (!goal.getUser().getId().equals(userId)) {
@@ -581,7 +587,7 @@ public class SavingsService {
             throw new IllegalArgumentException("Amount must be positive");
         }
 
-        SavingsGoal goal = savingsGoalRepository.findById(savingsGoalId)
+        SavingsGoal goal = savingsGoalRepository.findByIdForUpdate(savingsGoalId)
                 .orElseThrow(() -> new EntityNotFoundException("Savings goal not found"));
 
         if (!goal.getUser().getId().equals(userId)) {
@@ -596,14 +602,21 @@ public class SavingsService {
         BigDecimal interest  = goal.getAccruedInterest() != null ? goal.getAccruedInterest() : BigDecimal.ZERO;
         BigDecimal available = principal.add(interest);
 
-        if (amount.compareTo(available) > 0) {
+        BigDecimal flatFee = savingsBankTransferFee(amount);
+        BigDecimal nipFee  = markupCalculatorService.calculateNipFee(amount);
+        BigDecimal revenue = flatFee.subtract(nipFee).max(BigDecimal.ZERO);
+        BigDecimal totalFromPot = amount.add(flatFee);
+
+        if (totalFromPot.compareTo(available) > 0) {
+            BigDecimal maxSendable = available.subtract(flatFee).max(BigDecimal.ZERO);
             throw new IllegalStateException(
-                    String.format("Insufficient funds in this savings pot. Available: ₦%,.2f", available));
+                    String.format("Insufficient funds. Transfer fee ₦%,.2f · Max sendable ₦%,.2f",
+                            flatFee, maxSendable));
         }
 
-        // 1) Debit the pot; interest folds into the balance on the first exit, and
-        //    emptying the pot closes it (same terminal state as the other exits).
-        BigDecimal remaining = available.subtract(amount);
+        // 1) Debit the pot: transfer amount + flat fee. Interest folds into the
+        //    balance on the first exit; emptying the pot closes it.
+        BigDecimal remaining = available.subtract(totalFromPot);
         goal.setAccruedInterest(BigDecimal.ZERO);
         goal.setCurrentBalance(remaining);
         if (remaining.compareTo(BigDecimal.ZERO) == 0) {
@@ -611,19 +624,25 @@ public class SavingsService {
         }
         savingsGoalRepository.save(goal);
 
-        // 2) Credit the wallet (suppress the generic notification/log — the
-        //    withdrawal below is the user-facing transaction).
-        walletService.fundWallet(userId, amount,
+        // 2) Credit the wallet with amount + flatFee so processWithdrawal can debit
+        //    the exact totalDebit (amount + nipFee + revenue) without shortfall.
+        walletService.fundWallet(userId, totalFromPot,
                 "Savings withdrawal to bank: " + goal.getName(), true);
 
-        // 3) Hand off to the existing, tested wallet withdrawal. Fees come from the
-        //    wallet exactly as they do for a normal withdrawal.
-        walletService.processWithdrawal(userId, request);
+        // 3) Hand off to the tested wallet withdrawal with the savings-specific fees.
+        //    revenue goes to Moniewise; nipFee is auto-deducted by Rubies.
+        walletService.processWithdrawal(userId, request, revenue, nipFee);
 
-        logger.info("User {} sent ₦{} from savings goal {} ({}) to external bank {} / {}",
-                userId, amount, savingsGoalId, goal.getName(),
+        logger.info("User {} sent ₦{} (fee ₦{}) from savings goal {} ({}) to external bank {} / {}",
+                userId, amount, flatFee, savingsGoalId, goal.getName(),
                 request.getBankCode(), request.getAccountNumber());
         return goal;
+    }
+
+    public static BigDecimal savingsBankTransferFee(BigDecimal amount) {
+        return amount.compareTo(SAVINGS_BANK_FEE_THRESHOLD) < 0
+                ? SAVINGS_BANK_FEE_UNDER_50K
+                : SAVINGS_BANK_FEE_50K_AND_ABOVE;
     }
 
     /**

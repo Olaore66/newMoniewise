@@ -7,6 +7,7 @@ import com.moniewise.moniewise_backend.dto.request.WithdrawSavingsRequest;
 import com.moniewise.moniewise_backend.dto.request.WithdrawalRequest;
 import com.moniewise.moniewise_backend.entity.SavingsGoal;
 import com.moniewise.moniewise_backend.entity.User;
+import com.moniewise.moniewise_backend.service.MarkupCalculatorService;
 import com.moniewise.moniewise_backend.service.SavingsService;
 import com.moniewise.moniewise_backend.service.UserService;
 import org.slf4j.Logger;
@@ -16,8 +17,10 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import javax.validation.Valid;
+import java.math.BigDecimal;
 import java.security.Principal;
 import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/savings") // Adjust your API version path if needed
@@ -27,10 +30,13 @@ public class SavingsController {
 
     private final SavingsService savingsService;
     private final UserService userService;
+    private final MarkupCalculatorService markupCalculatorService;
 
-    public SavingsController(SavingsService savingsService, UserService userService) {
+    public SavingsController(SavingsService savingsService, UserService userService,
+                             MarkupCalculatorService markupCalculatorService) {
         this.savingsService = savingsService;
         this.userService = userService;
+        this.markupCalculatorService = markupCalculatorService;
     }
 
     /**
@@ -208,5 +214,28 @@ public class SavingsController {
             logger.error("System error during manual top-up", e);
             return ResponseEntity.internalServerError().body("An error occurred while topping up your savings.");
         }
+    }
+
+    /**
+     * GET: Fee quote for a savings→bank transfer.
+     * Flat fee: ₦100 (< ₦50k) or ₦200 (≥ ₦50k). Fee comes from the pot.
+     */
+    @GetMapping("/quote-bank-transfer")
+    public ResponseEntity<?> quoteBankTransfer(@RequestParam BigDecimal amount) {
+        if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {
+            return ResponseEntity.badRequest().body("Amount must be positive");
+        }
+        BigDecimal flatFee = SavingsService.savingsBankTransferFee(amount);
+        BigDecimal nipFee  = markupCalculatorService.calculateNipFee(amount);
+        BigDecimal totalDebit = amount.add(flatFee);
+        return ResponseEntity.ok(Map.of(
+                "transferAmount", amount,
+                "fee", flatFee,
+                "bankCharge", nipFee,
+                "totalDebit", totalDebit,
+                "recipientReceives", amount,
+                "message", String.format("Send ₦%,.2f · Fee ₦%,.2f · Total from pot ₦%,.2f",
+                        amount, flatFee, totalDebit)
+        ));
     }
 }

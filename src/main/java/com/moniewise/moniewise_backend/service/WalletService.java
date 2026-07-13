@@ -1058,6 +1058,11 @@ public class WalletService {
     }
 
     public Withdrawal processWithdrawal(Long userId, WithdrawalRequest request) {
+        return processWithdrawal(userId, request, null, null);
+    }
+
+    public Withdrawal processWithdrawal(Long userId, WithdrawalRequest request,
+                                         BigDecimal overrideMarkupFee, BigDecimal overrideNipFee) {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new IllegalArgumentException("User not found"));
 
@@ -1151,7 +1156,13 @@ public class WalletService {
         // totalDebit   = amount + nipFee + transferFee  (what actually leaves the user's Rubies wallet)
         BigDecimal transferFee;
         BigDecimal nipFee;
-        if (RubiesGateway.PROVIDER_NAME.equalsIgnoreCase(wallet.getProviderName())) {
+        if (overrideMarkupFee != null) {
+            transferFee = overrideMarkupFee;
+            nipFee      = overrideNipFee != null ? overrideNipFee
+                        : markupCalculatorService.calculateNipFee(request.getAmount());
+            logger.info("[Transfer] Custom fees for user={} amount={}: markup=₦{} NIP=₦{}",
+                    userId, request.getAmount(), transferFee, nipFee);
+        } else if (RubiesGateway.PROVIDER_NAME.equalsIgnoreCase(wallet.getProviderName())) {
             transferFee = markupCalculatorService.calculateMarkup(request.getAmount(), userId);
             nipFee      = markupCalculatorService.calculateNipFee(request.getAmount());
             logger.info("[Transfer] Rubies fees for user={} amount={}: markup=₦{} NIP=₦{}",
