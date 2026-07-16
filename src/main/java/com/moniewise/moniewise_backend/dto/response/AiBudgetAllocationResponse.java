@@ -5,6 +5,7 @@ import java.util.List;
 public class AiBudgetAllocationResponse {
     private String title;
     private String reasoning;
+    private String source;
     private Double totalAllocatedPercentage;
     private List<AiEnvelopeSuggestion> envelopes;
 
@@ -38,5 +39,13 @@ public class AiBudgetAllocationResponse {
 
     public void setEnvelopes(List<AiEnvelopeSuggestion> envelopes) {
         this.envelopes = envelopes;
+    }
+
+    public String getSource() {
+        return source;
+    }
+
+    public void setSource(String source) {
+        this.source = source;
     }
 }

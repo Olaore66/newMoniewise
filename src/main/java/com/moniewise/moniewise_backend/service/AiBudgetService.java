@@ -53,6 +53,7 @@ public class AiBudgetService {
 
             normalizeStarterResponse(response, request);
             validateStarterResponse(response);
+            response.setSource("gemini");
             return response;
         } catch (Exception e) {
             logger.warn("Falling back to heuristic starter plan for goal='{}': {}", request.getGoal(), e.getMessage());
@@ -73,6 +74,7 @@ public class AiBudgetService {
 
             normalizeAllocationResponse(response, request);
             validateAllocationResponse(response);
+            response.setSource("gemini");
             return response;
         } catch (Exception e) {
             logger.warn("Falling back to heuristic allocation plan for goal='{}': {}", request.getGoal(), e.getMessage());
@@ -177,8 +179,8 @@ public class AiBudgetService {
         }
 
         double total = validateSuggestionItems(response.getEnvelopes());
-        if (total < 70.0 || total > 100.0) {
-            throw new IllegalArgumentException("Total allocation percentage must be between 70 and 100");
+        if (total > 100.0) {
+            throw new IllegalArgumentException("Total allocation percentage exceeds 100");
         }
 
         response.setTotalAllocatedPercentage(total);
@@ -204,15 +206,7 @@ public class AiBudgetService {
             }
 
             if (item.getPercentage() == null || item.getPercentage() <= 0) {
-                throw new IllegalArgumentException("Invalid percentage");
-            }
-
-            if (!isAllowedConditionType(item.getConditionType())) {
-                throw new IllegalArgumentException("Invalid condition type");
-            }
-
-            if (!isAllowedCategory(item.getCategory())) {
-                throw new IllegalArgumentException("Invalid category");
+                throw new IllegalArgumentException("Invalid percentage for envelope: " + item.getName());
             }
 
             total += item.getPercentage();
@@ -426,9 +420,15 @@ public class AiBudgetService {
         return response;
     }
 
+    /**
+     * Client-safe fallback reason. Raw exception messages can reveal server
+     * configuration state (e.g. "GEMINI_API_KEY is missing or blank"), so only
+     * a coarse category is sent to the client — the full detail is already in
+     * the server logs from the catch block's logger.warn.
+     */
     private String buildFallbackSourceDetail(Exception fallbackCause) {
         if (fallbackCause == null) {
-            return "Gemini was not used; fallback reason was not captured.";
+            return "Gemini was not used for this turn.";
         }
 
         Throwable root = fallbackCause;
@@ -436,18 +436,25 @@ public class AiBudgetService {
             root = root.getCause();
         }
 
-        String message = root.getMessage();
-        if (message == null || message.isBlank()) {
-            message = fallbackCause.getMessage();
-        }
-        if (message == null || message.isBlank()) {
-            message = "No error message.";
+        String message = root.getMessage() == null ? "" : root.getMessage();
+        String rootType = root.getClass().getSimpleName();
+
+        String category;
+        if (message.contains("quota") || message.contains("429")) {
+            category = "quota";
+        } else if (message.contains("timed out") || message.contains("timeout")
+            || rootType.contains("Timeout")) {
+            category = "timeout";
+        } else if (message.contains("missing or blank")) {
+            category = "configuration";
+        } else if (rootType.contains("Json") || message.contains("Unrecognized")
+            || message.contains("Invalid")) {
+            category = "invalid_response";
+        } else {
+            category = "upstream_error";
         }
 
-        return "Gemini failed before a valid assistant response was produced: "
-            + root.getClass().getSimpleName()
-            + " - "
-            + message;
+        return "Gemini unavailable (" + category + "); see server logs for detail.";
     }
 
     private String inferFallbackAction(
@@ -491,6 +498,7 @@ public class AiBudgetService {
 
     private AiStarterEnvelopeResponse buildFallbackStarterPlan(AiStarterEnvelopeRequest request) {
         AiStarterEnvelopeResponse response = new AiStarterEnvelopeResponse();
+        response.setSource("fallback");
         response.setTitle(buildHeuristicTitle(request, false));
         response.setReasoning(buildHeuristicReasoning(request, false));
         response.setEnvelopes(buildHeuristicSuggestions(request, 100.0));
@@ -499,12 +507,304 @@ public class AiBudgetService {
 
     private AiBudgetAllocationResponse buildFallbackAllocationPlan(AiStarterEnvelopeRequest request) {
         AiBudgetAllocationResponse response = new AiBudgetAllocationResponse();
-        response.setTitle(buildHeuristicTitle(request, true));
-        response.setReasoning(buildHeuristicReasoning(request, true));
-        List<AiEnvelopeSuggestion> suggestions = buildHeuristicSuggestions(request, 95.0);
+        response.setSource("fallback");
+
+        if (request.isInterpretUserPlan()) {
+            List<AiEnvelopeSuggestion> parsed = parseUserPlanText(request);
+            if (!parsed.isEmpty()) {
+                response.setTitle("Your plan — structured");
+                response.setReasoning("We structured your plan into envelopes based on what you wrote.");
+                response.setEnvelopes(parsed);
+                response.setTotalAllocatedPercentage(sumPercentages(parsed));
+                return response;
+            }
+        }
+
+        // The AI Draft brief contains guidance text full of category keywords
+        // ("School", "Wedding", "Travel", "rent", "savings"...). Keyword-matching
+        // the whole brief would trigger every heuristic branch and produce the
+        // same bloated plan every time — match only the actual budget name.
+        AiStarterEnvelopeRequest heuristicRequest = withHeuristicGoal(request);
+        response.setTitle(buildHeuristicTitle(heuristicRequest, true));
+        response.setReasoning(buildHeuristicReasoning(heuristicRequest, true));
+        List<AiEnvelopeSuggestion> suggestions = buildHeuristicSuggestions(heuristicRequest, 95.0);
         response.setEnvelopes(suggestions);
         response.setTotalAllocatedPercentage(sumPercentages(suggestions));
         return response;
+    }
+
+    /**
+     * When the goal field carries a structured prompt brief rather than a raw
+     * user goal, reduce it to the budget name so the keyword heuristics react
+     * to what the user actually named their budget — not to the brief's own
+     * guidance examples.
+     */
+    private AiStarterEnvelopeRequest withHeuristicGoal(AiStarterEnvelopeRequest request) {
+        String goal = request.getGoal() == null ? "" : request.getGoal();
+        Matcher nameMatcher = BUDGET_NAME_IN_BRIEF.matcher(goal);
+        if (!nameMatcher.find()) {
+            return request;
+        }
+
+        AiStarterEnvelopeRequest reduced = new AiStarterEnvelopeRequest();
+        reduced.setTotalBudget(request.getTotalBudget());
+        reduced.setDurationDays(request.getDurationDays());
+        reduced.setCurrency(request.getCurrency());
+        reduced.setInterpretUserPlan(request.isInterpretUserPlan());
+        reduced.setGoal(nameMatcher.group(1));
+        return reduced;
+    }
+
+    private static final Pattern BUDGET_NAME_IN_BRIEF =
+        Pattern.compile("Budget(?:\\s+name)?\\s*:\\s*\"([^\"]+)\"");
+
+    private List<AiEnvelopeSuggestion> parseUserPlanText(AiStarterEnvelopeRequest request) {
+        String goal = request.getGoal() == null ? "" : request.getGoal().trim();
+        if (goal.isEmpty()) {
+            return Collections.emptyList();
+        }
+
+        // The goal field for "Write it out" contains the full interpretation prompt.
+        // Extract the user's actual text from between the quotes after "What the user wrote:"
+        String userText = goal;
+        int markerIdx = goal.indexOf("What the user wrote:");
+        if (markerIdx >= 0) {
+            String afterMarker = goal.substring(markerIdx + "What the user wrote:".length()).trim();
+            // Strip surrounding quotes
+            if (afterMarker.startsWith("\"")) {
+                int closeQuote = afterMarker.indexOf("\"", 1);
+                if (closeQuote > 1) {
+                    userText = afterMarker.substring(1, closeQuote).trim();
+                } else {
+                    userText = afterMarker.substring(1).trim();
+                }
+            } else {
+                // Take everything up to the next blank line or "Rules" section
+                int rulesIdx = afterMarker.indexOf("Rules for interpreting");
+                if (rulesIdx > 0) {
+                    userText = afterMarker.substring(0, rulesIdx).trim();
+                } else {
+                    userText = afterMarker;
+                }
+            }
+        }
+
+        if (userText.isEmpty()) {
+            return Collections.emptyList();
+        }
+
+        double totalBudget = request.getTotalBudget() == null ? 0 : request.getTotalBudget();
+
+        // Split on commas, newlines, semicolons, or " and "
+        String[] segments = userText.split("[,;\\n]+|\\band\\b");
+        List<AiEnvelopeSuggestion> results = new ArrayList<>();
+
+        for (String segment : segments) {
+            String trimmed = segment.trim();
+            if (trimmed.isEmpty()) {
+                continue;
+            }
+
+            // Try to extract a name and a number from each segment
+            // Patterns: "food 30", "30 food", "food 30%", "food 21000", "food ₦21,000", "food 20k"
+            Matcher nameNumber = Pattern.compile(
+                "([a-zA-Z][a-zA-Z\\s'-]*)\\s+[₦#N]?\\s*([\\d,]+(?:\\.\\d+)?)\\s*([kKmM]?)\\s*%?"
+            ).matcher(trimmed);
+            Matcher numberName = Pattern.compile(
+                "[₦#N]?\\s*([\\d,]+(?:\\.\\d+)?)\\s*([kKmM]?)\\s*%?\\s+([a-zA-Z][a-zA-Z\\s'-]*)"
+            ).matcher(trimmed);
+            Matcher nameOnly = Pattern.compile(
+                "^\\s*([a-zA-Z][a-zA-Z\\s'-]*)\\s*$"
+            ).matcher(trimmed);
+
+            String envelopeName = null;
+            double rawNumber = -1;
+            boolean hasAmountSuffix = false;
+
+            if (nameNumber.find()) {
+                envelopeName = nameNumber.group(1).trim();
+                rawNumber = parseRawNumber(nameNumber.group(2));
+                hasAmountSuffix = !nameNumber.group(3).isEmpty();
+                if (hasAmountSuffix) {
+                    rawNumber *= nameNumber.group(3).equalsIgnoreCase("k") ? 1_000 : 1_000_000;
+                }
+            } else if (numberName.find()) {
+                rawNumber = parseRawNumber(numberName.group(1));
+                hasAmountSuffix = !numberName.group(2).isEmpty();
+                if (hasAmountSuffix) {
+                    rawNumber *= numberName.group(2).equalsIgnoreCase("k") ? 1_000 : 1_000_000;
+                }
+                envelopeName = numberName.group(3).trim();
+            } else if (nameOnly.matches()) {
+                envelopeName = nameOnly.group(1).trim();
+            }
+
+            if (envelopeName == null || envelopeName.isEmpty()) {
+                continue;
+            }
+
+            // Title-case the name
+            envelopeName = titleCaseEnvelopeName(envelopeName);
+            if (envelopeName.isEmpty()) {
+                continue;
+            }
+
+            AiEnvelopeSuggestion item = new AiEnvelopeSuggestion();
+            item.setName(envelopeName);
+
+            if (rawNumber > 0) {
+                boolean explicitAmount = hasAmountSuffix
+                    || trimmed.contains("₦")
+                    || trimmed.contains("#");
+                if (explicitAmount && totalBudget > 0) {
+                    // "20k" / "₦5,000" — definitely an amount, convert to %
+                    item.setPercentage(round1(Math.min(100.0, (rawNumber / totalBudget) * 100.0)));
+                } else if (rawNumber <= 100) {
+                    // Bare number ≤ 100 — treat as percentage
+                    item.setPercentage(rawNumber);
+                } else if (totalBudget > 0) {
+                    // Bare number > 100 — treat as amount, convert to %
+                    item.setPercentage(round1(Math.min(100.0, (rawNumber / totalBudget) * 100.0)));
+                } else {
+                    item.setPercentage(0.0);
+                }
+            } else {
+                item.setPercentage(0.0);
+            }
+
+            // Guess category and condition type from the envelope name
+            String lowerName = envelopeName.toLowerCase(Locale.ROOT);
+            item.setCategory(guessCategoryFromName(lowerName));
+            item.setConditionType(guessConditionTypeFromName(lowerName, request));
+
+            // Merge duplicates ("food 30, food 20" → one Food at 50%)
+            AiEnvelopeSuggestion existing = findSuggestionByLabel(results, envelopeName);
+            if (existing != null) {
+                double combined = (existing.getPercentage() == null ? 0.0 : existing.getPercentage())
+                    + (item.getPercentage() == null ? 0.0 : item.getPercentage());
+                existing.setPercentage(round1(combined));
+                continue;
+            }
+
+            results.add(item);
+        }
+
+        // Numbers-only input ("30000, 20000, 10000" or "40, 30, 30") — label
+        // generically in the order given, mirroring rule 3 of the AI prompt.
+        if (results.isEmpty()) {
+            List<Double> bareNumbers = new ArrayList<>();
+            Matcher numMatcher = Pattern
+                .compile("[₦#]?\\s*([\\d,]+(?:\\.\\d+)?)\\s*([kKmM]?)")
+                .matcher(userText);
+            while (numMatcher.find()) {
+                double value = parseRawNumber(numMatcher.group(1));
+                if (value <= 0) continue;
+                if (!numMatcher.group(2).isEmpty()) {
+                    value *= numMatcher.group(2).equalsIgnoreCase("k") ? 1_000 : 1_000_000;
+                }
+                bareNumbers.add(value);
+            }
+
+            boolean allPercentages = !bareNumbers.isEmpty()
+                && bareNumbers.stream().allMatch(v -> v <= 100);
+            for (int i = 0; i < bareNumbers.size(); i++) {
+                double value = bareNumbers.get(i);
+                double pct = allPercentages
+                    ? value
+                    : (totalBudget > 0 ? round1(Math.min(100.0, (value / totalBudget) * 100.0)) : 0.0);
+                if (pct <= 0) continue;
+                AiEnvelopeSuggestion item = new AiEnvelopeSuggestion();
+                item.setName("Envelope " + (i + 1));
+                item.setCategory("more");
+                item.setConditionType("dynamic");
+                item.setPercentage(pct);
+                results.add(item);
+            }
+        }
+
+        if (results.isEmpty()) {
+            return Collections.emptyList();
+        }
+
+        // Handle zero-percentage items: split equally
+        long zeroCount = results.stream().filter(i -> i.getPercentage() == null || i.getPercentage() <= 0).count();
+        double allocatedTotal = results.stream().mapToDouble(i -> i.getPercentage() == null ? 0 : i.getPercentage()).sum();
+
+        if (zeroCount == results.size()) {
+            // All names, no numbers — split equally
+            double equalShare = round1(100.0 / results.size());
+            double running = 0;
+            for (int i = 0; i < results.size(); i++) {
+                double pct = i == results.size() - 1 ? round1(100.0 - running) : equalShare;
+                results.get(i).setPercentage(Math.max(4.0, pct));
+                running += results.get(i).getPercentage();
+            }
+        } else if (zeroCount > 0) {
+            // Mixed: some have numbers, some don't — distribute remaining
+            double remaining = Math.max(0, 100.0 - allocatedTotal);
+            double shared = zeroCount > 0 ? round1(remaining / zeroCount) : 0;
+            double running = allocatedTotal;
+            for (int i = 0; i < results.size(); i++) {
+                AiEnvelopeSuggestion item = results.get(i);
+                if (item.getPercentage() != null && item.getPercentage() > 0) continue;
+                double pct = Math.max(4.0, shared);
+                item.setPercentage(pct);
+                running += pct;
+            }
+        }
+
+        // Normalize to 100%
+        results = normalizeItems(results, 100.0);
+
+        // If total < 95%, add Savings for the remainder
+        double total = sumPercentages(results);
+        if (total < 95.0) {
+            AiEnvelopeSuggestion savings = new AiEnvelopeSuggestion();
+            savings.setName("Savings");
+            savings.setCategory("savings");
+            savings.setConditionType("dynamic");
+            savings.setPercentage(round1(100.0 - total));
+            results.add(savings);
+        }
+
+        return results;
+    }
+
+    private double parseRawNumber(String raw) {
+        if (raw == null || raw.isBlank()) return -1;
+        try {
+            return Double.parseDouble(raw.replace(",", ""));
+        } catch (Exception e) {
+            return -1;
+        }
+    }
+
+    private String guessCategoryFromName(String lowerName) {
+        if (containsAny(lowerName, "save", "savings", "buffer")) return "savings";
+        if (containsAny(lowerName, "emergency")) return "security";
+        if (containsAny(lowerName, "food", "feeding", "meal")) return "food";
+        if (containsAny(lowerName, "groceries", "market")) return "groceries";
+        if (containsAny(lowerName, "lunch", "breakfast", "dinner")) return "lunch";
+        if (containsAny(lowerName, "transport", "fuel", "cab", "uber", "bolt")) return "car";
+        if (containsAny(lowerName, "rent", "house", "home", "bill", "utility", "light", "electric", "nepa")) return "home";
+        if (containsAny(lowerName, "school", "tuition", "education", "book")) return "education";
+        if (containsAny(lowerName, "flight", "travel", "trip", "vacation")) return "flight";
+        if (containsAny(lowerName, "tool", "equipment")) return "tools";
+        if (containsAny(lowerName, "gift", "giving", "present")) return "gift";
+        if (containsAny(lowerName, "work", "business", "client", "hustle")) return "work";
+        if (containsAny(lowerName, "data", "internet", "wifi", "airtime")) return "internet";
+        if (containsAny(lowerName, "tithe", "offering", "church", "faith", "mosque")) return "faith";
+        return "more";
+    }
+
+    private String guessConditionTypeFromName(String lowerName, AiStarterEnvelopeRequest request) {
+        if (containsAny(lowerName, "emergency")) return "emergency";
+        if (containsAny(lowerName, "lunch", "breakfast", "dinner", "feeding")) return "daily";
+        int days = request.getDurationDays() == null ? 30 : request.getDurationDays();
+        if (days <= 8) return "daily";
+        if (containsAny(lowerName, "tithe", "offering", "church")) return "weekly";
+        if (containsAny(lowerName, "food", "groceries", "transport", "data")) return "weekly";
+        return "dynamic";
     }
 
     private List<AiEnvelopeSuggestion> buildHeuristicSuggestions(AiStarterEnvelopeRequest request, double targetTotal) {
@@ -688,6 +988,12 @@ public class AiBudgetService {
             suggestions.add(item);
         }
 
+        // If no keywords matched, try extracting free-form envelope names from
+        // patterns like "add X", "create X", "I want X", "something for X"
+        if (suggestions.isEmpty()) {
+            suggestions = extractFreeFormEnvelopeNames(normalizedMessage, request);
+        }
+
         if (suggestions.isEmpty()) {
             return Collections.emptyList();
         }
@@ -717,6 +1023,46 @@ public class AiBudgetService {
         return normalizeItems(suggestions, 100.0);
     }
 
+    private List<AiEnvelopeSuggestion> extractFreeFormEnvelopeNames(
+        String normalizedMessage,
+        AiBudgetAssistantTurnRequest request
+    ) {
+        List<AiEnvelopeSuggestion> results = new ArrayList<>();
+        List<Pattern> patterns = List.of(
+            Pattern.compile("(?:add|create|include|want|need)\\s+(?:a\\s+|an\\s+)?(?:envelope\\s+(?:for|called)\\s+)?([a-z][a-z\\s'-]{1,25})"),
+            Pattern.compile("(?:something|one)\\s+for\\s+([a-z][a-z\\s'-]{1,25})"),
+            Pattern.compile("([a-z][a-z\\s'-]{1,25})\\s+envelope")
+        );
+
+        for (Pattern pattern : patterns) {
+            Matcher matcher = pattern.matcher(normalizedMessage);
+            while (matcher.find()) {
+                String rawName = matcher.group(1).trim()
+                    .replaceAll("\\b(?:the|my|an?|for|please|envelope|with)\\b", " ")
+                    .replaceAll("\\s+", " ")
+                    .trim();
+                if (rawName.length() < 2 || rawName.length() > 30) continue;
+
+                String name = titleCaseEnvelopeName(rawName);
+                if (name.isEmpty()) continue;
+
+                boolean alreadyAdded = results.stream()
+                    .anyMatch(item -> item.getName().equalsIgnoreCase(name));
+                if (alreadyAdded) continue;
+
+                AiEnvelopeSuggestion item = new AiEnvelopeSuggestion();
+                item.setName(name);
+                String lower = name.toLowerCase(Locale.ROOT);
+                item.setCategory(guessCategoryFromName(lower));
+                item.setConditionType(guessConditionTypeFromName(lower, toStarterRequest(request)));
+                item.setPercentage(0.0);
+                results.add(item);
+            }
+        }
+
+        return results;
+    }
+
     private Double extractRequestedPercentage(String message, String phrase) {
         Pattern before = Pattern.compile("(\\d{1,3}(?:\\.\\d+)?)\\s*%\\s+(?:for\\s+)?"
             + Pattern.quote(phrase));
@@ -736,29 +1082,68 @@ public class AiBudgetService {
     }
 
     private List<EnvelopeKeyword> buildEnvelopeKeywords(AiBudgetAssistantTurnRequest request) {
+        AiStarterEnvelopeRequest starter = toStarterRequest(request);
         return List.of(
             new EnvelopeKeyword("emergency buffer", "Emergency Buffer", "security", "emergency"),
-            new EnvelopeKeyword("school fee", "School Fee", "education", chooseRecurringType(toStarterRequest(request), "education")),
-            new EnvelopeKeyword("school fees", "School Fees", "education", chooseRecurringType(toStarterRequest(request), "education")),
-            new EnvelopeKeyword("school runs", "School Runs", "education", chooseRecurringType(toStarterRequest(request), "education")),
-            new EnvelopeKeyword("work tools", "Work Tools", "tools", chooseRecurringType(toStarterRequest(request), "tools")),
-            new EnvelopeKeyword("client transport", "Client Transport", "car", chooseRecurringType(toStarterRequest(request), "car")),
-            new EnvelopeKeyword("rent", "Rent", "home", chooseRecurringType(toStarterRequest(request), "home")),
-            new EnvelopeKeyword("bills", "Bills", "home", chooseRecurringType(toStarterRequest(request), "home")),
-            new EnvelopeKeyword("groceries", "Groceries", "groceries", chooseRecurringType(toStarterRequest(request), "groceries")),
-            new EnvelopeKeyword("food", "Food", "food", chooseRecurringType(toStarterRequest(request), "food")),
-            new EnvelopeKeyword("transport", "Transport", "car", chooseRecurringType(toStarterRequest(request), "car")),
+            new EnvelopeKeyword("emergency fund", "Emergency Fund", "security", "emergency"),
+            new EnvelopeKeyword("school fee", "School Fee", "education", chooseRecurringType(starter, "education")),
+            new EnvelopeKeyword("school fees", "School Fees", "education", chooseRecurringType(starter, "education")),
+            new EnvelopeKeyword("school runs", "School Runs", "education", chooseRecurringType(starter, "education")),
+            new EnvelopeKeyword("tuition", "Tuition", "education", chooseRecurringType(starter, "education")),
+            new EnvelopeKeyword("work tools", "Work Tools", "tools", chooseRecurringType(starter, "tools")),
+            new EnvelopeKeyword("client transport", "Client Transport", "car", chooseRecurringType(starter, "car")),
+            new EnvelopeKeyword("fuel", "Fuel", "car", chooseRecurringType(starter, "car")),
+            new EnvelopeKeyword("uber", "Transport", "car", chooseRecurringType(starter, "car")),
+            new EnvelopeKeyword("bolt", "Transport", "car", chooseRecurringType(starter, "car")),
+            new EnvelopeKeyword("cab", "Transport", "car", chooseRecurringType(starter, "car")),
+            new EnvelopeKeyword("rent", "Rent", "home", chooseRecurringType(starter, "home")),
+            new EnvelopeKeyword("bills", "Bills", "home", chooseRecurringType(starter, "home")),
+            new EnvelopeKeyword("utility", "Utilities", "home", chooseRecurringType(starter, "home")),
+            new EnvelopeKeyword("utilities", "Utilities", "home", chooseRecurringType(starter, "home")),
+            new EnvelopeKeyword("light bill", "Light Bill", "home", chooseRecurringType(starter, "home")),
+            new EnvelopeKeyword("nepa", "Light Bill", "home", chooseRecurringType(starter, "home")),
+            new EnvelopeKeyword("electric", "Electricity", "home", chooseRecurringType(starter, "home")),
+            new EnvelopeKeyword("groceries", "Groceries", "groceries", chooseRecurringType(starter, "groceries")),
+            new EnvelopeKeyword("market", "Market", "groceries", chooseRecurringType(starter, "groceries")),
+            new EnvelopeKeyword("food", "Food", "food", chooseRecurringType(starter, "food")),
+            new EnvelopeKeyword("feeding", "Feeding", "food", chooseRecurringType(starter, "food")),
+            new EnvelopeKeyword("meal", "Meals", "food", chooseRecurringType(starter, "food")),
+            new EnvelopeKeyword("transport", "Transport", "car", chooseRecurringType(starter, "car")),
             new EnvelopeKeyword("savings", "Savings", "savings", "dynamic"),
-            new EnvelopeKeyword("data", "Data", "internet", chooseRecurringType(toStarterRequest(request), "internet")),
-            new EnvelopeKeyword("internet", "Internet", "internet", chooseRecurringType(toStarterRequest(request), "internet")),
+            new EnvelopeKeyword("save", "Savings", "savings", "dynamic"),
+            new EnvelopeKeyword("data", "Data", "internet", chooseRecurringType(starter, "internet")),
+            new EnvelopeKeyword("airtime", "Airtime", "internet", chooseRecurringType(starter, "internet")),
+            new EnvelopeKeyword("internet", "Internet", "internet", chooseRecurringType(starter, "internet")),
+            new EnvelopeKeyword("wifi", "Internet", "internet", chooseRecurringType(starter, "internet")),
             new EnvelopeKeyword("tithe", "Tithe", "faith", "weekly"),
             new EnvelopeKeyword("offering", "Offering", "faith", "weekly"),
+            new EnvelopeKeyword("church", "Church", "faith", "weekly"),
+            new EnvelopeKeyword("mosque", "Mosque", "faith", "weekly"),
             new EnvelopeKeyword("travel", "Travel", "flight", "dynamic"),
-            new EnvelopeKeyword("housing", "Housing", "home", chooseRecurringType(toStarterRequest(request), "home")),
-            new EnvelopeKeyword("education", "Education", "education", chooseRecurringType(toStarterRequest(request), "education")),
+            new EnvelopeKeyword("trip", "Trip", "flight", "dynamic"),
+            new EnvelopeKeyword("vacation", "Vacation", "flight", "dynamic"),
+            new EnvelopeKeyword("housing", "Housing", "home", chooseRecurringType(starter, "home")),
+            new EnvelopeKeyword("education", "Education", "education", chooseRecurringType(starter, "education")),
+            new EnvelopeKeyword("books", "Books", "education", chooseRecurringType(starter, "education")),
             new EnvelopeKeyword("lunch", "Lunch", "lunch", "daily"),
-            new EnvelopeKeyword("home", "Home", "home", chooseRecurringType(toStarterRequest(request), "home")),
-            new EnvelopeKeyword("misc", "Misc", "more", "daily")
+            new EnvelopeKeyword("breakfast", "Breakfast", "lunch", "daily"),
+            new EnvelopeKeyword("dinner", "Dinner", "lunch", "daily"),
+            new EnvelopeKeyword("snacks", "Snacks", "lunch", "daily"),
+            new EnvelopeKeyword("home", "Home", "home", chooseRecurringType(starter, "home")),
+            new EnvelopeKeyword("clothing", "Clothing", "more", "dynamic"),
+            new EnvelopeKeyword("clothes", "Clothing", "more", "dynamic"),
+            new EnvelopeKeyword("health", "Health", "more", "dynamic"),
+            new EnvelopeKeyword("medical", "Medical", "more", "dynamic"),
+            new EnvelopeKeyword("gym", "Gym", "more", "dynamic"),
+            new EnvelopeKeyword("entertainment", "Entertainment", "more", "dynamic"),
+            new EnvelopeKeyword("fun", "Fun Money", "more", "dynamic"),
+            new EnvelopeKeyword("gift", "Gifts", "gift", "dynamic"),
+            new EnvelopeKeyword("hustle", "Hustle", "work", "dynamic"),
+            new EnvelopeKeyword("business", "Business", "work", "dynamic"),
+            new EnvelopeKeyword("misc", "Misc", "more", "daily"),
+            new EnvelopeKeyword("miscellaneous", "Misc", "more", "daily"),
+            new EnvelopeKeyword("other", "Other", "more", "daily"),
+            new EnvelopeKeyword("flex", "Flex", "more", "dynamic")
         );
     }
 
