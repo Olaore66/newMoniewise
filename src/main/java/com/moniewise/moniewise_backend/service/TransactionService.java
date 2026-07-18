@@ -273,10 +273,17 @@ public class TransactionService {
         return totals;
     }
 
-    public TransactionDecisionResponseDto getDecision(Long transactionRequestId) {
+    public TransactionDecisionResponseDto getDecision(Long transactionRequestId, Long userId) {
         TransactionDecision decision = transactionDecisionRepository
                 .findByTransactionRequestId(transactionRequestId)
                 .orElseThrow(() -> new IllegalArgumentException("Decision not found"));
+
+        // BOLA guard: a decision belongs to the user who owns the underlying
+        // transaction request. Mirrors the ownership check in
+        // getTransactionDetail — every id-addressable read must be scoped.
+        if (!decision.getTransactionRequest().getUser().getId().equals(userId)) {
+            throw new SecurityException("Access denied");
+        }
 
         return new TransactionDecisionResponseDto(
                 decision.getTransactionRequest().getId(),

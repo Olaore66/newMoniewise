@@ -136,8 +136,13 @@ public class TransactionController {
 
     @GetMapping("/decision/{transactionRequestId}")
     public ResponseEntity<TransactionDecisionResponseDto> getDecision(
-            @PathVariable Long transactionRequestId) {
-        return ResponseEntity.ok(transactionService.getDecision(transactionRequestId));
+            @PathVariable Long transactionRequestId,
+            @AuthenticationPrincipal UserDetails userDetails) {
+        // Scope the lookup to the caller — transactionRequestId is a
+        // sequential id, so without the owner check any authenticated user
+        // could enumerate and read other users' transaction risk decisions.
+        Long userId = getUserId(userDetails);
+        return ResponseEntity.ok(transactionService.getDecision(transactionRequestId, userId));
     }
 
     private Long getUserId(UserDetails userDetails) {
