@@ -238,9 +238,38 @@ public class AiBudgetService {
         if (response.getReasoning() == null || response.getReasoning().isBlank()) {
             response.setReasoning(buildHeuristicReasoning(request, true));
         }
-        List<AiEnvelopeSuggestion> normalized = normalizeItems(response.getEnvelopes(), 95.0);
+        // Fully allocate to 100% — NOT 95%. Capping at 95 scaled a plan that
+        // already summed to 100% (e.g. a "write it out" of 4000 food + 2000
+        // offering on a 6000 budget) down to 95%, leaving a permanent ~5% gap
+        // the app surfaced as "Left: ₦300". normalizeToFullAllocation closes it.
+        List<AiEnvelopeSuggestion> normalized = normalizeToFullAllocation(response.getEnvelopes());
         response.setEnvelopes(normalized);
         response.setTotalAllocatedPercentage(sumPercentages(normalized));
+    }
+
+    /**
+     * Scales an envelope set to sum to exactly 100% (up or down), so the budget
+     * is fully allocated with no residual gap. Reuses {@link #normalizeItems}
+     * for dedupe/clamp, then proportionally scales the remainder to 100 and
+     * fixes rounding drift on the first item.
+     */
+    private List<AiEnvelopeSuggestion> normalizeToFullAllocation(List<AiEnvelopeSuggestion> items) {
+        List<AiEnvelopeSuggestion> normalized = normalizeItems(items, 100.0);
+        if (normalized.isEmpty()) {
+            return normalized;
+        }
+        double total = sumPercentages(normalized);
+        if (total > 0 && Math.abs(total - 100.0) >= 0.1) {
+            double ratio = 100.0 / total;
+            double running = 0.0;
+            for (AiEnvelopeSuggestion item : normalized) {
+                double adjusted = round1(item.getPercentage() * ratio);
+                item.setPercentage(Math.max(1.0, adjusted));
+                running += item.getPercentage();
+            }
+            rebalanceRounding(normalized, 100.0, running);
+        }
+        return normalized;
     }
 
     private void normalizeAssistantResponse(
