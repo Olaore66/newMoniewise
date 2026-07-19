@@ -1700,20 +1700,20 @@ public class EnvelopeService {
                 newLimit = totalRemaining.divide(BigDecimal.valueOf(remainingUnits), 2, RoundingMode.HALF_UP);
             }
             case "dynamic" -> {
-                String selectedDaysStr = (String) envelope.getConditions().get("selectedDays");
-                if (selectedDaysStr == null || selectedDaysStr.isBlank()) {
+                // Read the release days from "days" (the key the frontend and
+                // every other backend reader use). The old code read a
+                // non-existent "selectedDays" string, so it always fell through
+                // to the daily count below — dividing a Sunday-only ₦4,000
+                // envelope by ~30 days (₦133) instead of by the ~5 Sundays.
+                List<String> selectedDays = extractReleaseDays(envelope.getConditions());
+                if (selectedDays.isEmpty()) {
                     remainingUnits = ChronoUnit.DAYS.between(today, budgetEnd) + 1;
                 } else {
-                    List<String> selectedDays = Arrays.stream(selectedDaysStr.split(","))
-                            .map(String::trim)
-                            .map(String::toUpperCase)
-                            .toList();
                     long daysUntilEnd = ChronoUnit.DAYS.between(today, budgetEnd);
                     long remainingOccurrences = 0;
                     for (int i = 0; i <= daysUntilEnd; i++) {
                         LocalDate checkDate = today.plusDays(i);
-                        String dayName = checkDate.getDayOfWeek().name();
-                        if (selectedDays.contains(dayName)) {
+                        if (selectedDays.contains(checkDate.getDayOfWeek().name())) {
                             remainingOccurrences++;
                         }
                     }
@@ -1730,6 +1730,31 @@ public class EnvelopeService {
         envelope.getConditions().put("limit_value", newLimit);
         envelope.getConditions().put("remaining_units", remainingUnits);
         envelopeRepository.save(envelope);
+    }
+
+    /**
+     * Reads an envelope's selected release days from conditions. The frontend
+     * (and every other backend reader) stores them under "days" as a List of
+     * upper-case day names ("SUNDAY", ...); a legacy "selectedDays"
+     * comma-separated string is accepted as a fallback. Returns upper-cased
+     * names ready to compare against {@link java.time.DayOfWeek#name()}.
+     */
+    private List<String> extractReleaseDays(Map<String, Object> conditions) {
+        Object daysObj = conditions.get("days");
+        if (daysObj == null) {
+            daysObj = conditions.get("selectedDays"); // legacy key/format
+        }
+        if (daysObj == null) {
+            return List.of();
+        }
+        List<String> raw = (daysObj instanceof List<?>)
+                ? ((List<?>) daysObj).stream().map(String::valueOf).toList()
+                : Arrays.asList(daysObj.toString().split(","));
+        return raw.stream()
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .map(String::toUpperCase)
+                .toList();
     }
 
     public void triggerRecalculation(Envelope envelope) {
