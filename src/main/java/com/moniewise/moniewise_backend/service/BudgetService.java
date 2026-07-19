@@ -568,12 +568,21 @@ public class BudgetService {
         }
 
         for (EnvelopeRequest env : envelopeRequests) {
-            BigDecimal percentage = env.getPercentage();
-            BigDecimal calculated = originalAmount
-                    .multiply(percentage)
-                    .divide(new BigDecimal("100"), 10, RoundingMode.HALF_UP);
-
-            BigDecimal rounded = calculated.setScale(2, RoundingMode.HALF_UP);
+            BigDecimal rounded;
+            BigDecimal exact = env.getExactAmount();
+            if (exact != null && exact.compareTo(BigDecimal.ZERO) > 0) {
+                // Honor the exact amount the user allocated. Percentages are
+                // derived and lossy — recomputing the amount from a rounded
+                // percentage turned a 4,000 allocation into 4,002. The
+                // percentage is still validated below; it's just no longer the
+                // source of truth for the amount.
+                rounded = exact.setScale(2, RoundingMode.HALF_UP);
+            } else {
+                BigDecimal calculated = originalAmount
+                        .multiply(env.getPercentage())
+                        .divide(new BigDecimal("100"), 10, RoundingMode.HALF_UP);
+                rounded = calculated.setScale(2, RoundingMode.HALF_UP);
+            }
             finalAmounts.put(env, rounded);
             sumOfRoundedAmounts = sumOfRoundedAmounts.add(rounded);
         }
