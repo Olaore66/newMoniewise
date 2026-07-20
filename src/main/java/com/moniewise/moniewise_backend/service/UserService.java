@@ -1124,6 +1124,14 @@ public class UserService implements UserDetailsService {
         userRepository.save(user);
     }
 
+    /**
+     * @deprecated Superseded by {@link AccountDeletionService#deleteAccount}, which
+     * is the only path wired to {@code DELETE /auth/delete}. That service dissolves
+     * budgets, rakes matured savings, and requires the wallet to be withdrawn
+     * before closing — this older guard (which simply blocks on any held funds)
+     * is no longer used. Do not call it; it will be removed.
+     */
+    @Deprecated
     @Transactional
     public void deleteUserAccount(String email) {
         User user = findByEmail(email);

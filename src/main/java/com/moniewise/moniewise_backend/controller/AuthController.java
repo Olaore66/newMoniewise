@@ -22,6 +22,7 @@ import com.moniewise.moniewise_backend.service.EmailService;
 import com.moniewise.moniewise_backend.service.NotificationService;
 import com.moniewise.moniewise_backend.service.PasswordResetService;
 import com.moniewise.moniewise_backend.service.UserService;
+import com.moniewise.moniewise_backend.service.AccountDeletionService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -58,6 +59,7 @@ public class AuthController {
     @Autowired private AbuseProtectionService abuseProtectionService;
     @Autowired private KycService kycService;
     @Autowired private TrustedDeviceRepository trustedDeviceRepository;
+    @Autowired private AccountDeletionService accountDeletionService;
 
     @Value("${spring.security.oauth2.client.registration.google.client-id:}")
     private String googleClientId;
@@ -492,9 +494,27 @@ public class AuthController {
     }
 
     @DeleteMapping("/delete")
-    public ResponseEntity<?> deleteMyAccount(@AuthenticationPrincipal UserDetails userDetails) {
+    public ResponseEntity<?> deleteMyAccount(
+            @AuthenticationPrincipal UserDetails userDetails,
+            @RequestBody(required = false) Map<String, String> body) {
         String email = userDetails.getUsername();
-        userService.deleteUserAccount(email);
-        return ResponseEntity.ok(Collections.singletonMap("message", "Account deactivated successfully. You can reactivate it by logging in with Google."));
+        String reason = body != null ? body.get("reason") : null;
+
+        AccountDeletionService.Result result = accountDeletionService.deleteAccount(email, reason);
+
+        if (result.outcome() == AccountDeletionService.Outcome.WITHDRAWAL_REQUIRED) {
+            return ResponseEntity.ok(Map.of(
+                    "status", "withdrawal_required",
+                    "walletBalance", result.walletBalance(),
+                    "message", String.format(
+                            "We've moved your budget and savings funds to your wallet. Withdraw ₦%,.2f to your bank, then delete again to finish closing your account.",
+                            result.walletBalance())
+            ));
+        }
+
+        return ResponseEntity.ok(Map.of(
+                "status", "deleted",
+                "message", "Account deactivated successfully. You can reactivate it by logging in with Google."
+        ));
     }
 }
