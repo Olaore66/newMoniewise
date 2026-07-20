@@ -799,14 +799,25 @@ public class BudgetService {
         if (!budget.getUser().getId().equals(user.getId())) {
             throw new SecurityException("You do not have permission to delete this budget");
         }
-        // Creating a budget debits the wallet, so return any allocated-but-
-        // unspent envelope balance before deleting — otherwise that money is
-        // silently lost. Only ACTIVE budgets are refunded: a DRAFT was never
-        // debited and a COMPLETED budget was already refunded at completion.
+        if (budget.getStatus() == BudgetStatus.CANCELLED) {
+            return; // already dissolved — idempotent, nothing to do
+        }
+        // Creating a budget debits the wallet, so return any allocated-but-unspent
+        // envelope balance (and zero the envelopes) before removing it — otherwise
+        // that money is silently lost. Only ACTIVE budgets are refunded: a DRAFT
+        // was never debited and a COMPLETED one was already refunded at completion.
         if (budget.getStatus() == BudgetStatus.ACTIVE) {
             budgetLifeCycleManager.refundUnusedBudgetBalance(budget, user);
         }
-        budgetRepository.delete(budget);
+        // Soft-delete rather than hard-delete: keep the budget, its envelopes, and
+        // the transaction history for audit / regulatory retention. Seven audit
+        // tables FK-reference the envelopes, so a hard delete violates those
+        // constraints anyway (transaction_logs_source_envelope_id_fkey, etc.).
+        // The scheduler ignores non-ACTIVE budgets and user-facing lists exclude
+        // CANCELLED, so it disappears from the user's view.
+        budget.setStatus(BudgetStatus.CANCELLED);
+        budget.setRemainingAmount(BigDecimal.ZERO);
+        budgetRepository.save(budget);
         monnieCacheInvalidationService.evictUserAfterCommit(user.getId());
     }
 
@@ -816,6 +827,9 @@ public class BudgetService {
         User user = userService.findByEmail(email);
         return budgetRepository.findByUserId(user.getId())
                 .stream()
+                // Hide soft-deleted (dissolved) budgets — the rows are kept only
+                // for audit/retention, never shown back to the user.
+                .filter(b -> b.getStatus() != BudgetStatus.CANCELLED)
                 .map(this::mapToResponse)
                 .collect(Collectors.toList());
     }
@@ -1027,6 +1041,11 @@ public class BudgetService {
             Long budgetId = ((Number) row[0]).longValue();
             String budgetName = (String) row[1];
             BudgetStatus status = (BudgetStatus) row[2];
+            // Soft-deleted (dissolved) budgets are kept only for audit — never
+            // surface them (they would otherwise fall into the "completed" bucket).
+            if (status == BudgetStatus.CANCELLED) {
+                continue;
+            }
             LocalDate startDate = (LocalDate) row[3];
             LocalDate endDate = (LocalDate) row[4];
             BigDecimal allocatedAmount = (BigDecimal) row[5];

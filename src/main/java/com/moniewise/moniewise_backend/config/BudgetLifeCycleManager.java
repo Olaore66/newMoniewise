@@ -1440,10 +1440,11 @@ public class BudgetLifeCycleManager {
      * allocated-but-unspent money instead of silently losing it (creating a
      * budget debits the wallet).
      *
-     * <p>Call BEFORE the budget and its envelopes are deleted, and only for
-     * funded (ACTIVE) budgets — a DRAFT was never debited and a COMPLETED
-     * budget was already refunded at completion, so refunding either would
-     * mint money. Envelopes already spent/emptied refund nothing.
+     * <p>Also zeroes each envelope's balances (like natural completion), so the
+     * caller can safely soft-delete the budget without the money being counted
+     * in both the envelope and the wallet. Call only for funded (ACTIVE) budgets
+     * — a DRAFT was never debited and a COMPLETED budget was already refunded at
+     * completion, so refunding either would mint money.
      */
     @Transactional
     public BigDecimal refundUnusedBudgetBalance(Budget budget, User user) {
@@ -1454,22 +1455,31 @@ public class BudgetLifeCycleManager {
 
         for (Envelope envelope : envelopes) {
             BigDecimal refundable = calculateSafeRefundableAmount(envelope);
-            if (refundable.compareTo(BigDecimal.ZERO) <= 0) {
-                continue;
+            if (refundable.compareTo(BigDecimal.ZERO) > 0) {
+                TransactionLog refundLog = new TransactionLog();
+                refundLog.setUserId(user.getId());
+                refundLog.setBudgetId(budget.getId());
+                refundLog.setSourceEnvelopeId(envelope.getId());
+                refundLog.setAmount(refundable);
+                refundLog.setTransactionType(BUDGET_COMPLETION_REFUND);
+                refundLog.setStatus(COMPLETED);
+                refundLog.setCreatedAt(now);
+                refundLog.setReference("MW-REF-" + UUID.randomUUID());
+                refundLog.setDescription("Unused envelope balance refunded on budget deletion");
+                logs.add(refundLog);
+                totalRefunded = totalRefunded.add(refundable);
             }
-            TransactionLog refundLog = new TransactionLog();
-            refundLog.setUserId(user.getId());
-            refundLog.setBudgetId(budget.getId());
-            refundLog.setSourceEnvelopeId(envelope.getId());
-            refundLog.setAmount(refundable);
-            refundLog.setTransactionType(BUDGET_COMPLETION_REFUND);
-            refundLog.setStatus(COMPLETED);
-            refundLog.setCreatedAt(now);
-            refundLog.setReference("MW-REF-" + UUID.randomUUID());
-            refundLog.setDescription("Unused envelope balance refunded on budget deletion");
-            logs.add(refundLog);
-            totalRefunded = totalRefunded.add(refundable);
+            // Empty the envelope — its money has moved to the wallet. Zeroing here
+            // (as natural completion does) is what makes the caller's soft-delete
+            // safe: otherwise the same balance would sit in BOTH the envelope and
+            // the wallet, double-counting the money.
+            envelope.setRemainingAmount(BigDecimal.ZERO);
+            envelope.setTotalRemainingAmount(BigDecimal.ZERO);
+            envelope.setHeldAmount(BigDecimal.ZERO);
+            envelope.setNextDisbursementAt(null);
+            envelope.setHasMatured(true);
         }
+        envelopeRepository.saveAll(envelopes);
 
         if (totalRefunded.compareTo(BigDecimal.ZERO) > 0) {
             transactionLogRepository.saveAll(logs);
