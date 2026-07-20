@@ -14,6 +14,7 @@ import com.moniewise.moniewise_backend.entity.*;
 import com.moniewise.moniewise_backend.enums.BudgetStatus;
 import com.moniewise.moniewise_backend.enums.Gender;
 import com.moniewise.moniewise_backend.enums.Role;
+import com.moniewise.moniewise_backend.enums.SavingsStatus;
 import com.moniewise.moniewise_backend.psp.ProvidusExpressGateway;
 import com.moniewise.moniewise_backend.repository.*;
 import org.slf4j.Logger;
@@ -30,6 +31,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
+import java.math.BigDecimal;
 import java.security.SecureRandom;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -44,6 +46,11 @@ import java.util.stream.Collectors;
 public class UserService implements UserDetailsService {
 
     private static final Logger logger = LoggerFactory.getLogger(UserService.class);
+
+    /** The ₦100 withdrawal minimum. A wallet balance below this is un-withdrawable
+     *  dust (the withdraw-to-bank flow rejects sub-₦100 and its fee would exceed
+     *  it), so it must not permanently block account deletion. */
+    private static final BigDecimal MIN_WITHDRAWABLE_BALANCE = new BigDecimal("100");
     private static final int P2P_SEARCH_LIMIT = 15;
     private static final int P2P_SEARCH_MIN_LENGTH = 2;
     private static final int P2P_SEARCH_MAX_LENGTH = 64;
@@ -62,6 +69,7 @@ public class UserService implements UserDetailsService {
     private final NotificationService notificationService;
 
     private final BudgetRepository budgetRepository;
+    private final SavingsGoalRepository savingsGoalRepository;
 
     private final RegistrationCacheService registrationCacheService;
     private final ProvidusExpressGateway providusExpressGateway;
@@ -69,7 +77,7 @@ public class UserService implements UserDetailsService {
     private final StringRedisTemplate redisTemplate;
     private final ObjectMapper objectMapper;
 
-    public UserService(UserRepository userRepository, PasswordEncoder passwordEncoder, WalletService walletService, WalletRepository walletRepository, WalletService walletService1, OtpService otpService, PasswordResetTokenRepository passwordResetTokenRepository, NotificationService notificationService, BudgetRepository budgetRepository, RegistrationCacheService registrationCacheService, ProvidusExpressGateway providusExpressGateway, KycProfileRepository kycProfileRepository, StringRedisTemplate redisTemplate, ObjectMapper objectMapper) {
+    public UserService(UserRepository userRepository, PasswordEncoder passwordEncoder, WalletService walletService, WalletRepository walletRepository, WalletService walletService1, OtpService otpService, PasswordResetTokenRepository passwordResetTokenRepository, NotificationService notificationService, BudgetRepository budgetRepository, RegistrationCacheService registrationCacheService, ProvidusExpressGateway providusExpressGateway, KycProfileRepository kycProfileRepository, StringRedisTemplate redisTemplate, ObjectMapper objectMapper, SavingsGoalRepository savingsGoalRepository) {
         this.userRepository = userRepository;
         this.passwordEncoder = passwordEncoder; // No link to SecurityConfig
         this.walletRepository = walletRepository;
@@ -78,6 +86,7 @@ public class UserService implements UserDetailsService {
         this.passwordResetTokenRepository = passwordResetTokenRepository;
         this.notificationService = notificationService;
         this.budgetRepository = budgetRepository;
+        this.savingsGoalRepository = savingsGoalRepository;
         this.registrationCacheService = registrationCacheService;
         this.providusExpressGateway = providusExpressGateway;
         this.kycProfileRepository = kycProfileRepository;
@@ -1118,6 +1127,55 @@ public class UserService implements UserDetailsService {
     @Transactional
     public void deleteUserAccount(String email) {
         User user = findByEmail(email);
+
+        // Wisemonie is a commitment layer: money locked in an active budget or a
+        // still-held savings pot cannot be reclaimed early, and account deletion
+        // must never strand it. Block deletion while the user holds any locked or
+        // unwithdrawn funds — active budgets, savings pots still ACTIVE (immature)
+        // or MATURED-but-unwithdrawn, or a positive wallet balance — so the
+        // discipline stays intact and no money is silently lost on deletion.
+        List<String> blockers = new ArrayList<>();
+
+        int activeBudgets = budgetRepository
+                .findByUserIdAndStatus(user.getId(), BudgetStatus.ACTIVE).size();
+        if (activeBudgets > 0) {
+            blockers.add(activeBudgets + " active budget" + (activeBudgets > 1 ? "s" : ""));
+        }
+
+        int heldSavings = savingsGoalRepository
+                .findByUserIdAndStatus(user.getId(), SavingsStatus.ACTIVE).size()
+                + savingsGoalRepository
+                .findByUserIdAndStatus(user.getId(), SavingsStatus.MATURED).size();
+        if (heldSavings > 0) {
+            blockers.add(heldSavings + " savings pot" + (heldSavings > 1 ? "s" : ""));
+        }
+
+        // Wallet: only block on a WITHDRAWABLE balance (>= the ₦100 minimum). The
+        // user must move that out via the in-app withdraw-to-bank flow first — it
+        // needs their PIN and chosen bank, so it can't be swept automatically here,
+        // and it settles asynchronously (a post-delete failure would strand it).
+        // A sub-₦100 residual is un-withdrawable dust: it does NOT block deletion,
+        // stays in the soft-deleted wallet, and is recoverable if the user
+        // reactivates — so nothing is lost either way.
+        BigDecimal walletBalance = BigDecimal.ZERO;
+        try {
+            walletBalance = walletService.checkBalance(user.getId());
+        } catch (Exception ignored) {
+            // No wallet / lookup issue — treat as no balance; never block on this.
+        }
+        if (walletBalance != null
+                && walletBalance.compareTo(MIN_WITHDRAWABLE_BALANCE) >= 0) {
+            blockers.add(String.format("a wallet balance of ₦%,.2f", walletBalance));
+        }
+
+        if (!blockers.isEmpty()) {
+            throw new IllegalStateException(
+                    "You still have " + String.join(", ", blockers)
+                    + ". To protect your money, let your active budgets finish, wait for any "
+                    + "savings to mature and withdraw them, and empty your wallet before "
+                    + "deleting your account."
+            );
+        }
 
         // ðŸ›¡ï¸ SOFT DELETE: Don't remove the row. Just hide it.
         user.setDeleted(true);

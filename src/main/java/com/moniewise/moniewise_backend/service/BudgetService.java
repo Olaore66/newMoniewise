@@ -799,6 +799,13 @@ public class BudgetService {
         if (!budget.getUser().getId().equals(user.getId())) {
             throw new SecurityException("You do not have permission to delete this budget");
         }
+        // Creating a budget debits the wallet, so return any allocated-but-
+        // unspent envelope balance before deleting — otherwise that money is
+        // silently lost. Only ACTIVE budgets are refunded: a DRAFT was never
+        // debited and a COMPLETED budget was already refunded at completion.
+        if (budget.getStatus() == BudgetStatus.ACTIVE) {
+            budgetLifeCycleManager.refundUnusedBudgetBalance(budget, user);
+        }
         budgetRepository.delete(budget);
         monnieCacheInvalidationService.evictUserAfterCommit(user.getId());
     }

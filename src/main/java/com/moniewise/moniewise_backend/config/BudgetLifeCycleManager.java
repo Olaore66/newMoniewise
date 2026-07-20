@@ -1432,6 +1432,58 @@ public class BudgetLifeCycleManager {
         return refundableAmount;
     }
 
+    /**
+     * Refunds each envelope's safe unused balance to the user's wallet and
+     * returns the total refunded. Reuses the same
+     * {@link #calculateSafeRefundableAmount} + wallet-credit + refund-log path
+     * that runs at natural budget completion, so deleting a budget returns
+     * allocated-but-unspent money instead of silently losing it (creating a
+     * budget debits the wallet).
+     *
+     * <p>Call BEFORE the budget and its envelopes are deleted, and only for
+     * funded (ACTIVE) budgets — a DRAFT was never debited and a COMPLETED
+     * budget was already refunded at completion, so refunding either would
+     * mint money. Envelopes already spent/emptied refund nothing.
+     */
+    @Transactional
+    public BigDecimal refundUnusedBudgetBalance(Budget budget, User user) {
+        List<Envelope> envelopes = envelopeRepository.findByBudgetId(budget.getId());
+        LocalDateTime now = LocalDateTime.now();
+        BigDecimal totalRefunded = BigDecimal.ZERO;
+        List<TransactionLog> logs = new ArrayList<>();
+
+        for (Envelope envelope : envelopes) {
+            BigDecimal refundable = calculateSafeRefundableAmount(envelope);
+            if (refundable.compareTo(BigDecimal.ZERO) <= 0) {
+                continue;
+            }
+            TransactionLog refundLog = new TransactionLog();
+            refundLog.setUserId(user.getId());
+            refundLog.setBudgetId(budget.getId());
+            refundLog.setSourceEnvelopeId(envelope.getId());
+            refundLog.setAmount(refundable);
+            refundLog.setTransactionType(BUDGET_COMPLETION_REFUND);
+            refundLog.setStatus(COMPLETED);
+            refundLog.setCreatedAt(now);
+            refundLog.setReference("MW-REF-" + UUID.randomUUID());
+            refundLog.setDescription("Unused envelope balance refunded on budget deletion");
+            logs.add(refundLog);
+            totalRefunded = totalRefunded.add(refundable);
+        }
+
+        if (totalRefunded.compareTo(BigDecimal.ZERO) > 0) {
+            transactionLogRepository.saveAll(logs);
+            walletService.fundWallet(
+                    user.getId(),
+                    totalRefunded,
+                    String.format("Refund of ₦%,.2f from deleted budget: %s",
+                            totalRefunded, budget.getName()),
+                    false
+            );
+        }
+        return totalRefunded;
+    }
+
 }
 
 

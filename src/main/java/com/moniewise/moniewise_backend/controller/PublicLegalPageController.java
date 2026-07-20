@@ -53,8 +53,18 @@ public class PublicLegalPageController {
     public String deleteAccount() {
         String body =
                 "<h2>Delete your Wisemonie account</h2>"
-                + "<p>You can permanently delete your Wisemonie account and the personal "
-                + "data associated with it in either of the following ways:</p>"
+                + "<p>Deleting your account closes it and removes your access to Wisemonie.</p>"
+                + "<h3>Before you can delete</h3>"
+                + "<p>Wisemonie is built to protect your money, so you can only close your "
+                + "account once it holds no funds. First:</p>"
+                + "<ol>"
+                + "<li>Let any <strong>active budgets</strong> run to completion.</li>"
+                + "<li>Wait for any <strong>savings pots</strong> to mature, then withdraw them.</li>"
+                + "<li>Withdraw your <strong>wallet balance</strong> to your bank.</li>"
+                + "</ol>"
+                + "<p>Once your budgets, savings and wallet are all empty you can delete your "
+                + "account, which guarantees you never lose money on deletion. If you try to "
+                + "delete while funds are still held, we will ask you to clear them first.</p>"
                 + "<h3>From the app</h3>"
                 + "<ol>"
                 + "<li>Open the Wisemonie app and sign in.</li>"
@@ -66,12 +76,12 @@ public class PublicLegalPageController {
                 + "<a href=\"mailto:wisemoniehelpdesk@gmail.com\">wisemoniehelpdesk@gmail.com</a> "
                 + "from the email address registered to your account, with the subject "
                 + "“Account deletion request”. We will verify the request and confirm once completed.</p>"
-                + "<h3>What gets deleted</h3>"
-                + "<p>Your profile, budgets, envelopes, savings goals and notification history are "
-                + "permanently deleted. Please withdraw any wallet or savings balance before "
-                + "requesting deletion. Certain transaction records must be retained for the period "
-                + "required by Nigerian financial regulations, after which they are erased. See our "
-                + "<a href=\"/privacy-policy\">Privacy Policy</a> for full details on data retention.</p>";
+                + "<h3>What happens to your data</h3>"
+                + "<p>Your account is closed and your access to the app is removed. As a "
+                + "financial service, we are required to retain certain account and transaction "
+                + "records for the period mandated by Nigerian financial regulations and our "
+                + "legal obligations. See our <a href=\"/privacy-policy\">Privacy Policy</a> for "
+                + "full details on what we keep and for how long.</p>";
         return pageShell("Delete your account", body, null, null);
     }
 
