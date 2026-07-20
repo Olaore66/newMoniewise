@@ -5,6 +5,7 @@ import com.moniewise.moniewise_backend.enums.WithdrawalStatus;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
+import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
@@ -15,9 +16,12 @@ public interface WithdrawalRepository extends JpaRepository<Withdrawal, Long> {
     Optional<Withdrawal> findByProviderReference(String providerReference);
     List<Withdrawal> findTop20ByUserIdOrderByCreatedAtDesc(Long userId);
 
-    /** True if the user has an in-flight (not yet settled) withdrawal — used by
-     *  account deletion to wait for an async transfer to finish before closing. */
-    boolean existsByUserIdAndStatusIn(Long userId, Collection<WithdrawalStatus> statuses);
+    /** True if the user has an in-flight (INITIATED/PROCESSING) withdrawal created
+     *  after the given cutoff — used by account deletion to wait for a genuinely
+     *  recent transfer to settle, while ignoring stuck/stale ones so they can't
+     *  permanently block closure. */
+    boolean existsByUserIdAndStatusInAndCreatedAtAfter(
+            Long userId, Collection<WithdrawalStatus> statuses, LocalDateTime createdAt);
 
     /**
      * Feeds the "transferred before" auto-suggest dropdown on the Transfer to

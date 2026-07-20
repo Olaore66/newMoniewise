@@ -340,6 +340,59 @@ public class SavingsService {
     }
 
     /**
+     * Early-breaks an ACTIVE savings pot during account closure: returns the
+     * principal to the wallet and forfeits any accrued (unvested) bonus, then
+     * marks the pot CANCELLED. This is the deliberate "I'm leaving" exception to
+     * the maturity lock, used only by the account-deletion flow so a departing
+     * user can always recover their principal — never the bonus. ACTIVE only:
+     * MATURED pots go through withdrawSavings; anything else is a no-op.
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public SavingsGoal breakActiveSavingsToWallet(Long userId, Long savingsGoalId) {
+        SavingsGoal goal = savingsGoalRepository.findByIdForUpdate(savingsGoalId)
+                .orElseThrow(() -> new IllegalArgumentException("Savings goal not found"));
+
+        if (!goal.getUser().getId().equals(userId)) {
+            throw new SecurityException("You do not have permission to break this savings goal.");
+        }
+        if (goal.getStatus() != SavingsStatus.ACTIVE) {
+            return goal; // only ACTIVE pots break early; others are handled elsewhere / no-op
+        }
+
+        BigDecimal principal = goal.getCurrentBalance() != null ? goal.getCurrentBalance() : BigDecimal.ZERO;
+        BigDecimal forfeitedBonus = goal.getAccruedInterest() != null ? goal.getAccruedInterest() : BigDecimal.ZERO;
+
+        if (principal.compareTo(BigDecimal.ZERO) > 0) {
+            // Suppress the wallet-side deposit log (pass true) — the SAVINGS_WITHDRAWAL
+            // entry below is the single user-visible record for this move.
+            walletService.fundWallet(userId, principal,
+                    "Early savings break on account closure: " + goal.getName(), true);
+
+            TransactionLog log = new TransactionLog();
+            log.setUserId(userId);
+            log.setAmount(principal);
+            log.setTransactionType(TransactionType.SAVINGS_WITHDRAWAL);
+            log.setDescription("Early savings break on account closure: " + goal.getName()
+                    + (forfeitedBonus.compareTo(BigDecimal.ZERO) > 0
+                            ? String.format(" (₦%,.2f bonus forfeited)", forfeitedBonus) : ""));
+            log.setStatus(TransactionStatus.COMPLETED);
+            log.setReference("SAVE-BREAK-" + UUID.randomUUID());
+            log.setCreatedAt(LocalDateTime.now());
+            transactionLogRepository.save(log);
+        }
+
+        // Bonus is forfeited on an early break; principal has moved to the wallet.
+        goal.setAccruedInterest(BigDecimal.ZERO);
+        goal.setCurrentBalance(BigDecimal.ZERO);
+        goal.setStatus(SavingsStatus.CANCELLED);
+        SavingsGoal saved = savingsGoalRepository.save(goal);
+
+        logger.info("User {} early-broke ACTIVE savings goal {} ({}) on account closure — ₦{} principal to wallet, ₦{} bonus forfeited",
+                userId, savingsGoalId, goal.getName(), principal, forfeitedBonus);
+        return saved;
+    }
+
+    /**
      * P2P from a MATURED savings pot straight to another Wisemonie user.
      * Faithful adaptation of EnvelopeService.transferToMonieWiseUser with the
      * savings pot as the source instead of an envelope:

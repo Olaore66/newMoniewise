@@ -16,6 +16,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.time.Duration;
+import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -24,7 +26,8 @@ import java.util.Map;
  * Orchestrates account deletion as a deliberate "I'm leaving" flow — the one
  * place a commitment can be unwound. It reuses the already-tested refund and
  * withdraw paths (so no money logic is reinvented) and never lets a user lose
- * money or escape an immature commitment early.
+ * money: leaving returns every locked naira (savings principal, budget balances)
+ * to the wallet first, forfeiting only unvested savings bonus.
  */
 @Service
 public class AccountDeletionService {
@@ -34,6 +37,13 @@ public class AccountDeletionService {
     /** ₦100 withdrawal minimum. Below this a wallet balance is un-withdrawable
      *  dust that must not permanently block deletion. */
     private static final BigDecimal MIN_WITHDRAWABLE_BALANCE = new BigDecimal("100");
+
+    /** A withdrawal left INITIATED/PROCESSING longer than this is treated as stuck
+     *  (e.g. a lost provider webhook) so it can never permanently block account
+     *  closure. NIP transfers settle in seconds–minutes, so this is deliberately
+     *  generous; account deletion is a soft delete and the withdrawal record
+     *  survives it, so proceeding past a stale one loses nothing. */
+    private static final Duration WITHDRAWAL_INFLIGHT_WINDOW = Duration.ofHours(2);
 
     public enum Outcome { DELETED, WITHDRAWAL_REQUIRED }
 
@@ -64,9 +74,10 @@ public class AccountDeletionService {
     }
 
     /**
-     * Attempts to close the account. Blocks while an async withdrawal is still
-     * settling or while savings are still maturing; otherwise dissolves active
-     * budgets and rakes matured savings into the wallet, then either closes the
+     * Attempts to close the account. Blocks only while an async withdrawal is
+     * still settling; otherwise it breaks active savings (principal to the wallet,
+     * accrued bonus forfeited), dissolves active budgets, and rakes matured
+     * savings into the wallet, then either closes the
      * account (nothing withdrawable left) or returns WITHDRAWAL_REQUIRED so the
      * client can send the consolidated balance to the user's bank first.
      *
@@ -81,18 +92,23 @@ public class AccountDeletionService {
         Long userId = user.getId();
 
         // Async-confirmed close: never finalize (or dissolve further) while a
-        // withdrawal is still in flight — wait for it to COMPLETE or FAIL.
-        boolean withdrawalInFlight = withdrawalRepository.existsByUserIdAndStatusIn(
-                userId, List.of(WithdrawalStatus.INITIATED, WithdrawalStatus.PROCESSING));
+        // withdrawal is genuinely still settling — wait for it to COMPLETE or FAIL.
+        // Bounded by a staleness window so a stuck INITIATED/PROCESSING withdrawal
+        // (e.g. a lost provider webhook) can't trap the account closed forever.
+        LocalDateTime inFlightCutoff = LocalDateTime.now().minus(WITHDRAWAL_INFLIGHT_WINDOW);
+        boolean withdrawalInFlight = withdrawalRepository.existsByUserIdAndStatusInAndCreatedAtAfter(
+                userId, List.of(WithdrawalStatus.INITIATED, WithdrawalStatus.PROCESSING), inFlightCutoff);
         if (withdrawalInFlight) {
             throw new IllegalStateException(
                     "A withdrawal is still processing. Please try again once it completes.");
         }
 
-        // Immature savings can't be broken early — that's the discipline.
-        if (!savingsGoalRepository.findByUserIdAndStatus(userId, SavingsStatus.ACTIVE).isEmpty()) {
-            throw new IllegalStateException(
-                    "You have savings still maturing. You can delete your account once they mature and are withdrawn.");
+        // Break ACTIVE (still-maturing) savings on the way out: principal returns
+        // to the wallet, any accrued bonus is forfeited. Account closure is the one
+        // place the maturity lock is lifted, so a departing user can always recover
+        // their principal.
+        for (SavingsGoal goal : savingsGoalRepository.findByUserIdAndStatus(userId, SavingsStatus.ACTIVE)) {
+            savingsService.breakActiveSavingsToWallet(userId, goal.getId());
         }
 
         // Dissolve active budgets → wallet (refund unused balance, then remove).
