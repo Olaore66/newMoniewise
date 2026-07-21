@@ -87,9 +87,19 @@ public class AccountDeletionService {
      * back in the wallet and it asks for withdrawal again).
      */
     @Transactional
-    public Result deleteAccount(String email, String reason) {
+    public Result deleteAccount(String email, String reason, String transactionPin) {
         User user = userService.findByEmail(email);
         Long userId = user.getId();
+
+        // Closing an account moves real money — it breaks savings, dissolves
+        // budgets and then empties the wallet — so prove it is the account owner
+        // first, with the same transaction PIN every other money movement needs.
+        if (transactionPin == null || transactionPin.isBlank()) {
+            throw new IllegalArgumentException("Transaction PIN is required to close your account.");
+        }
+        if (!userService.verifyTransactionPin(user, transactionPin)) {
+            throw new IllegalArgumentException("Incorrect transaction PIN.");
+        }
 
         // Async-confirmed close: never finalize (or dissolve further) while a
         // withdrawal is genuinely still settling — wait for it to COMPLETE or FAIL.

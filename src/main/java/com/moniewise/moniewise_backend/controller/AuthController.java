@@ -499,8 +499,10 @@ public class AuthController {
             @RequestBody(required = false) Map<String, String> body) {
         String email = userDetails.getUsername();
         String reason = body != null ? body.get("reason") : null;
+        String transactionPin = body != null ? body.get("transactionPin") : null;
 
-        AccountDeletionService.Result result = accountDeletionService.deleteAccount(email, reason);
+        AccountDeletionService.Result result =
+                accountDeletionService.deleteAccount(email, reason, transactionPin);
 
         if (result.outcome() == AccountDeletionService.Outcome.WITHDRAWAL_REQUIRED) {
             return ResponseEntity.ok(Map.of(
