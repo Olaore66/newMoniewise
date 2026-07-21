@@ -265,7 +265,8 @@ public class WalletController {
     public ResponseEntity<?> quoteWithdrawal(@Valid @RequestBody WithdrawalQuoteRequest request,
                                              Principal principal) {
         User user = currentUser(principal.getName());
-        WithdrawalQuoteResponse quote = walletService.quoteWithdrawal(request.getAmount(), user.getId());
+        WithdrawalQuoteResponse quote =
+                walletService.quoteWithdrawal(request.getAmount(), user.getId(), request.isClosure());
         return ResponseEntity.ok(Map.of(
                 "status", true,
                 "message", quote.getMessage(),

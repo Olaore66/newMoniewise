@@ -80,6 +80,27 @@ public class MarkupCalculatorService {
         return new FeeBreakdown(transferAmount, nipFee, markup, total);
     }
 
+    /** Flat charge applied to an account-closure withdrawal, whatever the amount. */
+    private static final BigDecimal CLOSURE_FLAT_FEE = new BigDecimal("100");
+
+    /**
+     * Account-closure fee: a single flat ₦100 charge regardless of amount. The
+     * NIBSS NIP fee for the amount being sent is paid <em>out of</em> that flat
+     * charge and whatever remains is Moniewise revenue — so the user's total
+     * debit is exactly {@code amount + 100} and the wallet can land on zero.
+     *
+     * <p>Deliberately separate from {@link #buildBreakdown}: every ordinary
+     * transfer keeps the tiered-NIP + flat-markup pricing, untouched.
+     */
+    public FeeBreakdown buildClosureBreakdown(BigDecimal sendAmount) {
+        BigDecimal nipFee = calculateNipFee(sendAmount);
+        // If NIP ever exceeded the flat charge, Moniewise takes nothing rather
+        // than letting the markup go negative.
+        BigDecimal markup = CLOSURE_FLAT_FEE.subtract(nipFee).max(BigDecimal.ZERO);
+        return new FeeBreakdown(sendAmount, nipFee, markup,
+                sendAmount.add(nipFee).add(markup));
+    }
+
     /**
      * Calculates the NIBSS NIP interbank fee for this transfer amount.
      *

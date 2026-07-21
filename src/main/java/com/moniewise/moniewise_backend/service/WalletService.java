@@ -1162,6 +1162,18 @@ public class WalletService {
                         : markupCalculatorService.calculateNipFee(request.getAmount());
             logger.info("[Transfer] Custom fees for user={} amount={}: markup=₦{} NIP=₦{}",
                     userId, request.getAmount(), transferFee, nipFee);
+        } else if (request.isClosure()
+                && RubiesGateway.PROVIDER_NAME.equalsIgnoreCase(wallet.getProviderName())) {
+            // Account closure: one flat charge, with the NIP paid out of it and
+            // the remainder to Moniewise, so the total debit lands exactly on the
+            // user's balance and the wallet can reach zero. Ordinary transfers
+            // fall through to the tiered pricing below, unchanged.
+            MarkupCalculatorService.FeeBreakdown closureFees =
+                    markupCalculatorService.buildClosureBreakdown(request.getAmount());
+            transferFee = closureFees.markupFee();
+            nipFee      = closureFees.bankCharge();
+            logger.info("[Closure] Flat closure fee for user={} amount=₦{}: markup=₦{} NIP=₦{}",
+                    userId, request.getAmount(), transferFee, nipFee);
         } else if (RubiesGateway.PROVIDER_NAME.equalsIgnoreCase(wallet.getProviderName())) {
             transferFee = markupCalculatorService.calculateMarkup(request.getAmount(), userId);
             nipFee      = markupCalculatorService.calculateNipFee(request.getAmount());
@@ -1247,11 +1259,21 @@ public class WalletService {
      * Frontend should call this before showing the confirmation screen.
      */
     public WithdrawalQuoteResponse quoteWithdrawal(BigDecimal amount, Long userId) {
+        return quoteWithdrawal(amount, userId, false);
+    }
+
+    /**
+     * @param closure when true the quote uses the flat account-closure charge
+     *                instead of ordinary tiered pricing, so the figure shown
+     *                before confirming matches what is actually debited.
+     */
+    public WithdrawalQuoteResponse quoteWithdrawal(BigDecimal amount, Long userId, boolean closure) {
         Wallet wallet = walletRepository.findByUserId(userId).orElse(null);
 
         if (wallet != null && RubiesGateway.PROVIDER_NAME.equalsIgnoreCase(wallet.getProviderName())) {
-            MarkupCalculatorService.FeeBreakdown breakdown =
-                    markupCalculatorService.buildBreakdown(amount, userId);
+            MarkupCalculatorService.FeeBreakdown breakdown = closure
+                    ? markupCalculatorService.buildClosureBreakdown(amount)
+                    : markupCalculatorService.buildBreakdown(amount, userId);
 
             // fee        = Moniewise markup only (revenue)
             // bankCharge = NIBSS NIP fee (goes to Rubies/banking system — NOT revenue)
@@ -1262,7 +1284,9 @@ public class WalletService {
                     breakdown.bankCharge(),
                     breakdown.totalFromEnvelope(),
                     amount,
-                    breakdown.markupFee().compareTo(BigDecimal.ZERO) == 0 ? "WAIVED" : "MARKUP_TIER",
+                    closure ? "CLOSURE_FLAT_FEE"
+                            : (breakdown.markupFee().compareTo(BigDecimal.ZERO) == 0
+                                    ? "WAIVED" : "MARKUP_TIER"),
                     "USER_BALANCE",
                     breakdown.displayText()
             );

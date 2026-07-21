@@ -26,6 +26,12 @@ public class WithdrawalRequest {
     private String accountNumber;  // recipient account number
     private String accountName;    // resolved via /wallets/resolve-account — must match
 
+    // Set only by the account-closure flow. Switches this single withdrawal to
+    // the flat closure charge (NIP paid out of it, remainder to Moniewise) so
+    // the total debit lands exactly on the user's balance. Ordinary transfers
+    // leave this false and keep tiered pricing.
+    private boolean closure;
+
     // Getters and Setters
     public BigDecimal getAmount() { return amount; }
     public void setAmount(BigDecimal amount) { this.amount = amount; }
@@ -47,4 +53,7 @@ public class WithdrawalRequest {
 
     public String getAccountName() { return accountName; }
     public void setAccountName(String accountName) { this.accountName = accountName; }
+
+    public boolean isClosure() { return closure; }
+    public void setClosure(boolean closure) { this.closure = closure; }
 }
