@@ -32,6 +32,22 @@
 			<version>0.21.0</version>
 		</dependency>
 
+		<!-- Sentry error tracking. Uncaught exceptions AND every existing
+		     logger.error(...) become Sentry events (sentry-logback), with info+
+		     logs attached as breadcrumbs. Entirely disabled when SENTRY_DSN is
+		     unset, so local/dev runs are unaffected. Non-jakarta starter — this
+		     project is Spring Boot 2.7 / javax. -->
+		<dependency>
+			<groupId>io.sentry</groupId>
+			<artifactId>sentry-spring-boot-starter</artifactId>
+			<version>7.14.0</version>
+		</dependency>
+		<dependency>
+			<groupId>io.sentry</groupId>
+			<artifactId>sentry-logback</artifactId>
+			<version>7.14.0</version>
+		</dependency>
+
 
 
 		<!-- Core Spring Boot -->
