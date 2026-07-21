@@ -18,6 +18,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
@@ -152,11 +153,15 @@ public class BudgetController {
     }
 
     // New: DELETE /budgets/{budgetId}
+    // Admin/support only — there is deliberately NO user-facing way to dissolve
+    // a budget outside the account-closure flow: free deletion would gut the
+    // discipline layer (create budget → delete → spend). The service resolves
+    // the budget's owner so the unspent-balance refund lands in THEIR wallet.
     @DeleteMapping("/{budgetId}")
-    public ResponseEntity<?> deleteBudget(@PathVariable Long budgetId, Authentication authentication) {
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<?> deleteBudget(@PathVariable Long budgetId) {
         try {
-            String email = authentication.getName();
-            budgetService.deleteBudget(budgetId, email);
+            budgetService.deleteBudgetAsAdmin(budgetId);
             return ResponseEntity.ok("Budget deleted successfully");
         } catch (IllegalArgumentException e) {
             return ResponseEntity.status(HttpStatus.NOT_FOUND).body(e.getMessage());

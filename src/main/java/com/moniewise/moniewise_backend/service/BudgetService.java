@@ -821,6 +821,20 @@ public class BudgetService {
         monnieCacheInvalidationService.evictUserAfterCommit(user.getId());
     }
 
+    /**
+     * Admin/support path: dissolves any user's budget <em>on their behalf</em>.
+     * Delegates to {@link #deleteBudget} with the budget OWNER's identity, so
+     * the ownership check passes and — critically — the unspent-balance refund
+     * lands in the owner's wallet, never the admin's. The ADMIN role gate lives
+     * on the controller; there is no user-facing path to this.
+     */
+    @Transactional
+    public void deleteBudgetAsAdmin(Long budgetId) {
+        Budget budget = budgetRepository.findById(budgetId)
+                .orElseThrow(() -> new IllegalArgumentException("Budget not found with ID: " + budgetId));
+        deleteBudget(budgetId, budget.getUser().getEmail());
+    }
+
 
     // New: Fetch all Budgets for a user
     public List<BudgetResponse> getBudgets(String email) {
