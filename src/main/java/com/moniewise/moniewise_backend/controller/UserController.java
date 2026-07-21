@@ -138,11 +138,58 @@ public class UserController {
 
         abuseProtectionService.recordSuccess(AbuseProtectionService.OTP_VERIFY, throttleKey);
 
+        // A brand-new device just passed the OTP gate — tell the account owner.
+        // Best-effort and async: the alert must never delay or fail the login.
+        try {
+            String email = user.getEmail();
+            if (email != null && !email.isBlank()) {
+                String deviceName = httpRequest.getHeader("X-Device-Name");
+                if (deviceName == null || deviceName.isBlank()) {
+                    deviceName = "Unrecognised device";
+                }
+                java.time.ZonedDateTime now =
+                        java.time.ZonedDateTime.now(java.time.ZoneId.of("Africa/Lagos"));
+                notificationService.sendLoginAlertEmail(
+                        email, greetingName(user), deviceName, clientIp(httpRequest),
+                        now.format(LOGIN_ALERT_TIME), now.format(LOGIN_ALERT_DATE));
+            }
+        } catch (Exception ignored) {
+            // Formatting/header issues must never block a successful login.
+        }
+
         Map<String, Object> response = new HashMap<>();
         response.put("token", token);
         response.put("message", "OTP verified successfully");
         response.put("expiresAt", jwtUtil.extractExpiration(token).getTime());
         return ResponseEntity.ok(response);
+    }
+
+    private static final java.time.format.DateTimeFormatter LOGIN_ALERT_TIME =
+            java.time.format.DateTimeFormatter.ofPattern("h:mm:ss a '(WAT)'", java.util.Locale.ENGLISH);
+    private static final java.time.format.DateTimeFormatter LOGIN_ALERT_DATE =
+            java.time.format.DateTimeFormatter.ofPattern("EEEE, MMM d, yyyy", java.util.Locale.ENGLISH);
+
+    /** First name for a friendly greeting, falling back to the email prefix. */
+    private static String greetingName(User user) {
+        String name = user.getName();
+        if (name != null && !name.isBlank()) return name.trim().split("\\s+")[0];
+        String email = user.getEmail();
+        if (email != null && email.contains("@")) {
+            String prefix = email.substring(0, email.indexOf('@'));
+            if (!prefix.isEmpty()) {
+                return Character.toUpperCase(prefix.charAt(0)) + prefix.substring(1);
+            }
+        }
+        return "there";
+    }
+
+    /** Real client IP — first X-Forwarded-For hop when behind the Render proxy. */
+    private static String clientIp(HttpServletRequest request) {
+        String forwarded = request.getHeader("X-Forwarded-For");
+        if (forwarded != null && !forwarded.isBlank()) {
+            return forwarded.split(",")[0].trim();
+        }
+        return request.getRemoteAddr();
     }
 
     @PostMapping("/profile")

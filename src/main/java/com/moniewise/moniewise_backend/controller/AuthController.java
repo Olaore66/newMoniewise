@@ -501,6 +501,19 @@ public class AuthController {
         String reason = body != null ? body.get("reason") : null;
         String transactionPin = body != null ? body.get("transactionPin") : null;
 
+        // Grab the display name BEFORE deletion for the farewell email — after
+        // the soft delete the lookup may exclude the account.
+        String farewellName = "there";
+        try {
+            User closingUser = userService.findByEmail(email);
+            String name = closingUser.getName();
+            if (name != null && !name.isBlank()) {
+                farewellName = name.trim().split("\\s+")[0];
+            }
+        } catch (Exception ignored) {
+            // Name is a nicety; deletion proceeds regardless.
+        }
+
         AccountDeletionService.Result result =
                 accountDeletionService.deleteAccount(email, reason, transactionPin);
 
@@ -513,6 +526,10 @@ public class AuthController {
                             result.walletBalance())
             ));
         }
+
+        // The account actually closed — send the farewell + feedback email
+        // (async, best-effort), echoing the reason they picked.
+        notificationService.sendAccountClosedEmail(email, farewellName, reason);
 
         return ResponseEntity.ok(Map.of(
                 "status", "deleted",

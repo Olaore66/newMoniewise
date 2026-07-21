@@ -902,6 +902,81 @@ public class NotificationService {
         }
     }
 
+    /**
+     * New-device sign-in alert — fired right after a successful login OTP
+     * verification, which is the only door a brand-new device can enter
+     * through. Passive: no action needed if the user recognises the sign-in.
+     */
+    @Async
+    public void sendLoginAlertEmail(String to, String userName, String deviceName,
+                                    String ipAddress, String loginTime, String loginDate) {
+        if ("stub".equals(activeProfile) || mailSender == null) {
+            logger.info("[STUB] Sending login alert to {}", to);
+            return;
+        }
+        try {
+            Context context = new Context();
+            context.setVariable("logoUrl", logoUrl());
+            context.setVariable("userName", userName);
+            context.setVariable("email", to);
+            context.setVariable("deviceName", deviceName);
+            context.setVariable("ipAddress", ipAddress);
+            context.setVariable("loginTime", loginTime);
+            context.setVariable("loginDate", loginDate);
+
+            String htmlContent = templateEngine.process("login-alert", context);
+
+            MimeMessage mimeMessage = mailSender.createMimeMessage();
+            MimeMessageHelper helper = new MimeMessageHelper(mimeMessage, true);
+
+            helper.setFrom(fromEmail);
+            helper.setTo(to);
+            helper.setSubject("🔔 New sign-in to your Wisemonie account");
+            helper.setText(htmlContent, true);
+            attachLogo(helper);
+
+            mailSender.send(mimeMessage);
+            logger.info("Sent login alert to {}", to);
+        } catch (Exception e) {
+            logger.error("Failed to send login alert to {}", to, e);
+        }
+    }
+
+    /**
+     * Farewell + feedback ask, sent once an account has actually closed (the
+     * DELETED outcome — never on the interim withdrawal-required step). Echoes
+     * the closure reason the user picked and invites a reply, Cardtonic-style.
+     */
+    @Async
+    public void sendAccountClosedEmail(String to, String userName, String reason) {
+        if ("stub".equals(activeProfile) || mailSender == null) {
+            logger.info("[STUB] Sending account closed email to {}", to);
+            return;
+        }
+        try {
+            Context context = new Context();
+            context.setVariable("logoUrl", logoUrl());
+            context.setVariable("userName", userName);
+            context.setVariable("reason", reason);
+
+            String htmlContent = templateEngine.process("account-closed", context);
+
+            MimeMessage mimeMessage = mailSender.createMimeMessage();
+            MimeMessageHelper helper = new MimeMessageHelper(mimeMessage, true);
+
+            helper.setFrom(fromEmail);
+            helper.setTo(to);
+            helper.setSubject("You are valued — a note from Wisemonie 💚");
+            helper.setText(htmlContent, true);
+            attachLogo(helper);
+
+            mailSender.send(mimeMessage);
+            logger.info("Sent account closed email to {}", to);
+        } catch (Exception e) {
+            logger.error("Failed to send account closed email to {}", to, e);
+        }
+    }
+
     @Async
     public void sendTransactionPinResetOtp(String to, String userName, String otpCode) {
         if ("stub".equals(activeProfile) || mailSender == null) {

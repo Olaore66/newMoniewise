@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>New Sign-in Alert</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+      background-color: #F2F4F7;
+      padding: 40px 16px;
+      -webkit-text-size-adjust: none;
+      color: #344054;
+    }
+    .wrapper { max-width: 580px; margin: 0 auto; }
+
+    /* ── Logo bar ── */
+    .logo-bar { text-align: center; padding-bottom: 24px; }
+    .logo-bar img { max-width: 160px; }
+
+    /* ── Card ── */
+    .card {
+      background: #FFFFFF;
+      border: 1px solid #E4E7EC;
+      border-radius: 12px;
+      overflow: hidden;
+    }
+
+    /* ── Header stripe ── */
+    .card-header {
+      background-color: #0F4C4C;
+      padding: 32px 40px;
+      text-align: center;
+    }
+    .card-header .tag {
+      display: inline-block;
+      background-color: rgba(199, 243, 107, 0.15);
+      color: #C7F36B;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      padding: 4px 12px;
+      border-radius: 100px;
+      margin-bottom: 14px;
+    }
+    .card-header h1 { color: #FFFFFF; font-size: 22px; font-weight: 700; }
+    .card-header p  { color: #A7C8C0; font-size: 14px; margin-top: 6px; }
+
+    /* ── Body ── */
+    .card-body { padding: 36px 40px; }
+    .body-text { font-size: 15px; color: #475467; line-height: 1.7; margin-bottom: 24px; }
+    .body-text strong { color: #101828; }
+
+    /* ── Detail table ── */
+    .detail-card {
+      background: #F9FAFB;
+      border: 1px solid #E4E7EC;
+      border-radius: 10px;
+      overflow: hidden;
+      margin: 24px 0;
+    }
+    .detail-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 13px 20px;
+      border-bottom: 1px solid #F2F4F7;
+      font-size: 14px;
+    }
+    .detail-row:last-child { border-bottom: none; }
+    .detail-label { color: #667085; font-weight: 500; }
+    .detail-value { color: #101828; font-weight: 600; text-align: right; }
+
+    /* ── Warning box ── */
+    .warning-box {
+      background: #FFFAEB;
+      border: 1px solid #FEC84B;
+      border-radius: 8px;
+      padding: 16px 18px;
+      font-size: 14px;
+      color: #92400E;
+      line-height: 1.6;
+      margin-bottom: 20px;
+    }
+    .warning-box strong { color: #78350F; display: block; margin-bottom: 4px; }
+
+    /* ── Support link ── */
+    .support-line {
+      font-size: 14px;
+      color: #475467;
+      margin-top: 4px;
+    }
+    .support-line a { color: #1F9E89; font-weight: 600; text-decoration: none; }
+
+    /* ── Footer ── */
+    .card-footer {
+      border-top: 1px solid #F2F4F7;
+      padding: 20px 40px;
+      text-align: center;
+    }
+    .footer-brand { font-size: 13px; font-weight: 700; color: #0F4C4C; margin-bottom: 4px; }
+    .footer-text  { font-size: 12px; color: #98A2B3; line-height: 1.6; }
+    .footer-text a { color: #1F9E89; text-decoration: none; }
+
+    .outer-footer {
+      text-align: center;
+      margin-top: 24px;
+      font-size: 12px;
+      color: #98A2B3;
+    }
+
+    @media only screen and (max-width: 600px) {
+      body { padding: 20px 12px; }
+      .card-header { padding: 24px 24px; }
+      .card-body   { padding: 24px 24px; }
+      .card-footer { padding: 18px 24px; }
+      .detail-row  { flex-direction: column; align-items: flex-start; gap: 2px; }
+      .detail-value { text-align: left; }
+    }
+  </style>
+</head>
+<body>
+<div class="wrapper">
+
+  <!-- Logo -->
+  <div class="logo-bar">
+    <img th:src="${logoUrl}" src="https://wisemonie.app/images/wisemonie-logo.png" alt="Wisemonie" style="height: 44px; width: auto; display: inline-block;">
+  </div>
+
+  <div class="card">
+
+    <!-- Header -->
+    <div class="card-header">
+      <div class="tag">Security Alert</div>
+      <h1>New sign-in to your account</h1>
+      <p>Your Wisemonie account was just accessed from a new device.</p>
+    </div>
+
+    <!-- Body -->
+    <div class="card-body">
+
+      <p class="body-text">
+        Hey <strong th:text="${userName}">there</strong>,<br><br>
+        We noticed a new sign-in to your account. Here are the details of this login:
+      </p>
+
+      <!-- Sign-in details -->
+      <div class="detail-card">
+        <div class="detail-row">
+          <span class="detail-label">Account</span>
+          <span class="detail-value" th:text="${email}">user@example.com</span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-label">Device</span>
+          <span class="detail-value" th:text="${deviceName}">Unrecognised device</span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-label">IP address</span>
+          <span class="detail-value" th:text="${ipAddress}">0.0.0.0</span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-label">Time</span>
+          <span class="detail-value" th:text="${loginTime}">9:14:39 AM (WAT)</span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-label">Date</span>
+          <span class="detail-value" th:text="${loginDate}">Tuesday, Jul 21, 2026</span>
+        </div>
+      </div>
+
+      <p class="body-text" style="margin-bottom: 20px;">
+        If this was you, you can safely disregard this message.
+      </p>
+
+      <!-- Warning -->
+      <div class="warning-box">
+        <strong>⚠️ Wasn't you?</strong>
+        If you don't recognise this sign-in, change your password immediately and
+        contact our support team so we can secure your account.
+      </div>
+
+      <p class="support-line">
+        Need help? <a href="mailto:wisemoniehelpdesk@gmail.com">Contact support</a>
+      </p>
+
+    </div>
+
+    <!-- Footer -->
+    <div class="card-footer">
+      <div class="footer-brand">Wisemonie</div>
+      <p class="footer-text">
+        This is an automated security notification &nbsp;·&nbsp;
+        <a href="mailto:wisemoniehelpdesk@gmail.com">wisemoniehelpdesk@gmail.com</a>
+      </p>
+    </div>
+
+  </div>
+
+  <div class="outer-footer">
+    &copy; 2026 Wisemonie. All rights reserved. &nbsp;·&nbsp; Ibadan, Nigeria
+  </div>
+
+</div>
+</body>
+</html>
