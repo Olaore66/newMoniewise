@@ -501,19 +501,6 @@ public class AuthController {
         String reason = body != null ? body.get("reason") : null;
         String transactionPin = body != null ? body.get("transactionPin") : null;
 
-        // Grab the display name BEFORE deletion for the farewell email — after
-        // the soft delete the lookup may exclude the account.
-        String farewellName = "there";
-        try {
-            User closingUser = userService.findByEmail(email);
-            String name = closingUser.getName();
-            if (name != null && !name.isBlank()) {
-                farewellName = name.trim().split("\\s+")[0];
-            }
-        } catch (Exception ignored) {
-            // Name is a nicety; deletion proceeds regardless.
-        }
-
         AccountDeletionService.Result result =
                 accountDeletionService.deleteAccount(email, reason, transactionPin);
 
@@ -521,19 +508,34 @@ public class AuthController {
             return ResponseEntity.ok(Map.of(
                     "status", "withdrawal_required",
                     "walletBalance", result.walletBalance(),
+                    // The closure is now recorded as pending, so it completes on
+                    // its own once the wallet clears — say so, or the user is left
+                    // believing an unfinished job is theirs to remember.
                     "message", String.format(
-                            "We've moved your budget and savings funds to your wallet. Withdraw ₦%,.2f to your bank, then delete again to finish closing your account.",
+                            "We've moved your budget and savings funds to your wallet. Withdraw ₦%,.2f to your bank and your account will close automatically once it clears.",
                             result.walletBalance())
             ));
         }
 
-        // The account actually closed — send the farewell + feedback email
-        // (async, best-effort), echoing the reason they picked.
-        notificationService.sendAccountClosedEmail(email, farewellName, reason);
-
+        // Farewell email is sent inside the service's finalizeClosure, so the
+        // job-driven and grace-period closures send exactly the same thing.
         return ResponseEntity.ok(Map.of(
                 "status", "deleted",
                 "message", "Account deactivated successfully. You can reactivate it by logging in with Google."
+        ));
+    }
+
+    /**
+     * Abandons a pending closure. Honest about its limits: the account stays
+     * open, but budgets already dissolved and savings already broken are not
+     * restored — that money is sitting in the user's wallet.
+     */
+    @PostMapping("/delete/cancel")
+    public ResponseEntity<?> cancelAccountClosure(@AuthenticationPrincipal UserDetails userDetails) {
+        accountDeletionService.cancelClosure(userDetails.getUsername());
+        return ResponseEntity.ok(Map.of(
+                "status", "cancelled",
+                "message", "Your account will stay open. Any money we moved to your wallet is still there."
         ));
     }
 }

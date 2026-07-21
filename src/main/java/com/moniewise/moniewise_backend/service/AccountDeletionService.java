@@ -49,6 +49,7 @@ public class AccountDeletionService {
 
     public record Result(Outcome outcome, BigDecimal walletBalance) {}
 
+    private final NotificationService notificationService;
     private final UserService userService;
     private final UserRepository userRepository;
     private final BudgetService budgetService;
@@ -58,11 +59,13 @@ public class AccountDeletionService {
     private final SavingsGoalRepository savingsGoalRepository;
     private final WithdrawalRepository withdrawalRepository;
 
-    public AccountDeletionService(UserService userService, UserRepository userRepository,
+    public AccountDeletionService(NotificationService notificationService,
+                                  UserService userService, UserRepository userRepository,
                                   BudgetService budgetService, SavingsService savingsService,
                                   WalletService walletService, BudgetRepository budgetRepository,
                                   SavingsGoalRepository savingsGoalRepository,
                                   WithdrawalRepository withdrawalRepository) {
+        this.notificationService = notificationService;
         this.userService = userService;
         this.userRepository = userRepository;
         this.budgetService = budgetService;
@@ -148,13 +151,87 @@ public class AccountDeletionService {
         // and is recoverable if the user reactivates.
         BigDecimal balance = safeBalance(userId);
         if (balance.compareTo(MIN_WITHDRAWABLE_BALANCE) >= 0) {
+            // Their intent is captured and PIN-verified NOW. Stamp it, so
+            // AccountClosureFinalizerJob can finish the closure by itself once
+            // the wallet empties — the user must never be left with dissolved
+            // budgets, broken savings and a still-open account because they
+            // withdrew and never came back to tap Delete a second time.
+            // Preserve the ORIGINAL request time across repeat taps so the
+            // grace period is measured from when they first asked.
+            if (user.getClosureRequestedAt() == null) {
+                user.setClosureRequestedAt(LocalDateTime.now());
+                userRepository.save(user);
+                logger.info("Closure pending (withdrawal required) for {} — balance ₦{}", email, balance);
+            }
             return new Result(Outcome.WITHDRAWAL_REQUIRED, balance);
         }
 
-        user.setDeleted(true);
-        userRepository.save(user);
-        logger.info("Soft-deleted user account: {}", email);
+        finalizeClosure(user, reason);
         return new Result(Outcome.DELETED, balance);
+    }
+
+    /**
+     * The single place an account actually closes. Every route here — the user's
+     * second tap, the finalizer job once their wallet empties, and the
+     * grace-period expiry — goes through this method, so the farewell email and
+     * the pending-flag cleanup can never diverge between paths.
+     */
+    @Transactional
+    public void finalizeClosure(User user, String reason) {
+        user.setDeleted(true);
+        user.setClosureRequestedAt(null);   // no longer pending — it's done
+        userRepository.save(user);
+        logger.info("Soft-deleted user account: {}", user.getEmail());
+
+        // Async + best-effort: a mail failure must never undo a closure.
+        try {
+            notificationService.sendAccountClosedEmail(
+                    user.getEmail(), firstNameOf(user), resolveReason(user, reason));
+        } catch (Exception e) {
+            logger.error("Farewell email failed for {}", user.getEmail(), e);
+        }
+    }
+
+    /**
+     * Abandons a pending closure at the user's request. Note what this can and
+     * cannot undo: the account stays open and stops being pending, but budgets
+     * already dissolved and savings already broken are NOT restored — that
+     * money is sitting in their wallet. Say so plainly in any UI that calls it.
+     */
+    @Transactional
+    public void cancelClosure(String email) {
+        User user = userService.findByEmail(email);
+        if (user.getClosureRequestedAt() == null) return;   // idempotent
+        user.setClosureRequestedAt(null);
+        userRepository.save(user);
+        logger.info("Closure cancelled by user: {}", email);
+    }
+
+    /** First name for the farewell greeting, falling back to the email prefix. */
+    private String firstNameOf(User user) {
+        String name = user.getName();
+        if (name != null && !name.isBlank()) return name.trim().split("\\s+")[0];
+        String email = user.getEmail();
+        if (email != null && email.contains("@")) {
+            String prefix = email.substring(0, email.indexOf('@'));
+            if (!prefix.isEmpty()) {
+                return Character.toUpperCase(prefix.charAt(0)) + prefix.substring(1);
+            }
+        }
+        return "there";
+    }
+
+    /**
+     * The reason for the farewell email. On a job-driven close there is no
+     * request body, so fall back to the reason stored at the first tap.
+     */
+    private String resolveReason(User user, String reason) {
+        if (reason != null && !reason.isBlank()) return reason.trim();
+        Map<String, Object> profile = user.getProfileData();
+        if (profile != null && profile.get("deletionReason") != null) {
+            return profile.get("deletionReason").toString();
+        }
+        return null;
     }
 
     private BigDecimal safeBalance(Long userId) {

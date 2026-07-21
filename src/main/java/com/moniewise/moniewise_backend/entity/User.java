@@ -40,6 +40,17 @@ public class User {
     @Column(name = "is_deleted")
     private boolean isDeleted = false;
 
+    /**
+     * Stamped when the user taps Delete but money still has to be withdrawn
+     * before the account can close. Their intent is already captured — and
+     * PIN-verified — at that moment, so this timestamp is what lets closure
+     * finish on its own if they withdraw and never come back to tap Delete a
+     * second time. Without it, savings/budgets are destroyed and the account
+     * silently stays open. Cleared on cancellation and on actual closure.
+     */
+    @Column(name = "closure_requested_at")
+    private LocalDateTime closureRequestedAt;
+
     @Column(name = "is_verified", nullable = false)
     private boolean isVerified = false; // Default to false
 
@@ -133,6 +144,9 @@ public class User {
 
     public boolean isDeleted() { return isDeleted; }
     public void setDeleted(boolean deleted) { isDeleted = deleted; }
+
+    public LocalDateTime getClosureRequestedAt() { return closureRequestedAt; }
+    public void setClosureRequestedAt(LocalDateTime v) { this.closureRequestedAt = v; }
 
     // 2. ENSURE this exists (You already have it) ðŸ‘‡
     @Column(name = "profile_image_url", columnDefinition = "TEXT")

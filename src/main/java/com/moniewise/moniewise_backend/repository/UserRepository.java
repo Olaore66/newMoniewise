@@ -171,6 +171,15 @@ List<UserSummary> searchUsers(@Param("query") String query, Pageable pageable);
 
     Optional<User> findByEmail(String email);
 
+    /**
+     * Accounts where the user asked to close but a withdrawal still had to
+     * happen first. Polled by AccountClosureFinalizerJob so closure completes
+     * on its own once the wallet empties — the user must never be left with
+     * dissolved budgets, broken savings and a still-open account.
+     */
+    @Query("SELECT u FROM User u WHERE u.closureRequestedAt IS NOT NULL AND u.isDeleted = false")
+    List<User> findPendingClosures();
+
     /** All users holding a given role — used to target admins for ops alerts. */
     List<User> findByRole(Role role);
 }
