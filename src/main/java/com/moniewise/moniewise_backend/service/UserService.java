@@ -130,7 +130,7 @@ public class UserService implements UserDetailsService {
         if (existingUser.isPresent()) {
             User user = existingUser.get();
             if (user.isDeleted()) {
-                throw new IllegalArgumentException("This account was deleted. Please login with Google to reactivate it.");
+                throw new IllegalArgumentException("This account was closed. Log in with your email and password to reactivate it — no need to sign up again.");
             }
             throw new IllegalArgumentException("Email already registered: " + email);
         }
@@ -580,13 +580,28 @@ public class UserService implements UserDetailsService {
                 .orElseGet(() -> userRepository.findByPhone(emailOrPhone)
                         .orElseThrow(() -> new RuntimeException("User not found")));
 
-        if (user.isDeleted()) {
-            throw new RuntimeException("Account has been deactivated");
-        }
-
-        // Validate password directly
+        // Validate the password BEFORE anything else — a wrong password must
+        // never reactivate a closed account.
         if (!passwordEncoder.matches(password, user.getPassword())) {
             throw new RuntimeException("Invalid credentials");
+        }
+
+        // Reactivation is the ONLY way back into a closed account now that Google
+        // sign-in is gone. A correct password restores the account — and any money
+        // still sitting in its soft-deleted wallet — mirroring what the old Google
+        // login path used to do. Without this, closure is a one-way door and the
+        // grace-period finalizer would trap the user's funds forever.
+        //
+        // Only isDeleted (fully closed) is reactivated here. A closure that is
+        // still PENDING (closureRequestedAt set, isDeleted=false) is deliberately
+        // left untouched: the account is still open, and a user reopening the app
+        // to finish withdrawing must NOT accidentally cancel the closure they
+        // asked for. Cancelling a pending closure is an explicit action
+        // (POST /auth/delete/cancel), never a side effect of logging in.
+        if (user.isDeleted()) {
+            logger.info("Reactivating closed account on password login: {}", emailOrPhone);
+            user.setDeleted(false);
+            user.setClosureRequestedAt(null);
         }
 
         // Check new isVerified column
