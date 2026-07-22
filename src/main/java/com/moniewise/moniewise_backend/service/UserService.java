@@ -130,7 +130,7 @@ public class UserService implements UserDetailsService {
         if (existingUser.isPresent()) {
             User user = existingUser.get();
             if (user.isDeleted()) {
-                throw new IllegalArgumentException("This account was closed. Log in with your email and password to reactivate it — no need to sign up again.");
+                throw new IllegalArgumentException("This email is linked to a permanently closed account and can't be used to sign up again. Please contact support if you need help.");
             }
             throw new IllegalArgumentException("Email already registered: " + email);
         }
@@ -580,28 +580,17 @@ public class UserService implements UserDetailsService {
                 .orElseGet(() -> userRepository.findByPhone(emailOrPhone)
                         .orElseThrow(() -> new RuntimeException("User not found")));
 
-        // Validate the password BEFORE anything else — a wrong password must
-        // never reactivate a closed account.
+        // Validate the password first, then apply account-state guards.
         if (!passwordEncoder.matches(password, user.getPassword())) {
             throw new RuntimeException("Invalid credentials");
         }
 
-        // Reactivation is the ONLY way back into a closed account now that Google
-        // sign-in is gone. A correct password restores the account — and any money
-        // still sitting in its soft-deleted wallet — mirroring what the old Google
-        // login path used to do. Without this, closure is a one-way door and the
-        // grace-period finalizer would trap the user's funds forever.
-        //
-        // Only isDeleted (fully closed) is reactivated here. A closure that is
-        // still PENDING (closureRequestedAt set, isDeleted=false) is deliberately
-        // left untouched: the account is still open, and a user reopening the app
-        // to finish withdrawing must NOT accidentally cancel the closure they
-        // asked for. Cancelling a pending closure is an explicit action
-        // (POST /auth/delete/cancel), never a side effect of logging in.
+        // Closure is permanent and one-way. A closed account can NEVER be signed
+        // back into — being let in would mean the account was never really
+        // deleted, only hidden. Any balance left behind in a closed wallet is
+        // recovered through support, never by logging in.
         if (user.isDeleted()) {
-            logger.info("Reactivating closed account on password login: {}", emailOrPhone);
-            user.setDeleted(false);
-            user.setClosureRequestedAt(null);
+            throw new RuntimeException("This account has been permanently closed.");
         }
 
         // Check new isVerified column
@@ -628,9 +617,12 @@ public class UserService implements UserDetailsService {
             // If the user exists but was "Soft Deleted", we bring them back.
             if (user.isDeleted()) {
                 logger.info("â™»ï¸ Reactivating returning user: " + email);
-                user.setDeleted(false); // Mark as Active
-                // We do NOT create a new wallet/password. We reuse the old data.
-                return userRepository.save(user);
+                // Closure is permanent — a closed account is NEVER reactivated,
+                // not by password login and not through this legacy OAuth path.
+                // (Google sign-in is gone from the app, but the /auth/google
+                // endpoint still exists, so it must honour finality too instead
+                // of silently resurrecting a closed account.)
+                throw new IllegalArgumentException("This account has been permanently closed.");
             }
 
             // If user is already active, just return them.

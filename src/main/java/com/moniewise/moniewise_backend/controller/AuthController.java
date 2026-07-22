@@ -521,7 +521,7 @@ public class AuthController {
         // job-driven and grace-period closures send exactly the same thing.
         return ResponseEntity.ok(Map.of(
                 "status", "deleted",
-                "message", "Account closed. You can reactivate it anytime by logging in with your email and password."
+                "message", "Your account has been permanently closed."
         ));
     }
 
