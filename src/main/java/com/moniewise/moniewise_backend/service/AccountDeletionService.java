@@ -192,21 +192,6 @@ public class AccountDeletionService {
         }
     }
 
-    /**
-     * Abandons a pending closure at the user's request. Note what this can and
-     * cannot undo: the account stays open and stops being pending, but budgets
-     * already dissolved and savings already broken are NOT restored — that
-     * money is sitting in their wallet. Say so plainly in any UI that calls it.
-     */
-    @Transactional
-    public void cancelClosure(String email) {
-        User user = userService.findByEmail(email);
-        if (user.getClosureRequestedAt() == null) return;   // idempotent
-        user.setClosureRequestedAt(null);
-        userRepository.save(user);
-        logger.info("Closure cancelled by user: {}", email);
-    }
-
     /** First name for the farewell greeting, falling back to the email prefix. */
     private String firstNameOf(User user) {
         String name = user.getName();

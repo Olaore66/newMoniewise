@@ -525,17 +525,4 @@ public class AuthController {
         ));
     }
 
-    /**
-     * Abandons a pending closure. Honest about its limits: the account stays
-     * open, but budgets already dissolved and savings already broken are not
-     * restored — that money is sitting in the user's wallet.
-     */
-    @PostMapping("/delete/cancel")
-    public ResponseEntity<?> cancelAccountClosure(@AuthenticationPrincipal UserDetails userDetails) {
-        accountDeletionService.cancelClosure(userDetails.getUsername());
-        return ResponseEntity.ok(Map.of(
-                "status", "cancelled",
-                "message", "Your account will stay open. Any money we moved to your wallet is still there."
-        ));
-    }
 }
