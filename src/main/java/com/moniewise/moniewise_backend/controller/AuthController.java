@@ -525,4 +525,20 @@ public class AuthController {
         ));
     }
 
+    /**
+     * Completes a closure the instant the client confirms the closure
+     * withdrawal, so the app can log the user out with the account already
+     * closed rather than waiting on the hourly finalizer. The account must be
+     * mid-closure (the PIN was already verified in {@code DELETE /delete}), and
+     * the call is idempotent.
+     */
+    @PostMapping("/delete/finalize")
+    public ResponseEntity<?> finalizeAccountDeletion(@AuthenticationPrincipal UserDetails userDetails) {
+        accountDeletionService.finalizeDeletion(userDetails.getUsername());
+        return ResponseEntity.ok(Map.of(
+                "status", "deleted",
+                "message", "Your account has been permanently closed."
+        ));
+    }
+
 }

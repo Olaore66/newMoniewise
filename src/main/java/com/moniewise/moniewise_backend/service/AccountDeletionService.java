@@ -192,6 +192,33 @@ public class AccountDeletionService {
         }
     }
 
+    /**
+     * Finishes a closure the moment the client confirms the closure withdrawal,
+     * so the app can log the user straight out with the account already closed
+     * instead of waiting on the hourly finalizer. Requires the pending-closure
+     * state (they have already confirmed with their PIN and consolidated their
+     * money in {@link #deleteAccount}); idempotent.
+     *
+     * <p>Deliberately skips the in-flight-withdrawal guard that {@code
+     * deleteAccount} runs: the closure withdrawal this fires after is expected to
+     * be PROCESSING. The money has already left the wallet toward the user's
+     * bank, so closing now is correct and the transfer settles on its own.
+     */
+    @Transactional
+    public void finalizeDeletion(String email) {
+        User user = userRepository.findFirstByEmailOrderByCreatedAtAsc(email)
+                .orElseThrow(() -> new IllegalArgumentException("User not found"));
+        if (user.isDeleted()) {
+            return; // already closed — idempotent, safe to call more than once
+        }
+        if (user.getClosureRequestedAt() == null) {
+            // Never let this close a healthy account: only one already in the
+            // PIN-confirmed pending-closure state can be finalized here.
+            throw new IllegalStateException("No account closure is in progress.");
+        }
+        finalizeClosure(user, null);
+    }
+
     /** First name for the farewell greeting, falling back to the email prefix. */
     private String firstNameOf(User user) {
         String name = user.getName();
