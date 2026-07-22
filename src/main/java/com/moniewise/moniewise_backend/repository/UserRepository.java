@@ -35,6 +35,12 @@ public interface UserRepository extends JpaRepository<User, Long> {
     @Query(value = "SELECT * FROM users WHERE email = :email ORDER BY created_at ASC LIMIT 1", nativeQuery = true)
     Optional<User> findGlobalByEmail(@Param("email") String email);
 
+    @Query(value = "SELECT * FROM users WHERE phone = :phone ORDER BY created_at ASC LIMIT 1", nativeQuery = true)
+    Optional<User> findGlobalByPhone(@Param("phone") String phone);
+
+    @Query(value = "SELECT * FROM users WHERE bvn = :bvn ORDER BY created_at ASC LIMIT 1", nativeQuery = true)
+    Optional<User> findGlobalByBvn(@Param("bvn") String bvn);
+
 //     ✅ FIXED: Native Query (Bypasses Hibernate HQL parser errors)
 //     Uses Postgres JSON operator (->>) to extract text directly.
 //     Note: We provide a countQuery to ensure pagination works efficiently.

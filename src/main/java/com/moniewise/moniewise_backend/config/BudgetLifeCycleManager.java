@@ -953,8 +953,8 @@ public class BudgetLifeCycleManager {
     @Scheduled(cron = "0 0 3 * * ?", zone = "Africa/Lagos") // FIX: Added zone for consistency
     public void cleanOldNotifications() {
         LocalDateTime threshold = fetchCurrentDateTimeFromDatabase().minusDays(30);
-        notificationRepository.deleteByCreatedAtBefore(threshold);
-        logger.info("Cleaned notifications older than {}", threshold);
+        int deleted = notificationRepository.deleteByCreatedAtBefore(threshold);
+        logger.info("Cleaned {} notifications older than {}", deleted, threshold);
     }
 //    @Scheduled(fixedRateString = "${moniewise.scheduler.pending-disbursement.fixed-rate-ms:120000}")
     @Transactional
@@ -1495,5 +1495,4 @@ public class BudgetLifeCycleManager {
     }
 
 }
-
 

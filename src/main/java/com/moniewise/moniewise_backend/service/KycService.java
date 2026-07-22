@@ -83,6 +83,15 @@ public class KycService {
                         "No pending registration found for this phone. " +
                         "Please complete the signup step first."));
 
+        // 1b. Block re-registration with a BVN that belongs to a deleted account
+        Optional<User> bvnOwner = userRepository.findGlobalByBvn(bvn);
+        if (bvnOwner.isPresent()) {
+            if (bvnOwner.get().isDeleted()) {
+                throw new IllegalArgumentException("This BVN is linked to a permanently closed account and can't be used to sign up again. Please contact support if you need help.");
+            }
+            throw new IllegalArgumentException("This BVN is already linked to another account.");
+        }
+
         String email = pending.getEmail();
 
         // 2. Call SecureWave

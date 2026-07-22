@@ -135,7 +135,11 @@ public class UserService implements UserDetailsService {
             throw new IllegalArgumentException("Email already registered: " + email);
         }
 
-        if (userRepository.findByPhone(phone).isPresent()) {
+        Optional<User> existingPhone = userRepository.findGlobalByPhone(phone);
+        if (existingPhone.isPresent()) {
+            if (existingPhone.get().isDeleted()) {
+                throw new IllegalArgumentException("This phone number is linked to a permanently closed account and can't be used to sign up again. Please contact support if you need help.");
+            }
             throw new IllegalArgumentException("An account with the phone number '" + phone + "' already exists.");
         }
 
@@ -249,16 +253,24 @@ public class UserService implements UserDetailsService {
         }
 
         // 3. One final duplicate guard (handles race conditions) ──────────────────
-        if (userRepository.findFirstByEmailOrderByCreatedAtAsc(email).isPresent()) {
+        Optional<User> raceEmail = userRepository.findGlobalByEmail(email);
+        if (raceEmail.isPresent()) {
             registrationCacheService.delete(email);
+            if (raceEmail.get().isDeleted()) {
+                throw new IllegalArgumentException("This email is linked to a permanently closed account and can't be used to sign up again.");
+            }
             throw new IllegalArgumentException("Email already registered: " + email);
         }
         if (pending.getPhone() == null || pending.getPhone().isBlank()) {
             registrationCacheService.delete(email);
             throw new IllegalArgumentException("Phone number is required. Please sign up again.");
         }
-        if (userRepository.findByPhone(pending.getPhone()).isPresent()) {
+        Optional<User> racePhone = userRepository.findGlobalByPhone(pending.getPhone());
+        if (racePhone.isPresent()) {
             registrationCacheService.delete(email);
+            if (racePhone.get().isDeleted()) {
+                throw new IllegalArgumentException("This phone number is linked to a permanently closed account and can't be used to sign up again.");
+            }
             throw new IllegalArgumentException("An account with the phone number '" + pending.getPhone() + "' already exists.");
         }
 
@@ -275,6 +287,13 @@ public class UserService implements UserDetailsService {
 
         // Carry across BVN if the pre-verify step was completed during signup
         if (pending.getBvn() != null && !pending.getBvn().isBlank()) {
+            Optional<User> bvnOwner = userRepository.findGlobalByBvn(pending.getBvn());
+            if (bvnOwner.isPresent() && !bvnOwner.get().getId().equals(user.getId())) {
+                if (bvnOwner.get().isDeleted()) {
+                    throw new IllegalArgumentException("This BVN is linked to a permanently closed account and can't be used to sign up again. Please contact support if you need help.");
+                }
+                throw new IllegalArgumentException("This BVN is already linked to another account.");
+            }
             user.setBvn(pending.getBvn());
         }
 
@@ -681,6 +700,13 @@ public class UserService implements UserDetailsService {
         if (user.getBvn() == null || user.getBvn().trim().isEmpty()) {
             if (incomingBvn == null || incomingBvn.isEmpty()) {
                 throw new IllegalArgumentException("BVN is required to complete your profile.");
+            }
+            Optional<User> bvnOwner = userRepository.findGlobalByBvn(incomingBvn);
+            if (bvnOwner.isPresent() && !bvnOwner.get().getId().equals(user.getId())) {
+                if (bvnOwner.get().isDeleted()) {
+                    throw new IllegalArgumentException("This BVN is linked to a permanently closed account and can't be used to sign up again. Please contact support if you need help.");
+                }
+                throw new IllegalArgumentException("This BVN is already linked to another account.");
             }
             user.setBvn(incomingBvn);
         } else if (incomingBvn != null && !incomingBvn.isEmpty() && !user.getBvn().equals(incomingBvn)) {

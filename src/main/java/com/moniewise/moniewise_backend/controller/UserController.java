@@ -161,6 +161,7 @@ public class UserController {
         response.put("token", token);
         response.put("message", "OTP verified successfully");
         response.put("expiresAt", jwtUtil.extractExpiration(token).getTime());
+        response.put("needsProfileUpdate", needsProfileUpdate(user));
         return ResponseEntity.ok(response);
     }
 
@@ -279,6 +280,17 @@ public class UserController {
     }
 
     // Image upload/delete endpoints are in UserController lines 53–78 (Firebase Storage)
+
+    private boolean needsProfileUpdate(User user) {
+        Map<String, Object> profileData = user.getProfileData();
+        String firstName = profileData != null ? String.valueOf(profileData.getOrDefault("firstName", "")) : "";
+        String lastName = profileData != null ? String.valueOf(profileData.getOrDefault("lastName", "")) : "";
+        return isBlank(user.getPhone()) || isBlank(user.getBvn()) || isBlank(firstName) || isBlank(lastName);
+    }
+
+    private boolean isBlank(String value) {
+        return value == null || value.isBlank();
+    }
 
     private String extractSessionId(String authHeader) {
         if (authHeader == null || !authHeader.startsWith("Bearer ")) {

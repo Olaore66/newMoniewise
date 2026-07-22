@@ -1,7 +1,7 @@
 # -------------------------------------------------
 # BUILD STAGE
 # -------------------------------------------------
-FROM maven:3.9.9-eclipse-temurin-17 AS build
+FROM maven:3.9.9-eclipse-temurin-25 AS build
 WORKDIR /app
 COPY pom.xml .
 RUN mvn -B dependency:go-offline
@@ -11,7 +11,7 @@ RUN mvn -B clean package -DskipTests
 # -------------------------------------------------
 # RUNTIME STAGE
 # -------------------------------------------------
-FROM eclipse-temurin:17-jre-alpine
+FROM eclipse-temurin:25-jre-alpine
 WORKDIR /app
 # Ensure this matches your actual JAR name from pom.xml
 COPY --from=build /app/target/moniewise-backend-0.0.1-SNAPSHOT.jar app.jar

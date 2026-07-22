@@ -43,7 +43,10 @@ public interface NotificationRepository extends JpaRepository<Notification, Long
 
     List<Notification> findByUserIdAndPushSentFalseAndCreatedAtAfter(Long userId, LocalDateTime after);
 
-    void deleteByCreatedAtBefore(LocalDateTime threshold);
+    @Modifying
+    @Transactional
+    @Query("DELETE FROM Notification n WHERE n.createdAt < :threshold")
+    int deleteByCreatedAtBefore(@Param("threshold") LocalDateTime threshold);
 
     @Modifying
     @Transactional
