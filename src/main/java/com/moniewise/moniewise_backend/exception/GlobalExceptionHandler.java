@@ -6,6 +6,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.context.request.WebRequest;
@@ -22,6 +23,19 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(TncAcceptanceRequiredException.class)
     public ResponseEntity<?> handleTncAcceptance(TncAcceptanceRequiredException ex) {
         return ResponseEntity.status(403).body(Map.of("error", ex.getMessage(), "tnc", ex.getTncContent(), "version", ex.getTncVersion()));
+    }
+
+    @ExceptionHandler(MethodArgumentNotValidException.class)
+    public ResponseEntity<Map<String, Object>> handleValidation(MethodArgumentNotValidException ex) {
+        String message = ex.getBindingResult().getFieldErrors().stream()
+                .map(fe -> fe.getDefaultMessage())
+                .findFirst()
+                .orElse("Validation failed");
+        return ResponseEntity.badRequest().body(Map.of(
+                "status", HttpStatus.BAD_REQUEST.value(),
+                "error", message,
+                "message", message
+        ));
     }
 
     @ExceptionHandler(IllegalArgumentException.class)
