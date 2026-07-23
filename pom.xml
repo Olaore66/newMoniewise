@@ -15,9 +15,9 @@
 	<description>your financial discipline companion application</description>
 
 	<properties>
-		<java.version>25</java.version>
-		<maven.compiler.source>25</maven.compiler.source>
-		<maven.compiler.target>25</maven.compiler.target>
+		<java.version>17</java.version>
+		<maven.compiler.source>17</maven.compiler.source>
+		<maven.compiler.target>17</maven.compiler.target>
 		<lombok.version>1.18.32</lombok.version>
 	</properties>
 
