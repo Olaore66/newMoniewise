@@ -547,10 +547,13 @@ public class EnvelopeService {
     // 3. GET REMAINING LIMIT - FIXED Ã¢Å“â€¦
     // =========================================================================
     public BigDecimal getRemainingLimit(Long envelopeId, String email) {
-        LocalDateTime now = fetchCurrentDateTimeFromDatabase();
-
         Envelope envelope = envelopeRepository.findByIdAndBudget_UserEmail(envelopeId, email)
                 .orElseThrow(() -> new EntityNotFoundException("Envelope not found or not accessible: " + envelopeId));
+        return getRemainingLimit(envelope, email);
+    }
+
+    BigDecimal getRemainingLimit(Envelope envelope, String email) {
+        LocalDateTime now = fetchCurrentDateTimeFromDatabase();
 
         Map<String, Object> conditions = envelope.getConditions();
 
@@ -659,7 +662,7 @@ public class EnvelopeService {
 
         // 4. Ã°Å¸Å¡â‚¬ EXECUTE NUCLEAR QUERY (Now returns a POSITIVE total of spending)
         BigDecimal spentAmount = transactionLogRepository.calculateTotalSpent(
-                envelopeId,
+                envelope.getId(),
                 periodStart,
                 spendingTypes,
                 List.of(
@@ -672,7 +675,7 @@ public class EnvelopeService {
         // Also account for VAS (airtime/data) purchases — stored in payeelord_vas_transactions,
         // not TransactionLog, so the query above misses them entirely.
         BigDecimal vasSpent = safeAmount(vasTransactionRepository.sumSettledSellingAmount(
-                envelopeId, VasTransactionStatus.SUCCESSFUL, periodStart));
+                envelope.getId(), VasTransactionStatus.SUCCESSFUL, periodStart));
 
         BigDecimal remainingLimit = limit.subtract(spentAmount).subtract(vasSpent);
 
@@ -1331,6 +1334,11 @@ public class EnvelopeService {
             throw new IllegalArgumentException("Can only add envelopes to active budgets");
         }
 
+        Envelope envelope = createEnvelopeEntity(request, budget, email, isSilent);
+        return toResponse(envelope);
+    }
+
+    Envelope createEnvelopeEntity(EnvelopeRequest request, Budget budget, String email, boolean isSilent) {
         BigDecimal amount;
         if (request.getExactAmount() != null && request.getExactAmount().compareTo(BigDecimal.ZERO) > 0) {
             amount = request.getExactAmount();
@@ -1340,11 +1348,6 @@ public class EnvelopeService {
                     .divide(BigDecimal.valueOf(100), 2, RoundingMode.HALF_UP);
         }
 
-        // Compute effective duration so the condition validator can reject
-        // plans that make no sense for the budget length (e.g. weekly on a 1-day budget).
-        // +1: the Flutter date picker counts the start day as day 1 (e.g. today
-        // -> tomorrow = 2 days), but ChronoUnit.DAYS.between() is exclusive (1 day)
-        // - without the +1 this disagreed with the duration the user actually picked.
         long budgetDurationDays = (budget.getStartDate() != null && budget.getEndDate() != null)
                 ? java.time.temporal.ChronoUnit.DAYS.between(budget.getStartDate(), budget.getEndDate()) + 1
                 : (budget.getDurationDays() != null ? budget.getDurationDays() : 30L);
@@ -1377,8 +1380,10 @@ public class EnvelopeService {
             }
         }
 
+        LocalDateTime now = fetchCurrentDateTimeFromDatabase();
+
         Envelope envelope = new Envelope(budget, request.getName(), amount, conditions);
-        envelope.setCreatedAt(fetchCurrentDateTimeFromDatabase());
+        envelope.setCreatedAt(now);
         envelope.setInitialAmount(amount);
         envelope.setTotalRemainingAmount(amount);
         envelope.setHeldAmount(BigDecimal.ZERO);
@@ -1386,10 +1391,7 @@ public class EnvelopeService {
 
         recalculateTargetEnvelopeLimit(envelope, budget);
 
-        // Calculate the first-disbursement time before deciding the initial pocket size:
-        // the choice depends on whether that first fire is still in the future today.
         LocalDateTime firstDisbursement = budgetLifeCycleManager.calculateNextDisbursementTime(envelope);
-        LocalDateTime nowForSeed = fetchCurrentDateTimeFromDatabase();
         envelope.setNextDisbursementAt(firstDisbursement);
         envelope.setHasMatured(false);
 
@@ -1397,21 +1399,15 @@ public class EnvelopeService {
         if ("emergency".equalsIgnoreCase(typez)) {
             envelope.setRemainingAmount(amount);
         } else if ("daily".equalsIgnoreCase(typez) || "weekly".equalsIgnoreCase(typez) || "dynamic".equalsIgnoreCase(typez)) {
-            // If the first disbursement is still later today, start the pocket at zero
-            // so the scheduler funds and notifies at the exact configured time.
-            // If the disbursement time has already passed (first fire is tomorrow or later),
-            // pre-seed the pocket for immediate access and mark today as processed so
-            // tomorrow's task doesn't double-disburse.
             boolean firstDisbursementIsToday = firstDisbursement != null
-                    && firstDisbursement.toLocalDate().isEqual(nowForSeed.toLocalDate());
+                    && firstDisbursement.toLocalDate().isEqual(now.toLocalDate());
             if (firstDisbursementIsToday) {
                 envelope.setRemainingAmount(BigDecimal.ZERO);
-                // lastDisbursedAt intentionally left null — today's scheduled task will fire and notify
             } else {
                 BigDecimal startingPocket = getPeriodLimit(envelope.getConditions());
                 startingPocket = startingPocket.min(envelope.getTotalRemainingAmount());
                 envelope.setRemainingAmount(startingPocket);
-                envelope.setLastDisbursedAt(nowForSeed);
+                envelope.setLastDisbursedAt(now);
             }
         } else {
             BigDecimal startingPocket = getPeriodLimit(envelope.getConditions());
@@ -1423,7 +1419,6 @@ public class EnvelopeService {
 
         budgetLifeCycleManager.scheduleDynamicTasks(envelope);
 
-
         if (!isSilent) {
             Map<String, Object> params = Map.of(
                     "amount", String.format("%,.2f", amount),
@@ -1434,7 +1429,7 @@ public class EnvelopeService {
                     params, budget.getId(), envelope.getId(), "/envelopes/" + envelope.getId()
             ));
         }
-        return toResponse(envelope);
+        return envelope;
     }
 
     @Transactional

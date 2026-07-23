@@ -133,6 +133,12 @@
 			<artifactId>google-genai</artifactId>
 			<version>1.0.0</version>
 		</dependency>
+
+		<!-- Connection-pooled HTTP client for RestTemplate (used by GeminiService) -->
+		<dependency>
+			<groupId>org.apache.httpcomponents</groupId>
+			<artifactId>httpclient</artifactId>
+		</dependency>
 		
 
 		<!-- Redis — temporary registration storage during OTP verification -->

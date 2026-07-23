@@ -16,11 +16,9 @@ import com.moniewise.moniewise_backend.repository.*;
 import com.moniewise.moniewise_backend.service.SystemConfigService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Lazy;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -29,6 +27,8 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.stream.Collectors;
@@ -93,9 +93,6 @@ public class BudgetService {
         this.monnieCacheInvalidationService = monnieCacheInvalidationService;
     }
 
-    // Helper method to fetch current date/time from Postgres
-    @Autowired
-    private JdbcTemplate jdbcTemplate;
     private static final Logger logger = LoggerFactory.getLogger(BudgetService.class);
     private static final String LATEST_TNC_VERSION = "2.0";
     private static final String LATEST_TNC_CONTENT = "MonieWise helps you budget... (your terms here)";
@@ -106,8 +103,7 @@ public class BudgetService {
     }
 
     private LocalDateTime fetchCurrentDateTimeFromDatabase() {
-        String sql = "SELECT CURRENT_TIMESTAMP AT TIME ZONE 'Africa/Lagos'";
-        return jdbcTemplate.queryForObject(sql, LocalDateTime.class);
+        return ZonedDateTime.now(ZoneId.of("Africa/Lagos")).toLocalDateTime();
     }
 
     // In BudgetService.java, replace lines 118–170 with:
@@ -649,9 +645,7 @@ public class BudgetService {
             envelopeRequest.setExactAmount(correctAmount);
             envelopeRequest.setBudgetId(savedBudget.getId());
 
-            EnvelopeResponse envelopeResponse = envelopeService.createEnvelope(envelopeRequest, email, true);
-            Envelope envelope = envelopeRepository.findById(envelopeResponse.getId())
-                    .orElseThrow(() -> new IllegalStateException("Failed to retrieve created envelope"));
+            Envelope envelope = envelopeService.createEnvelopeEntity(envelopeRequest, savedBudget, email, true);
 
             // Savings sweep logic (unchanged)
             Map<String, Object> conditions = envelope.getConditions();
@@ -1387,44 +1381,41 @@ public class BudgetService {
     }
 
     private EnvelopeResponse mapEnvelopeToResponse(Envelope envelope, Budget budget, String email) {
-        envelopeService.getRemainingLimit(envelope.getId(), email);
+        envelopeService.getRemainingLimit(envelope, email);
 
-        Envelope freshEnvelope = envelopeRepository.findById(envelope.getId())
-                .orElseThrow(() -> new IllegalStateException("Envelope not found after refresh"));
-
-        BigDecimal periodLimit = getLimitFromConditions(freshEnvelope);
-        BigDecimal periodRemaining = freshEnvelope.getRemainingAmount() != null
-                ? freshEnvelope.getRemainingAmount()
+        BigDecimal periodLimit = getLimitFromConditions(envelope);
+        BigDecimal periodRemaining = envelope.getRemainingAmount() != null
+                ? envelope.getRemainingAmount()
                 : BigDecimal.ZERO;
 
         BigDecimal usedThisPeriod = periodLimit
                 .subtract(periodRemaining)
                 .max(BigDecimal.ZERO);
 
-        BigDecimal heldAmt = freshEnvelope.getHeldAmount() != null
-                ? freshEnvelope.getHeldAmount()
+        BigDecimal heldAmt = envelope.getHeldAmount() != null
+                ? envelope.getHeldAmount()
                 : BigDecimal.ZERO;
 
         return new EnvelopeResponse(
-                freshEnvelope.getId(),
+                envelope.getId(),
                 budget.getId(),
-                freshEnvelope.getName(),
+                envelope.getName(),
 
-                freshEnvelope.getAmount(),
+                envelope.getAmount(),
                 periodRemaining,
 
-                freshEnvelope.getInitialAmount(),
-                freshEnvelope.getTotalRemainingAmount(),
+                envelope.getInitialAmount(),
+                envelope.getTotalRemainingAmount(),
                 periodRemaining,
                 periodLimit,
                 usedThisPeriod,
 
                 heldAmt,
 
-                freshEnvelope.getConditions(),
-                freshEnvelope.getCreatedAt(),
-                freshEnvelope.getLastDisbursedAt(),
-                freshEnvelope.getNextDisbursementAt()
+                envelope.getConditions(),
+                envelope.getCreatedAt(),
+                envelope.getLastDisbursedAt(),
+                envelope.getNextDisbursementAt()
         );
     }
 
