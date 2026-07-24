@@ -13,6 +13,8 @@ import org.springframework.stereotype.Repository;
 
 import javax.transaction.Transactional;
 import javax.persistence.LockModeType;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
@@ -174,6 +176,112 @@ List<UserSummary> searchUsers(@Param("query") String query, Pageable pageable);
             ORDER BY u.created_at ASC
             """, nativeQuery = true)
     List<User> findIncompleteSignups();
+
+    /**
+     * Verified users with a ready wallet, no active budget, and an empty wallet.
+     * This is the gentle "your wallet is ready, start with a plan" audience.
+     */
+    @Query(value = """
+            SELECT u.*
+            FROM users u
+            JOIN wallets w ON w.user_id = u.id
+            WHERE u.is_deleted = false
+              AND u.is_verified = true
+              AND coalesce(u.test_account, false) = false
+              AND w.status = 'ACTIVE'
+              AND coalesce(w.is_revenue_wallet, false) = false
+              AND w.account_number IS NOT NULL
+              AND btrim(w.account_number) <> ''
+              AND coalesce(w.balance, 0) <= 0
+              AND coalesce(w.updated_at, u.created_at) <= :eligibleBefore
+              AND NOT EXISTS (
+                    SELECT 1
+                    FROM budgets b_active
+                    WHERE b_active.user_id = u.id
+                      AND b_active.status = 'ACTIVE'
+              )
+              AND NOT EXISTS (
+                    SELECT 1
+                    FROM budgets b_completed
+                    WHERE b_completed.user_id = u.id
+                      AND b_completed.status = 'COMPLETED'
+              )
+            ORDER BY coalesce(w.updated_at, u.created_at) ASC, u.id ASC
+            LIMIT :limit
+            """, nativeQuery = true)
+    List<User> findWalletReadyUsersWithoutActiveBudgetAndEmptyWallet(
+            @Param("eligibleBefore") LocalDateTime eligibleBefore,
+            @Param("limit") int limit);
+
+    /**
+     * Users who already have money in the wallet but still do not have an
+     * active budget. The caller supplies the "funded before" cutoff so the
+     * first reminder waits a couple of days after the wallet balance appears.
+     */
+    @Query(value = """
+            SELECT u.*
+            FROM users u
+            JOIN wallets w ON w.user_id = u.id
+            WHERE u.is_deleted = false
+              AND u.is_verified = true
+              AND coalesce(u.test_account, false) = false
+              AND w.status = 'ACTIVE'
+              AND coalesce(w.is_revenue_wallet, false) = false
+              AND w.account_number IS NOT NULL
+              AND btrim(w.account_number) <> ''
+              AND coalesce(w.balance, 0) > 0
+              AND coalesce(w.updated_at, u.created_at) <= :fundedBefore
+              AND NOT EXISTS (
+                    SELECT 1
+                    FROM budgets b_active
+                    WHERE b_active.user_id = u.id
+                      AND b_active.status = 'ACTIVE'
+              )
+            ORDER BY coalesce(w.updated_at, u.created_at) ASC, u.id ASC
+            LIMIT :limit
+            """, nativeQuery = true)
+    List<User> findFundedWalletUsersWithoutActiveBudget(
+            @Param("fundedBefore") LocalDateTime fundedBefore,
+            @Param("limit") int limit);
+
+    /**
+     * Users whose latest completed budget ended at least a few days ago and who
+     * have not started another active budget since.
+     */
+    @Query(value = """
+            SELECT u.*
+            FROM users u
+            JOIN wallets w ON w.user_id = u.id
+            WHERE u.is_deleted = false
+              AND u.is_verified = true
+              AND coalesce(u.test_account, false) = false
+              AND w.status = 'ACTIVE'
+              AND coalesce(w.is_revenue_wallet, false) = false
+              AND w.account_number IS NOT NULL
+              AND btrim(w.account_number) <> ''
+              AND NOT EXISTS (
+                    SELECT 1
+                    FROM budgets b_active
+                    WHERE b_active.user_id = u.id
+                      AND b_active.status = 'ACTIVE'
+              )
+              AND (
+                    SELECT max(b_completed.end_date)
+                    FROM budgets b_completed
+                    WHERE b_completed.user_id = u.id
+                      AND b_completed.status = 'COMPLETED'
+              ) <= :completedBefore
+            ORDER BY (
+                    SELECT max(b_completed.end_date)
+                    FROM budgets b_completed
+                    WHERE b_completed.user_id = u.id
+                      AND b_completed.status = 'COMPLETED'
+              ) ASC, u.id ASC
+            LIMIT :limit
+            """, nativeQuery = true)
+    List<User> findUsersDormantAfterCompletedBudget(
+            @Param("completedBefore") LocalDate completedBefore,
+            @Param("limit") int limit);
 
     Optional<User> findByEmail(String email);
 

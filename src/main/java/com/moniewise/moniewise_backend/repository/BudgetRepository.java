@@ -48,4 +48,6 @@ public interface BudgetRepository extends JpaRepository<Budget, Long> {
 
     // ✅ NEW: Fetch the single most recent budget by status
     Optional<Budget> findTopByUserIdAndStatusOrderByCreatedAtDesc(Long userId, BudgetStatus status);
+
+    Optional<Budget> findTopByUserIdAndStatusOrderByEndDateDesc(Long userId, BudgetStatus status);
 }

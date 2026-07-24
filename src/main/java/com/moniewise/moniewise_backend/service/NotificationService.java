@@ -4,6 +4,7 @@ import com.google.firebase.messaging.*;
 import com.moniewise.moniewise_backend.config.GenericNotificationEvent;
 import com.moniewise.moniewise_backend.dto.response.NotificationBulkReadResponse;
 import com.moniewise.moniewise_backend.entity.Notification;
+import com.moniewise.moniewise_backend.enums.BudgetEngagementNudgeType;
 import com.moniewise.moniewise_backend.enums.NotificationPriority;
 import com.moniewise.moniewise_backend.enums.NotificationType;
 import com.moniewise.moniewise_backend.repository.NotificationRepository;
@@ -47,6 +48,7 @@ public class NotificationService {
     private final NotificationRepository notificationRepository;
     private final OutboxEventRepository outboxEventRepository;
     private final AuthSessionService authSessionService;
+    private final DeepLinkService deepLinkService;
     private final JavaMailSender mailSender;
     private final TemplateEngine templateEngine;
 
@@ -75,6 +77,9 @@ public class NotificationService {
     @Value("${app.base-url:http://localhost:9000}")
     private String appBaseUrl;
 
+    @Value("${moniewise.engagement.budget-nudges.cta-url:}")
+    private String budgetNudgeCtaUrl;
+
     @Autowired
     public NotificationService(
             @Autowired(required = false) FirebaseMessaging firebaseMessaging,
@@ -82,6 +87,7 @@ public class NotificationService {
             NotificationRepository notificationRepository,
             OutboxEventRepository outboxEventRepository,
             AuthSessionService authSessionService,
+            DeepLinkService deepLinkService,
             @Autowired(required = false) JavaMailSender mailSender,
             TemplateEngine templateEngine) {
         this.firebaseMessaging = firebaseMessaging;
@@ -89,6 +95,7 @@ public class NotificationService {
         this.notificationRepository = notificationRepository;
         this.outboxEventRepository = outboxEventRepository;
         this.authSessionService = authSessionService;
+        this.deepLinkService = deepLinkService;
         this.mailSender = mailSender;
         this.templateEngine = templateEngine;
     }
@@ -503,9 +510,13 @@ public class NotificationService {
                     .setApnsConfig(apnsConfig);
 
             // Data Payload for Flutter navigation
+            String route = deepLinkService.normalizeAppRoute(redirectUrl);
+            String deepLinkUrl = deepLinkService.toDeepLink(route);
             messageBuilder.putData("click_action", "FLUTTER_NOTIFICATION_CLICK");
             if (actionType != null) messageBuilder.putData("actionType", actionType);
             if (redirectUrl != null) messageBuilder.putData("redirectUrl", redirectUrl);
+            messageBuilder.putData("route", route);
+            messageBuilder.putData("deepLinkUrl", deepLinkUrl);
 
             // Text Payload for UI
             messageBuilder.putData("title", title);
@@ -711,11 +722,152 @@ public class NotificationService {
         }
     }
 
-    /**
-     * Sent once, ~7 days before a savings goal's maturityDate (see
-     * SavingsLifeCycleManager — guarded by SavingsGoal.maturityReminderSent so
-     * it never goes out twice for the same goal).
-     */
+    /** Budget usage nudge sent by BudgetEngagementNudgeService. */
+    @Async
+    public void sendBudgetEngagementNudgeEmail(String email,
+                                                String firstName,
+                                                BudgetEngagementNudgeType type,
+                                                BigDecimal walletBalance,
+                                                String lastBudgetName) {
+        BudgetEngagementNudgeType safeType = type != null
+                ? type
+                : BudgetEngagementNudgeType.WALLET_READY_NO_BUDGET;
+
+        if ("stub".equals(activeProfile) || mailSender == null) {
+            logger.info("[STUB] Sending budget engagement nudge {} to {}", safeType, email);
+            return;
+        }
+
+        try {
+            Context context = new Context();
+            context.setVariable("logoUrl", logoUrl());
+            context.setVariable("firstName", firstName != null && !firstName.isBlank() ? firstName : "there");
+            context.setVariable("tag", budgetNudgeTag(safeType));
+            context.setVariable("headline", budgetNudgeHeadline(safeType));
+            context.setVariable("subheadline", budgetNudgeSubheadline(safeType));
+            context.setVariable("paragraphs", budgetNudgeParagraphs(safeType, lastBudgetName));
+            context.setVariable("adviceItems", budgetNudgeAdviceItems(safeType));
+            context.setVariable("ctaText", budgetNudgeCtaText(safeType));
+            context.setVariable("ctaLink", budgetNudgeLink());
+            context.setVariable("footerNote", budgetNudgeFooterNote(safeType));
+            context.setVariable("hasBalance", walletBalance != null && walletBalance.compareTo(BigDecimal.ZERO) > 0);
+            context.setVariable("walletBalance", formatAmount(walletBalance != null ? walletBalance : BigDecimal.ZERO));
+
+            String htmlContent = templateEngine.process("budget-engagement-nudge", context);
+
+            MimeMessage mimeMessage = mailSender.createMimeMessage();
+            MimeMessageHelper helper = new MimeMessageHelper(mimeMessage, true);
+
+            helper.setFrom(fromEmail);
+            helper.setTo(email);
+            helper.setSubject(budgetNudgeSubject(safeType));
+            helper.setText(htmlContent, true);
+            attachLogo(helper);
+
+            mailSender.send(mimeMessage);
+            logger.info("Sent budget engagement nudge {} to {}", safeType, email);
+        } catch (Exception e) {
+            logger.error("Failed to send budget engagement nudge {} to {}", safeType, email, e);
+        }
+    }
+
+    private String budgetNudgeSubject(BudgetEngagementNudgeType type) {
+        return switch (type) {
+            case FUNDED_WALLET_NO_BUDGET -> "Your Wisemonie balance needs a simple plan";
+            case POST_BUDGET_COMPLETION -> "Ready for your next Wisemonie budget?";
+            case WALLET_READY_NO_BUDGET -> "Your Wisemonie wallet is ready for a plan";
+        };
+    }
+
+    private String budgetNudgeTag(BudgetEngagementNudgeType type) {
+        return switch (type) {
+            case FUNDED_WALLET_NO_BUDGET -> "Money waiting for structure";
+            case POST_BUDGET_COMPLETION -> "Time for the next plan";
+            case WALLET_READY_NO_BUDGET -> "Wallet ready";
+        };
+    }
+
+    private String budgetNudgeHeadline(BudgetEngagementNudgeType type) {
+        return switch (type) {
+            case FUNDED_WALLET_NO_BUDGET -> "Give your balance a job before it disappears";
+            case POST_BUDGET_COMPLETION -> "Your next money cycle can feel lighter";
+            case WALLET_READY_NO_BUDGET -> "Start with a small plan, not pressure";
+        };
+    }
+
+    private String budgetNudgeSubheadline(BudgetEngagementNudgeType type) {
+        return switch (type) {
+            case FUNDED_WALLET_NO_BUDGET -> "Your money is already inside Wisemonie. Now give it direction.";
+            case POST_BUDGET_COMPLETION -> "You have budgeted before. This is the easy restart.";
+            case WALLET_READY_NO_BUDGET -> "A wallet is useful. A wallet with a plan is calmer.";
+        };
+    }
+
+    private List<String> budgetNudgeParagraphs(BudgetEngagementNudgeType type, String lastBudgetName) {
+        return switch (type) {
+            case FUNDED_WALLET_NO_BUDGET -> List.of(
+                    "We know making more money is already challenging enough. Being intentional about how that money is spent should not become another challenge.",
+                    "You already have money in your Wisemonie wallet. That is a strong start, but money without a plan can disappear through small unplanned decisions before you even notice.",
+                    "Create a budget, split the balance into envelopes, apply sending rules, and let Wisemonie quietly hold the structure for you. The goal is simple: less pressure, fewer surprises, and more confidence before you spend."
+            );
+            case POST_BUDGET_COMPLETION -> {
+                String budgetName = lastBudgetName != null && !lastBudgetName.isBlank()
+                        ? "'" + lastBudgetName + "'"
+                        : "your last";
+                yield List.of(
+                        "You have done this before. " + budgetName + " budget has ended, and the next money cycle deserves structure too.",
+                        "We know making more money is already challenging enough. Being intentional about how that money is spent should not become another challenge.",
+                        "A fresh Wisemonie budget helps you decide what is for spending, what should be protected, and what can go into savings. Then you can spend directly from each envelope and know what is safe to spend."
+                );
+            }
+            case WALLET_READY_NO_BUDGET -> List.of(
+                    "We know making more money is already challenging enough. Being intentional about how that money is spent should not become another challenge.",
+                    "Your Wisemonie wallet is ready. Fund it, create a simple budget, and split the money into envelopes for the parts of life that usually pull on your balance: bills, food, transport, giving, enjoyment, and savings.",
+                    "Once every envelope has a purpose, you do not have to keep calculating in your head. Wisemonie helps you see what is safe to spend, reduces financial pressure, and still leaves room to save."
+            );
+        };
+    }
+
+    private List<Map<String, String>> budgetNudgeAdviceItems(BudgetEngagementNudgeType type) {
+        if (type == BudgetEngagementNudgeType.WALLET_READY_NO_BUDGET) {
+            return List.of(
+                    Map.of("title", "Fund your Wisemonie wallet", "description", "Start with any amount you can plan around, then let the money land where it belongs."),
+                    Map.of("title", "Split it into envelopes", "description", "Give rent, food, transport, bills, savings, and enjoyment their own space."),
+                    Map.of("title", "Spend from the right envelope", "description", "Each payment comes from the purpose you already chose, so safe-to-spend becomes clear.")
+            );
+        }
+
+        return List.of(
+                Map.of("title", "Turn balance into a plan", "description", "Move money from one big balance into clear envelopes with real intentions."),
+                Map.of("title", "Apply sending rules", "description", "Let Wisemonie help you slow down impulse spending and protect money meant for later."),
+                Map.of("title", "Save on Wisemonie too", "description", "Keep money for goals separate from everyday spending so progress is easier to protect.")
+        );
+    }
+
+    private String budgetNudgeCtaText(BudgetEngagementNudgeType type) {
+        return switch (type) {
+            case FUNDED_WALLET_NO_BUDGET -> "Create a Budget for My Balance";
+            case POST_BUDGET_COMPLETION -> "Start My Next Budget";
+            case WALLET_READY_NO_BUDGET -> "Fund Wallet and Create a Plan";
+        };
+    }
+
+    private String budgetNudgeFooterNote(BudgetEngagementNudgeType type) {
+        return switch (type) {
+            case FUNDED_WALLET_NO_BUDGET -> "This is not pressure. It is a simple way to protect the money already sitting in your wallet.";
+            case POST_BUDGET_COMPLETION -> "A completed budget is proof you can do this. The next one can be even easier.";
+            case WALLET_READY_NO_BUDGET -> "Start small if you need to. The calm comes from giving your money a direction.";
+        };
+    }
+
+    private String budgetNudgeLink() {
+        if (budgetNudgeCtaUrl != null && !budgetNudgeCtaUrl.isBlank()) {
+            return budgetNudgeCtaUrl;
+        }
+        return deepLinkService.toDeepLink("/budgets");
+    }
+
+    /** Sent once, about 7 days before a savings goal matures. */
     @Async
     public void sendSavingsMaturingSoonEmail(String email, String firstName, String goalName,
                                               BigDecimal principal, BigDecimal accruedInterest,
@@ -1333,5 +1485,3 @@ public class NotificationService {
         }
     }
 }
-
-

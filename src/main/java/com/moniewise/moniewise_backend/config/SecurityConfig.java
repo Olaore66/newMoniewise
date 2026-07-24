@@ -80,6 +80,7 @@ public class SecurityConfig {
                 // Public brand assets (email logo etc.). Email clients fetch the logo
                 // with no JWT — without this, every email renders a broken image (401).
                 .antMatchers("/images/**").permitAll()
+                .antMatchers("/.well-known/**", "/apple-app-site-association", "/open", "/open/**").permitAll()
                 // Public legal pages — Google Play (and reviewers generally) require the
                 // privacy policy and the account-deletion page to be world-readable HTML
                 // with no login. The JSON /legal/** API for the in-app viewer stays

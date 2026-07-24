@@ -2,10 +2,10 @@ package com.moniewise.moniewise_backend.config;
 
 import com.moniewise.moniewise_backend.entity.User;
 import com.moniewise.moniewise_backend.repository.UserRepository;
+import com.moniewise.moniewise_backend.service.DeepLinkService;
 import com.moniewise.moniewise_backend.service.NotificationService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -64,16 +64,16 @@ public class IncompleteSignupLifecycleManager {
 
     private final UserRepository userRepository;
     private final NotificationService notificationService;
+    private final DeepLinkService deepLinkService;
     private final NamedParameterJdbcTemplate jdbc;
-
-    @Value("${app.base-url:http://localhost:9000}")
-    private String appBaseUrl;
 
     public IncompleteSignupLifecycleManager(UserRepository userRepository,
                                              NotificationService notificationService,
+                                             DeepLinkService deepLinkService,
                                              NamedParameterJdbcTemplate jdbc) {
         this.userRepository = userRepository;
         this.notificationService = notificationService;
+        this.deepLinkService = deepLinkService;
         this.jdbc = jdbc;
     }
 
@@ -178,7 +178,7 @@ public class IncompleteSignupLifecycleManager {
 
     private String buildCompleteProfileLink(User user) {
         String encodedEmail = URLEncoder.encode(user.getEmail(), StandardCharsets.UTF_8);
-        return appBaseUrl + "/onboarding/continue?email=" + encodedEmail;
+        return deepLinkService.toDeepLink("/onboarding/continue?email=" + encodedEmail);
     }
 
     // ───────────────────────────── PURGE ─────────────────────────────
