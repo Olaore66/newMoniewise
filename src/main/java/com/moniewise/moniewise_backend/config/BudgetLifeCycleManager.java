@@ -243,7 +243,7 @@ public class BudgetLifeCycleManager {
     // 🛑 FIXED SPAM: SEPARATE DAILY CRON FOR BUDGET WARNINGS (Runs at 9:00 AM)
     // ========================================================================
     @Scheduled(cron = "0 0 9 * * ?", zone = "Africa/Lagos")
-    @Transactional(readOnly = true)
+    @Transactional
     public void notifyExpiringBudgets() {
         LocalDate today = fetchCurrentDateTimeFromDatabase().toLocalDate();
         LocalDate threeDaysFromNow = today.plusDays(3);
@@ -1495,4 +1495,3 @@ public class BudgetLifeCycleManager {
     }
 
 }
-

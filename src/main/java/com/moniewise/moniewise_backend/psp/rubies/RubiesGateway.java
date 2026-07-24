@@ -3,6 +3,7 @@ package com.moniewise.moniewise_backend.psp.rubies;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.moniewise.moniewise_backend.entity.User;
+import com.moniewise.moniewise_backend.exception.WalletProvisioningException;
 import com.moniewise.moniewise_backend.psp.PaymentGateway;
 import com.moniewise.moniewise_backend.psp.rubies.dto.*;
 import com.moniewise.moniewise_backend.service.SystemConfigService;
@@ -138,10 +139,16 @@ public class RubiesGateway implements PaymentGateway {
         Map<String, Object> profile = user.getProfileData() != null
                 ? user.getProfileData() : Collections.emptyMap();
 
-        String firstName = str(profile, "bvnFirstName", str(profile, "firstName", ""));
-        String lastName  = str(profile, "bvnLastName",  str(profile, "lastName",  ""));
+        String firstName = normalizePersonName(str(profile, "bvnFirstName", ""));
+        String lastName  = normalizePersonName(str(profile, "bvnLastName",  ""));
         // dob must be in YYYY-MM-DD format — Rubies validates this against the BVN record
         String dob       = str(profile, "dateOfBirth", str(profile, "dob", ""));
+
+        if (isBlank(firstName) || isBlank(lastName) || isBlank(dob)) {
+            logger.warn("[Rubies] Missing verified BVN identity fields for wallet creation. user={} firstNamePresent={} lastNamePresent={} dobPresent={}",
+                    user.getId(), !isBlank(firstName), !isBlank(lastName), !isBlank(dob));
+            throw WalletProvisioningException.missingVerifiedKycData();
+        }
 
         RubiesCreateWalletRequest req = new RubiesCreateWalletRequest(
                 user.getBvn(),
@@ -165,8 +172,13 @@ public class RubiesGateway implements PaymentGateway {
 
             if (body == null || !body.isSuccess()) {
                 String msg = body != null ? body.getResponseMessage() : "null response";
+                if (isKycIdentityMismatch(msg)) {
+                    logger.warn("[Rubies] createVirtualAccount rejected KYC identity for user={}: {}", user.getId(), msg);
+                    throw WalletProvisioningException.kycIdentityMismatch(msg);
+                }
+
                 logger.error("[Rubies] createVirtualAccount failed for user={}: {}", user.getId(), msg);
-                throw new RuntimeException("Rubies wallet creation failed: " + msg);
+                throw WalletProvisioningException.providerUnavailable(msg);
             }
 
             // Rubies response is FLAT — no nested data wrapper
@@ -727,6 +739,27 @@ public class RubiesGateway implements PaymentGateway {
 
     private boolean isBlank(String s) {
         return s == null || s.isBlank();
+    }
+
+    private boolean isKycIdentityMismatch(String message) {
+        if (message == null) {
+            return false;
+        }
+        String normalized = message.toLowerCase(Locale.ROOT);
+        return normalized.contains("name does not match")
+                || normalized.contains("first name")
+                || normalized.contains("last name")
+                || normalized.contains("surname")
+                || normalized.contains("dob")
+                || normalized.contains("date of birth")
+                || normalized.contains("bvn does not match");
+    }
+
+    private String normalizePersonName(String value) {
+        if (value == null) {
+            return "";
+        }
+        return value.trim().replaceAll("\\s+", " ");
     }
 
     private String str(Map<String, Object> map, String key, String defaultValue) {

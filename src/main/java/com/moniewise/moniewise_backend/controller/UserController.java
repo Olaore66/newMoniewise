@@ -5,6 +5,7 @@ import com.moniewise.moniewise_backend.dto.response.*;
 import com.moniewise.moniewise_backend.entity.TrustedDevice;
 import com.moniewise.moniewise_backend.entity.User;
 import com.moniewise.moniewise_backend.entity.Wallet;
+import com.moniewise.moniewise_backend.exception.WalletProvisioningException;
 import com.moniewise.moniewise_backend.repository.TrustedDeviceRepository;
 import com.moniewise.moniewise_backend.repository.UserRepository;
 import com.moniewise.moniewise_backend.repository.WalletRepository;
@@ -199,6 +200,13 @@ public class UserController {
             String email = authentication.getName();
             userService.updateProfile(email, request);
             return ResponseEntity.ok(Map.of("message", "Profile updated successfully"));
+        } catch (WalletProvisioningException e) {
+            return ResponseEntity.status(e.getStatus()).body(Map.of(
+                    "status", e.getStatus().value(),
+                    "code", e.getCode(),
+                    "error", e.getUserMessage(),
+                    "message", e.getUserMessage()
+            ));
         } catch (Exception e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }

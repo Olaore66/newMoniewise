@@ -79,6 +79,7 @@ import java.util.concurrent.CompletableFuture;
 public class PayeelordVasService {
 
     private static final Logger logger = LoggerFactory.getLogger(PayeelordVasService.class);
+    private static final String RECOVERY_ESCALATED_MARKER = "[RECOVERY_ESCALATED]";
 
     @Autowired
     @Lazy
@@ -569,6 +570,17 @@ public class PayeelordVasService {
                 || txn.getWebhookConfirmedAt() != null;
 
         if (ambiguous || providerAcknowledged) {
+            if (hasRecoveryEscalationMarker(txn)) {
+                logger.warn("[PayeelordVAS][NEEDS-RECONCILIATION] Stale PENDING purchase still awaiting manual " +
+                                "review: ref={} userId={} type={} sellingAmount={}",
+                        txn.getReference(), txn.getUserId(), txn.getType(), txn.getSellingAmount());
+                return;
+            }
+
+            txn.setFailureReason(withRecoveryEscalationMarker(txn.getFailureReason()));
+            txn.setUpdatedAt(LocalDateTime.now());
+            transactionRepository.save(txn);
+
             logger.error("[PayeelordVAS][CRITICAL][NEEDS-RECONCILIATION] Stale PENDING purchase cannot be " +
                             "safely auto-resolved (provider may have delivered): ref={} userId={} type={} " +
                             "sellingAmount={} ambiguous={} providerTxnId={} webhookConfirmedAt={} — " +
@@ -598,6 +610,20 @@ public class PayeelordVasService {
                         txn.getSellingAmount(), txn.getReference()),
                 isAirtime ? NotificationType.AIRTIME_PURCHASE_FAILED
                           : NotificationType.DATA_PURCHASE_FAILED);
+    }
+
+    private boolean hasRecoveryEscalationMarker(PayeelordVasTransaction txn) {
+        return txn.getFailureReason() != null && txn.getFailureReason().contains(RECOVERY_ESCALATED_MARKER);
+    }
+
+    private String withRecoveryEscalationMarker(String failureReason) {
+        String reason = failureReason != null && !failureReason.isBlank()
+                ? failureReason
+                : "Stale PENDING purchase requires manual reconciliation.";
+        if (reason.contains(RECOVERY_ESCALATED_MARKER)) {
+            return reason;
+        }
+        return reason + " " + RECOVERY_ESCALATED_MARKER;
     }
 
     // ── Private helpers ───────────────────────────────────────────────────────

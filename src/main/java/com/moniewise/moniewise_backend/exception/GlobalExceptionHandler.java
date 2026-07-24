@@ -104,6 +104,17 @@ public class GlobalExceptionHandler {
         ));
     }
 
+    @ExceptionHandler(WalletProvisioningException.class)
+    public ResponseEntity<Map<String, Object>> handleWalletProvisioning(WalletProvisioningException ex) {
+        return ResponseEntity.status(ex.getStatus()).body(Map.of(
+                "status", ex.getStatus().value(),
+                "code", ex.getCode(),
+                "error", ex.getUserMessage(),
+                "message", ex.getUserMessage(),
+                "timestamp", LocalDateTime.now()
+        ));
+    }
+
     @ExceptionHandler(Exception.class)
     public ResponseEntity<Map<String, Object>> handleGeneric(Exception ex, WebRequest request) {
         String correlationId = UUID.randomUUID().toString();
