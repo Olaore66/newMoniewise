@@ -6,6 +6,7 @@ import com.moniewise.moniewise_backend.dto.request.WithdrawalRequest;
 import com.moniewise.moniewise_backend.dto.response.TransactionDetailResponse;
 import com.moniewise.moniewise_backend.dto.response.TransactionListResponse;
 import com.moniewise.moniewise_backend.entity.*;
+import com.moniewise.moniewise_backend.enums.TransactionStatus;
 import com.moniewise.moniewise_backend.enums.TransactionType;
 import com.moniewise.moniewise_backend.psp.rubies.RubiesGateway;
 import com.moniewise.moniewise_backend.repository.*;
@@ -73,7 +74,15 @@ public class TransactionService {
             WALLET_WITHDRAWAL,
             WALLET_WITHDRAWAL_FEE,
             WALLET_ENVELOPE_TRANSFER_FEE,
-            WALLET_TO_BUDGET
+            WALLET_TO_BUDGET,
+            VAS_PURCHASE
+    );
+
+    private static final Set<TransactionStatus> BALANCE_AFFECTING_STATUSES = EnumSet.of(
+            TransactionStatus.COMPLETED,
+            TransactionStatus.PROCESSING,
+            TransactionStatus.PENDING,
+            TransactionStatus.SUCCESS
     );
 
     public TransactionService(
@@ -251,19 +260,22 @@ public class TransactionService {
                 userId,
                 start,
                 end,
-                incomingTypes
+                incomingTypes,
+                BALANCE_AFFECTING_STATUSES
         );
         BigDecimal outgoingAbs = transactionLogRepo.sumAbsoluteAmountByUserAndDateRangeAndTypes(
                 userId,
                 start,
                 end,
-                USER_VISIBLE_OUTGOING_TYPES
+                USER_VISIBLE_OUTGOING_TYPES,
+                BALANCE_AFFECTING_STATUSES
         );
         BigDecimal fees = transactionLogRepo.sumFeesByUserAndDateRangeAndTypes(
                 userId,
                 start,
                 end,
-                USER_VISIBLE_TYPES
+                USER_VISIBLE_TYPES,
+                BALANCE_AFFECTING_STATUSES
         );
 
         Map<String, BigDecimal> totals = new HashMap<>();
@@ -303,8 +315,12 @@ public class TransactionService {
                 ? envelopeNameCache.getOrDefault(transaction.getTargetEnvelopeId(), "Unknown Envelope")
                 : "System";
 
-        boolean outgoing = isOutgoing(transaction.getTransactionType(), transaction.getAmount());
-        BigDecimal displayAmount = outgoing ? transaction.getAmount().negate() : transaction.getAmount();
+        boolean reversed = isReversedOrFailed(transaction.getStatus());
+        boolean outgoing = !reversed && isOutgoing(transaction.getTransactionType(), transaction.getAmount());
+        BigDecimal displayAmount = transaction.getAmount() != null ? transaction.getAmount().abs() : BigDecimal.ZERO;
+        if (outgoing) {
+            displayAmount = displayAmount.negate();
+        }
         String direction = outgoing ? "OUT" : "IN";
 
         String title;
@@ -367,6 +383,37 @@ public class TransactionService {
                 break;
         }
 
+        if (reversed) {
+            switch (transaction.getTransactionType()) {
+                case ENVELOPE_TO_EXTERNAL:
+                    title = "Transfer reversed";
+                    subtitle = "Refunded to " + sourceName;
+                    iconType = "BANK";
+                    break;
+                case WALLET_WITHDRAWAL:
+                    title = "Transfer reversed";
+                    subtitle = "Refunded to wallet";
+                    iconType = "BANK";
+                    break;
+                case WALLET_ENVELOPE_TRANSFER_FEE:
+                case WALLET_WITHDRAWAL_FEE:
+                    title = "Fee reversed";
+                    subtitle = "Refunded to wallet";
+                    iconType = "FEE";
+                    break;
+                case VAS_PURCHASE:
+                    title = "Purchase reversed";
+                    subtitle = "Refunded to envelope";
+                    iconType = "AIRTIME";
+                    break;
+                default:
+                    title = "Transaction reversed";
+                    subtitle = transaction.getDescription();
+                    iconType = "DEFAULT";
+                    break;
+            }
+        }
+
         String path = "/transactions/" + transaction.getId();
 
         return new TransactionListResponse(
@@ -379,6 +426,7 @@ public class TransactionService {
                 direction,
                 path,
                 transaction.getCreatedAt(),
+                transaction.getStatus(),
                 transaction.getTransactionType()
         );
     }
@@ -441,7 +489,8 @@ public class TransactionService {
         String targetName = getEnvelopeName(transaction.getTargetEnvelopeId());
         String budgetName = getBudgetName(transaction.getBudgetId());
 
-        boolean debit = isOutgoing(transaction.getTransactionType(), transaction.getAmount());
+        boolean reversed = isReversedOrFailed(transaction.getStatus());
+        boolean debit = !reversed && isOutgoing(transaction.getTransactionType(), transaction.getAmount());
         String direction = debit ? "OUT" : "IN";
 
         BigDecimal absoluteAmount = transaction.getAmount().abs();
@@ -457,7 +506,10 @@ public class TransactionService {
                 && RubiesGateway.PROVIDER_NAME.equalsIgnoreCase(resolveProviderName(transaction))) {
             fee = fee.add(markupCalculatorService.calculateNipFee(absoluteAmount));
         }
-        BigDecimal netAmount = debit ? absoluteAmount.add(fee) : absoluteAmount.subtract(fee);
+        if (reversed) {
+            fee = BigDecimal.ZERO;
+        }
+        BigDecimal netAmount = reversed ? absoluteAmount : (debit ? absoluteAmount.add(fee) : absoluteAmount.subtract(fee));
 
         String sender;
         String recipient;
@@ -520,8 +572,38 @@ public class TransactionService {
             case WALLET_ENVELOPE_TRANSFER_FEE -> "Transfer fee";
             case BUDGET_ALLOCATION -> "Allocated to budget";
             case BUDGET_UNALLOCATED_REFUNDED -> "Refunded to wallet";
+            case VAS_PURCHASE -> reversed ? "Purchase reversed" : "Airtime & Data";
             default -> formatEnumName(transaction.getTransactionType());
         };
+
+        if (reversed) {
+            switch (transaction.getTransactionType()) {
+                case ENVELOPE_TO_EXTERNAL:
+                    sender = recipient;
+                    recipient = sourceName;
+                    title = "Transfer reversed";
+                    break;
+                case WALLET_WITHDRAWAL:
+                    sender = recipient;
+                    recipient = "Main Wallet";
+                    title = "Transfer reversed";
+                    break;
+                case WALLET_ENVELOPE_TRANSFER_FEE:
+                case WALLET_WITHDRAWAL_FEE:
+                    sender = "Wisemonie Fee";
+                    recipient = "Main Wallet";
+                    title = "Fee reversed";
+                    break;
+                case VAS_PURCHASE:
+                    sender = "Provider";
+                    recipient = sourceName;
+                    title = "Purchase reversed";
+                    break;
+                default:
+                    title = "Transaction reversed";
+                    break;
+            }
+        }
 
         String reference = transaction.getReference() != null ? transaction.getReference() : "N/A";
         String status = transaction.getStatus() != null ? transaction.getStatus().name() : "COMPLETED";
@@ -606,5 +688,9 @@ public class TransactionService {
                     VAS_PURCHASE -> true;
             default -> false;
         };
+    }
+
+    private boolean isReversedOrFailed(TransactionStatus status) {
+        return status == TransactionStatus.REVERSED || status == TransactionStatus.FAILED;
     }
 }

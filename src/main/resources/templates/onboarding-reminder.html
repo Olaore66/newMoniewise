@@ -66,16 +66,46 @@
 
     /* ── Button ── */
     .btn-container { text-align: center; margin: 28px 0; }
-    .btn-complete {
+    .store-options {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 0 auto;
+    }
+    .store-option {
+      width: 50%;
+      padding: 0 6px 10px;
+      text-align: center;
+      vertical-align: top;
+    }
+    .platform-label {
+      color: #667085;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 1px;
+      margin-bottom: 8px;
+      text-transform: uppercase;
+    }
+    .btn-store {
       display: inline-block;
       background-color: #0F4C4C;
       color: #FFFFFF !important;
       text-decoration: none;
-      padding: 14px 36px;
+      padding: 14px 20px;
       border-radius: 8px;
-      font-size: 15px;
+      font-size: 14px;
       font-weight: 700;
-      letter-spacing: 0.2px;
+      letter-spacing: 0;
+    }
+    .coming-soon {
+      display: inline-block;
+      background-color: #F9FAFB;
+      border: 1px solid #E4E7EC;
+      color: #667085;
+      padding: 13px 20px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: 0;
     }
     .btn-subtext {
       text-align: center;
@@ -145,7 +175,8 @@
       .card-header { padding: 24px 24px; }
       .card-body   { padding: 24px 24px; }
       .card-footer { padding: 18px 24px; }
-      .btn-complete { display: block; text-align: center; }
+      .store-option { display: block; width: 100%; padding: 0 0 14px; }
+      .btn-store, .coming-soon { display: block; text-align: center; }
     }
   </style>
 </head>
@@ -187,7 +218,24 @@
       </p>
 
       <div class="btn-container">
-        <a th:href="${completeProfileLink}" class="btn-complete">Finish Setting Up My Account</a>
+        <table class="store-options" role="presentation" cellpadding="0" cellspacing="0">
+          <tr>
+            <td class="store-option">
+              <div class="platform-label">Android</div>
+              <a th:href="${androidPlayStoreUrl}"
+                 href="https://play.google.com/store/apps/details?id=com.wisemonie"
+                 class="btn-store">Get Wisemonie on Google Play</a>
+            </td>
+            <td class="store-option">
+              <div class="platform-label">iOS</div>
+              <a th:if="${hasIosAppStore}"
+                 th:href="${iosAppStoreUrl}"
+                 href="#"
+                 class="btn-store">Get Wisemonie on the App Store</a>
+              <span th:unless="${hasIosAppStore}" class="coming-soon">Coming soon</span>
+            </td>
+          </tr>
+        </table>
       </div>
       <p class="btn-subtext">It takes less than 3 minutes — most of it is just confirming who you are.</p>
 

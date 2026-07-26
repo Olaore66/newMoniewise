@@ -42,6 +42,7 @@ import java.util.Set;
 public class NotificationService {
 
     private static final Logger logger = LoggerFactory.getLogger(NotificationService.class);
+    private static final String ANDROID_PLAY_STORE_URL = "https://play.google.com/store/apps/details?id=com.wisemonie";
 
     private final FirebaseMessaging firebaseMessaging;
     private final UserRepository userRepository;
@@ -76,9 +77,6 @@ public class NotificationService {
 
     @Value("${app.base-url:http://localhost:9000}")
     private String appBaseUrl;
-
-    @Value("${moniewise.engagement.budget-nudges.cta-url:}")
-    private String budgetNudgeCtaUrl;
 
     @Autowired
     public NotificationService(
@@ -684,7 +682,6 @@ public class NotificationService {
      *
      * @param email               recipient
      * @param firstName           best-effort first name (falls back to "there")
-     * @param completeProfileLink deep link back into the app's onboarding flow
      * @param daysSinceSignup     used only to pick a fitting subject line/tone
      * @param daysRemaining       days left before the account is purged — shown
      *                            only when {@code showUrgencyNotice} is true
@@ -692,16 +689,16 @@ public class NotificationService {
      *                            30-day cutoff), renders the soft warning block
      */
     @Async
-    public void sendOnboardingReminderEmail(String email, String firstName, String completeProfileLink,
+    public void sendOnboardingReminderEmail(String email, String firstName,
                                              int daysSinceSignup, int daysRemaining, boolean showUrgencyNotice) {
         if ("stub".equals(activeProfile) || mailSender == null) return;
         try {
             Context context = new Context();
             context.setVariable("logoUrl", logoUrl());
             context.setVariable("firstName", firstName != null && !firstName.isBlank() ? firstName : "there");
-            context.setVariable("completeProfileLink", completeProfileLink);
             context.setVariable("daysRemaining", daysRemaining);
             context.setVariable("showUrgencyNotice", showUrgencyNotice);
+            addAppDownloadContext(context);
 
             String htmlContent = templateEngine.process("onboarding-reminder", context);
 
@@ -747,11 +744,10 @@ public class NotificationService {
             context.setVariable("subheadline", budgetNudgeSubheadline(safeType));
             context.setVariable("paragraphs", budgetNudgeParagraphs(safeType, lastBudgetName));
             context.setVariable("adviceItems", budgetNudgeAdviceItems(safeType));
-            context.setVariable("ctaText", budgetNudgeCtaText(safeType));
-            context.setVariable("ctaLink", budgetNudgeLink());
             context.setVariable("footerNote", budgetNudgeFooterNote(safeType));
             context.setVariable("hasBalance", walletBalance != null && walletBalance.compareTo(BigDecimal.ZERO) > 0);
             context.setVariable("walletBalance", formatAmount(walletBalance != null ? walletBalance : BigDecimal.ZERO));
+            addAppDownloadContext(context);
 
             String htmlContent = templateEngine.process("budget-engagement-nudge", context);
 
@@ -844,14 +840,6 @@ public class NotificationService {
         );
     }
 
-    private String budgetNudgeCtaText(BudgetEngagementNudgeType type) {
-        return switch (type) {
-            case FUNDED_WALLET_NO_BUDGET -> "Create a Budget for My Balance";
-            case POST_BUDGET_COMPLETION -> "Start My Next Budget";
-            case WALLET_READY_NO_BUDGET -> "Fund Wallet and Create a Plan";
-        };
-    }
-
     private String budgetNudgeFooterNote(BudgetEngagementNudgeType type) {
         return switch (type) {
             case FUNDED_WALLET_NO_BUDGET -> "This is not pressure. It is a simple way to protect the money already sitting in your wallet.";
@@ -860,11 +848,11 @@ public class NotificationService {
         };
     }
 
-    private String budgetNudgeLink() {
-        if (budgetNudgeCtaUrl != null && !budgetNudgeCtaUrl.isBlank()) {
-            return budgetNudgeCtaUrl;
-        }
-        return deepLinkService.toDeepLink("/budgets");
+    private void addAppDownloadContext(Context context) {
+        String iosAppStoreUrl = deepLinkService.iosAppStoreUrl();
+        context.setVariable("androidPlayStoreUrl", ANDROID_PLAY_STORE_URL);
+        context.setVariable("iosAppStoreUrl", iosAppStoreUrl);
+        context.setVariable("hasIosAppStore", iosAppStoreUrl != null && !iosAppStoreUrl.isBlank());
     }
 
     /** Sent once, about 7 days before a savings goal matures. */

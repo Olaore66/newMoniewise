@@ -1518,13 +1518,13 @@ public class WalletService {
         evictWalletCache(withdrawal.getUserId());
 
             transactionLogRepository.findByReference(withdrawal.getClientReference()).ifPresent(logEntry -> {
-                logEntry.setStatus(TransactionStatus.FAILED);
+                logEntry.setStatus(TransactionStatus.REVERSED);
                 logEntry.setDescription(withdrawal.getNarration() + " | Failed: " + reason + " | Amount and withdrawal fee reversed.");
                 transactionLogRepository.save(logEntry);
             });
 
             transactionLogRepository.findByReference(buildWithdrawalFeeReference(withdrawal)).ifPresent(logEntry -> {
-                logEntry.setStatus(TransactionStatus.FAILED);
+                logEntry.setStatus(TransactionStatus.REVERSED);
                 logEntry.setDescription("Withdrawal fee reversed for " + withdrawal.getClientReference());
                 transactionLogRepository.save(logEntry);
             });

@@ -6,6 +6,7 @@ import com.moniewise.moniewise_backend.entity.RevenueLog;
 import com.moniewise.moniewise_backend.entity.TransactionLog;
 import com.moniewise.moniewise_backend.entity.Wallet;
 import com.moniewise.moniewise_backend.enums.BudgetStatus;
+import com.moniewise.moniewise_backend.enums.NotificationType;
 import com.moniewise.moniewise_backend.enums.TransactionStatus;
 import com.moniewise.moniewise_backend.exception.EntityNotFoundException;
 import com.moniewise.moniewise_backend.psp.rubies.RubiesGateway;
@@ -23,6 +24,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 
 @Service
 public class ExternalTransferSettlementService {
@@ -37,6 +39,7 @@ public class ExternalTransferSettlementService {
     private final WalletService walletService;
     private final MarkupCalculatorService markupCalculatorService;
     private final MonnieCacheInvalidationService monnieCacheInvalidationService;
+    private final NotificationService notificationService;
 
     public ExternalTransferSettlementService(
             TransactionLogRepository transactionLogRepository,
@@ -46,7 +49,8 @@ public class ExternalTransferSettlementService {
             RevenueLogRepository revenueLogRepository,
             @Lazy WalletService walletService,
             MarkupCalculatorService markupCalculatorService,
-            MonnieCacheInvalidationService monnieCacheInvalidationService
+            MonnieCacheInvalidationService monnieCacheInvalidationService,
+            NotificationService notificationService
     ) {
         this.transactionLogRepository = transactionLogRepository;
         this.envelopeRepository = envelopeRepository;
@@ -56,6 +60,7 @@ public class ExternalTransferSettlementService {
         this.walletService = walletService;
         this.markupCalculatorService = markupCalculatorService;
         this.monnieCacheInvalidationService = monnieCacheInvalidationService;
+        this.notificationService = notificationService;
     }
 
     @Transactional
@@ -156,6 +161,7 @@ public class ExternalTransferSettlementService {
             // remainingAmount of a dead envelope leaves the money inaccessible forever.
             // Instead, fund the wallet directly so the user gets their money back.
             Budget parentBudget = source.getBudget();
+            String refundTarget;
             if (parentBudget != null && BudgetStatus.COMPLETED == parentBudget.getStatus()) {
                 String msg = String.format(
                         "Refund ₦%,.2f — bank transfer failed after budget '%s' ended",
@@ -165,15 +171,20 @@ public class ExternalTransferSettlementService {
                 walletService.fundWallet(txn.getUserId(), transferAmount, msg, false);
                 logger.info("[ExternalTransfer] Budget {} already COMPLETED — refunded ₦{} directly to wallet for user {} (ref={})",
                         parentBudget.getId(), transferAmount, txn.getUserId(), txn.getReference());
+                refundTarget = "wallet";
             } else {
                 source.setRemainingAmount(source.getRemainingAmount().add(transferAmount));
+                refundTarget = "envelope";
             }
 
-            txn.setStatus(TransactionStatus.FAILED);
+            txn.setStatus(TransactionStatus.REVERSED);
+            txn.setDescription(appendDescription(txn.getDescription(),
+                    "Transfer failed; amount and fees reversed."));
 
             // Refund the fees (NIP + markup) that were pre-deducted from the wallet at initiation.
             BigDecimal totalFeeToRefund = nipFee.add(markupFee);
             walletService.refundTransferFee(txn.getUserId(), totalFeeToRefund);
+            notifyTransferReversed(txn, transferAmount, totalFeeToRefund, refundTarget);
             logger.info("[ExternalTransfer] Fee ₦{} refunded to wallet for user {} — transfer failed, ref={}",
                     totalFeeToRefund, txn.getUserId(), txn.getReference());
 
@@ -214,6 +225,51 @@ public class ExternalTransferSettlementService {
                 || s.contains("FAIL")
                 || s.contains("REVERSED")
                 || s.contains("REVERSAL");
+    }
+
+    private String appendDescription(String oldDescription, String extra) {
+        if (oldDescription == null || oldDescription.isBlank()) {
+            return extra;
+        }
+        if (oldDescription.contains(extra)) {
+            return oldDescription;
+        }
+        return oldDescription + " | " + extra;
+    }
+
+    private void notifyTransferReversed(TransactionLog txn,
+                                        BigDecimal transferAmount,
+                                        BigDecimal refundedFee,
+                                        String refundTarget) {
+        CompletableFuture.runAsync(() -> {
+            try {
+                String recipient = txn.getExternalAccountName() != null && !txn.getExternalAccountName().isBlank()
+                        ? txn.getExternalAccountName()
+                        : "the recipient";
+                String message = String.format(
+                        "Your bank transfer of NGN %,.2f to %s could not be completed. " +
+                        "The amount has been refunded to your %s.",
+                        transferAmount,
+                        recipient,
+                        refundTarget
+                );
+                if (refundedFee != null && refundedFee.compareTo(BigDecimal.ZERO) > 0) {
+                    message += String.format(" Transfer fees of NGN %,.2f were refunded to your wallet.", refundedFee);
+                }
+                notificationService.sendNotification(
+                        txn.getUserId().toString(),
+                        message,
+                        NotificationType.EXTERNAL_TRANSFER,
+                        txn.getBudgetId(),
+                        txn.getSourceEnvelopeId(),
+                        "VIEW_ACTIVITY",
+                        "/activity"
+                );
+            } catch (Exception e) {
+                logger.error("[ExternalTransfer] Failed to send reversal notification for ref={}",
+                        txn.getReference(), e);
+            }
+        });
     }
 
     /**

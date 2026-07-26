@@ -2,7 +2,6 @@ package com.moniewise.moniewise_backend.config;
 
 import com.moniewise.moniewise_backend.entity.User;
 import com.moniewise.moniewise_backend.repository.UserRepository;
-import com.moniewise.moniewise_backend.service.DeepLinkService;
 import com.moniewise.moniewise_backend.service.NotificationService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -11,8 +10,6 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.net.URLEncoder;
-import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
@@ -64,16 +61,13 @@ public class IncompleteSignupLifecycleManager {
 
     private final UserRepository userRepository;
     private final NotificationService notificationService;
-    private final DeepLinkService deepLinkService;
     private final NamedParameterJdbcTemplate jdbc;
 
     public IncompleteSignupLifecycleManager(UserRepository userRepository,
                                              NotificationService notificationService,
-                                             DeepLinkService deepLinkService,
                                              NamedParameterJdbcTemplate jdbc) {
         this.userRepository = userRepository;
         this.notificationService = notificationService;
-        this.deepLinkService = deepLinkService;
         this.jdbc = jdbc;
     }
 
@@ -138,14 +132,12 @@ public class IncompleteSignupLifecycleManager {
 
     private void sendReminder(User user, long daysSinceSignup) {
         String firstName = extractFirstName(user);
-        String link = buildCompleteProfileLink(user);
         long daysRemaining = Math.max(0, PURGE_AFTER_DAYS - daysSinceSignup);
         boolean urgent = daysRemaining <= URGENCY_THRESHOLD_DAYS;
 
         notificationService.sendOnboardingReminderEmail(
                 user.getEmail(),
                 firstName,
-                link,
                 (int) daysSinceSignup,
                 (int) daysRemaining,
                 urgent
@@ -174,11 +166,6 @@ public class IncompleteSignupLifecycleManager {
             // fall through to default
         }
         return "";
-    }
-
-    private String buildCompleteProfileLink(User user) {
-        String encodedEmail = URLEncoder.encode(user.getEmail(), StandardCharsets.UTF_8);
-        return deepLinkService.toDeepLink("/onboarding/continue?email=" + encodedEmail);
     }
 
     // ───────────────────────────── PURGE ─────────────────────────────

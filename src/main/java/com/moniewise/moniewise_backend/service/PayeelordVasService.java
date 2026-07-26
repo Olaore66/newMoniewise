@@ -339,7 +339,9 @@ public class PayeelordVasService {
         txn.setMarginAmount(pricing.marginAmount());
         txn.setCreatedAt(LocalDateTime.now());
         txn.setUpdatedAt(LocalDateTime.now());
-        return transactionRepository.save(txn);
+        PayeelordVasTransaction saved = transactionRepository.save(txn);
+        upsertLedgerEntry(saved, describeVasPurchase(saved), TransactionStatus.PROCESSING);
+        return saved;
     }
 
     /**
@@ -365,8 +367,7 @@ public class PayeelordVasService {
             // money from the user's Rubies wallet into Moniewise's Rubies account.
             envelopeService.settleEnvelopeVas(txn.getEnvelopeId(), txn.getSellingAmount());
             collectRubiesPayment(txn);
-            recordLedgerEntry(txn, String.format("%s airtime — ₦%,.2f to %s",
-                    txn.getNetwork(), txn.getFaceAmount(), txn.getMobileNumber()));
+            upsertLedgerEntry(txn, describeVasPurchase(txn), TransactionStatus.COMPLETED);
             logger.info("[PayeelordVAS] Airtime purchase SUCCESSFUL: ref={} providerTxnId={}",
                     txn.getReference(), response.getTransactionId());
             notifyAsync(txn.getUserId(), String.format(
@@ -378,6 +379,7 @@ public class PayeelordVasService {
 
         if (response.isProcessing()) {
             transactionRepository.save(txn); // remains PENDING — Payeelord said so explicitly
+            upsertLedgerEntry(txn, describeVasPurchase(txn) + " | Provider is still processing", TransactionStatus.PROCESSING);
             logger.info("[PayeelordVAS] Airtime purchase PROCESSING (left PENDING): ref={} providerTxnId={}",
                     txn.getReference(), response.getTransactionId());
             return txn;
@@ -388,6 +390,7 @@ public class PayeelordVasService {
         txn.setStatus(VasTransactionStatus.REVERSED);
         txn.setFailureReason(response.getMessage() != null ? response.getMessage() : "Airtime purchase failed.");
         transactionRepository.save(txn);
+        upsertLedgerEntry(txn, describeVasPurchase(txn) + " | Reversed: " + txn.getFailureReason(), TransactionStatus.REVERSED);
         logger.warn("[PayeelordVAS] Airtime purchase FAILED → envelope hold released: ref={} reason={}",
                 txn.getReference(), txn.getFailureReason());
         notifyAsync(txn.getUserId(), String.format(
@@ -420,8 +423,7 @@ public class PayeelordVasService {
             // money from the user's Rubies wallet into Moniewise's Rubies account.
             envelopeService.settleEnvelopeVas(txn.getEnvelopeId(), txn.getSellingAmount());
             collectRubiesPayment(txn);
-            recordLedgerEntry(txn, String.format("%s data (%s) to %s",
-                    txn.getNetwork(), planLabel, txn.getMobileNumber()));
+            upsertLedgerEntry(txn, describeVasPurchase(txn, planLabel), TransactionStatus.COMPLETED);
             logger.info("[PayeelordVAS] Data purchase SUCCESSFUL: ref={} providerTxnId={}",
                     txn.getReference(), response.getTransactionId());
             notifyAsync(txn.getUserId(), String.format(
@@ -433,6 +435,7 @@ public class PayeelordVasService {
 
         if (response.isProcessing()) {
             transactionRepository.save(txn);
+            upsertLedgerEntry(txn, describeVasPurchase(txn, planLabel) + " | Provider is still processing", TransactionStatus.PROCESSING);
             logger.info("[PayeelordVAS] Data purchase PROCESSING (left PENDING): ref={} providerTxnId={}",
                     txn.getReference(), response.getTransactionId());
             return txn;
@@ -442,6 +445,7 @@ public class PayeelordVasService {
         txn.setStatus(VasTransactionStatus.REVERSED);
         txn.setFailureReason(response.getMessage() != null ? response.getMessage() : "Data purchase failed.");
         transactionRepository.save(txn);
+        upsertLedgerEntry(txn, describeVasPurchase(txn, planLabel) + " | Reversed: " + txn.getFailureReason(), TransactionStatus.REVERSED);
         logger.warn("[PayeelordVAS] Data purchase FAILED → envelope hold released: ref={} reason={}",
                 txn.getReference(), txn.getFailureReason());
         notifyAsync(txn.getUserId(), String.format(
@@ -471,6 +475,7 @@ public class PayeelordVasService {
                     "Requires manual reconciliation via GET /data-transactions before any user-facing resolution.");
             txn.setUpdatedAt(LocalDateTime.now());
             transactionRepository.save(txn);
+            upsertLedgerEntry(txn, describeVasPurchase(txn) + " | Pending reconciliation", TransactionStatus.PROCESSING);
 
             logger.error("[PayeelordVAS][CRITICAL][NEEDS-RECONCILIATION] Ambiguous purchase outcome: " +
                             "ref={} userId={} type={} sellingAmount={} — manual reconciliation required NOW.",
@@ -580,6 +585,7 @@ public class PayeelordVasService {
             txn.setFailureReason(withRecoveryEscalationMarker(txn.getFailureReason()));
             txn.setUpdatedAt(LocalDateTime.now());
             transactionRepository.save(txn);
+            upsertLedgerEntry(txn, describeVasPurchase(txn) + " | Pending manual reconciliation", TransactionStatus.PROCESSING);
 
             logger.error("[PayeelordVAS][CRITICAL][NEEDS-RECONCILIATION] Stale PENDING purchase cannot be " +
                             "safely auto-resolved (provider may have delivered): ref={} userId={} type={} " +
@@ -597,6 +603,7 @@ public class PayeelordVasService {
                 "within the recovery window; envelope hold released.");
         txn.setUpdatedAt(LocalDateTime.now());
         transactionRepository.save(txn);
+        upsertLedgerEntry(txn, describeVasPurchase(txn) + " | Reversed by recovery", TransactionStatus.REVERSED);
 
         logger.warn("[PayeelordVAS][RECOVERY] Auto-reversed stale PENDING purchase → envelope refunded: " +
                         "ref={} userId={} sellingAmount={}",
@@ -685,27 +692,44 @@ public class PayeelordVasService {
     }
 
     /**
-     * Records the user-facing spend in the shared ledger ({@code transaction_logs})
-     * so a completed purchase shows up in the Activity screen and the funding
-     * envelope's history. Best-effort — the airtime/data was already delivered, so
-     * a ledger write hiccup must never fail the purchase.
+     * Keeps the user-facing Activity ledger in sync with the Payeelord-specific
+     * audit row. Best-effort: the VAS transaction row remains the reconciliation
+     * source of truth if this shared-ledger write ever hiccups.
      */
-    private void recordLedgerEntry(PayeelordVasTransaction txn, String description) {
+    private void upsertLedgerEntry(PayeelordVasTransaction txn, String description, TransactionStatus status) {
         try {
-            TransactionLog log = new TransactionLog();
+            TransactionLog log = transactionLogRepository.findByReference(txn.getReference())
+                    .orElseGet(TransactionLog::new);
             log.setUserId(txn.getUserId());
             log.setSourceEnvelopeId(txn.getEnvelopeId());
             log.setAmount(txn.getSellingAmount());
             log.setTransactionType(TransactionType.VAS_PURCHASE);
             log.setDescription(description);
-            log.setStatus(TransactionStatus.COMPLETED);
+            log.setStatus(status);
             log.setReference(txn.getReference());
-            log.setCreatedAt(LocalDateTime.now());
+            if (log.getCreatedAt() == null) {
+                log.setCreatedAt(txn.getCreatedAt() != null ? txn.getCreatedAt() : LocalDateTime.now());
+            }
             transactionLogRepository.save(log);
         } catch (Exception e) {
-            logger.error("[PayeelordVAS] Failed to write ledger entry for ref={}: {}",
+            logger.error("[PayeelordVAS] Failed to sync ledger entry for ref={}: {}",
                     txn.getReference(), e.getMessage());
         }
+    }
+
+    private String describeVasPurchase(PayeelordVasTransaction txn) {
+        return describeVasPurchase(txn, null);
+    }
+
+    private String describeVasPurchase(PayeelordVasTransaction txn, String fallbackPlanLabel) {
+        if (txn.getType() == VasTransactionType.AIRTIME) {
+            return String.format("%s airtime - NGN %,.2f to %s",
+                    txn.getNetwork(), txn.getFaceAmount(), txn.getMobileNumber());
+        }
+        String planLabel = txn.getDataPlan() != null
+                ? txn.getDataPlan().getDisplayLabel()
+                : (fallbackPlanLabel != null && !fallbackPlanLabel.isBlank() ? fallbackPlanLabel : "data plan");
+        return String.format("%s data (%s) to %s", txn.getNetwork(), planLabel, txn.getMobileNumber());
     }
 
     /** Fire-and-forget — a notification failure must never roll back a financial transaction. */

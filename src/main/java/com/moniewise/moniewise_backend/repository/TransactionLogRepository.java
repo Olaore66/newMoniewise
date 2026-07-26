@@ -110,12 +110,14 @@ public interface TransactionLogRepository extends JpaRepository<TransactionLog, 
           AND t.createdAt >= :start
           AND t.createdAt < :end
           AND t.transactionType IN :types
+          AND t.status IN :statuses
     """)
     BigDecimal sumAbsoluteAmountByUserAndDateRangeAndTypes(
             @Param("userId") Long userId,
             @Param("start") LocalDateTime start,
             @Param("end") LocalDateTime end,
-            @Param("types") Set<TransactionType> types
+            @Param("types") Set<TransactionType> types,
+            @Param("statuses") Set<TransactionStatus> statuses
     );
 
     @Query("""
@@ -124,12 +126,14 @@ public interface TransactionLogRepository extends JpaRepository<TransactionLog, 
           AND t.createdAt >= :start
           AND t.createdAt < :end
           AND t.transactionType IN :types
+          AND t.status IN :statuses
     """)
     BigDecimal sumFeesByUserAndDateRangeAndTypes(
             @Param("userId") Long userId,
             @Param("start") LocalDateTime start,
             @Param("end") LocalDateTime end,
-            @Param("types") Set<TransactionType> types
+            @Param("types") Set<TransactionType> types,
+            @Param("statuses") Set<TransactionStatus> statuses
     );
 
     Optional<TransactionLog> findByProviderReference(String providerReference);
