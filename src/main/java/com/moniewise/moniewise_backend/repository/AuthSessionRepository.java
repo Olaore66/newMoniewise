@@ -21,23 +21,26 @@ public interface AuthSessionRepository extends JpaRepository<AuthSession, Long> 
     @Query("SELECT DISTINCT s.fcmToken FROM AuthSession s WHERE s.user.id = :userId AND s.revoked = false AND s.fcmToken IS NOT NULL AND s.fcmToken <> ''")
     List<String> findActiveFcmTokensByUserId(@Param("userId") Long userId);
 
+    @Query("SELECT s FROM AuthSession s WHERE s.user.id = :userId AND s.revoked = false AND s.fcmToken IS NOT NULL AND s.fcmToken <> ''")
+    List<AuthSession> findActivePushSessionsByUserId(@Param("userId") Long userId);
+
     @Modifying
-    @Query("UPDATE AuthSession s SET s.fcmToken = NULL WHERE s.sessionId = :sessionId")
+    @Query("UPDATE AuthSession s SET s.fcmToken = NULL, s.devicePlatform = NULL WHERE s.sessionId = :sessionId")
     void clearFcmTokenBySessionId(@Param("sessionId") String sessionId);
 
     @Modifying
-    @Query("UPDATE AuthSession s SET s.fcmToken = NULL WHERE s.fcmToken = :token AND (:excludeSessionId IS NULL OR s.sessionId <> :excludeSessionId)")
+    @Query("UPDATE AuthSession s SET s.fcmToken = NULL, s.devicePlatform = NULL WHERE s.fcmToken = :token AND (:excludeSessionId IS NULL OR s.sessionId <> :excludeSessionId)")
     void clearTokenFromOtherSessions(@Param("token") String token, @Param("excludeSessionId") String excludeSessionId);
 
     @Modifying
-    @Query("UPDATE AuthSession s SET s.fcmToken = NULL WHERE s.fcmToken = :token")
+    @Query("UPDATE AuthSession s SET s.fcmToken = NULL, s.devicePlatform = NULL WHERE s.fcmToken = :token")
     void clearFcmTokenByToken(@Param("token") String token);
 
     @Modifying
-    @Query("UPDATE AuthSession s SET s.revoked = true, s.revokedAt = :revokedAt, s.fcmToken = NULL WHERE s.sessionId = :sessionId AND s.revoked = false")
+    @Query("UPDATE AuthSession s SET s.revoked = true, s.revokedAt = :revokedAt, s.fcmToken = NULL, s.devicePlatform = NULL WHERE s.sessionId = :sessionId AND s.revoked = false")
     int revokeSession(@Param("sessionId") String sessionId, @Param("revokedAt") LocalDateTime revokedAt);
 
     @Modifying
-    @Query("UPDATE AuthSession s SET s.revoked = true, s.revokedAt = :revokedAt, s.fcmToken = NULL WHERE s.user.id = :userId AND s.revoked = false")
+    @Query("UPDATE AuthSession s SET s.revoked = true, s.revokedAt = :revokedAt, s.fcmToken = NULL, s.devicePlatform = NULL WHERE s.user.id = :userId AND s.revoked = false")
     int revokeAllSessionsForUser(@Param("userId") Long userId, @Param("revokedAt") LocalDateTime revokedAt);
 }

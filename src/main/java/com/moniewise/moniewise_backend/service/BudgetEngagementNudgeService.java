@@ -128,6 +128,11 @@ public class BudgetEngagementNudgeService {
                         type,
                         walletBalance,
                         lastBudgetName);
+                notificationService.sendBudgetEngagementNudgePush(
+                        user.getId(),
+                        type,
+                        walletBalance,
+                        lastBudgetName);
 
                 contactedThisRun.add(user.getId());
                 sent++;

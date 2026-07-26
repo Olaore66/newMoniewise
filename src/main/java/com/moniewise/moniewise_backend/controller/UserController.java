@@ -243,7 +243,11 @@ public class UserController {
             }
             String email = authentication.getName();
             String sessionId = extractSessionId(authHeader);
-            authSessionService.attachFcmToken(email, sessionId, token);
+            String platform = payload.get("platform");
+            if ((platform == null || platform.isBlank())) {
+                platform = payload.get("devicePlatform");
+            }
+            authSessionService.attachFcmToken(email, sessionId, token, platform);
 
             // This device just became reachable — catch up on anything that was
             // saved to the inbox but never pushed because no token was active

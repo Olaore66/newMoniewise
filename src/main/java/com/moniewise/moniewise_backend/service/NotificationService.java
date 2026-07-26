@@ -43,6 +43,8 @@ public class NotificationService {
 
     private static final Logger logger = LoggerFactory.getLogger(NotificationService.class);
     private static final String ANDROID_PLAY_STORE_URL = "https://play.google.com/store/apps/details?id=com.wisemonie";
+    private static final String ACTION_OPEN_EXTERNAL_URL = "OPEN_EXTERNAL_URL";
+    private static final String ACTION_IOS_APP_COMING_SOON = "IOS_APP_COMING_SOON";
 
     private final FirebaseMessaging firebaseMessaging;
     private final UserRepository userRepository;
@@ -236,7 +238,7 @@ public class NotificationService {
 
         return switch (type) {
             // âŒ DO NOT SAVE TO INBOX (Transient, Nudges, or Bundled Noise)
-            case PRE_DISBURSEMENT, DISBURSEMENT_REMINDER, POSITIVE_NUDGE, WELCOME,
+            case PRE_DISBURSEMENT, DISBURSEMENT_REMINDER, POSITIVE_NUDGE, BUDGET_ENGAGEMENT_NUDGE, WELCOME,
                     BUDGET_CREATION_FEE, ENVELOPE_CREATED -> false; // <--- Added here!
 
             // âœ… SAVE TO INBOX (Financial / Important)
@@ -460,6 +462,12 @@ public class NotificationService {
      */
     private void sendFCMMessage(String fcmToken, String title, String body, String actionType,
                                 String redirectUrl, NotificationType type, Long userId, Long envelopeId) {
+        sendFCMMessage(fcmToken, title, body, actionType, redirectUrl, type, userId, envelopeId, null);
+    }
+
+    private void sendFCMMessage(String fcmToken, String title, String body, String actionType,
+                                String redirectUrl, NotificationType type, Long userId, Long envelopeId,
+                                String devicePlatform) {
         try {
             // ── Unique collapse key per envelope ─────────────────────────────────────
             // The old code used a single "DISBURSEMENTS" key for every disbursement
@@ -508,13 +516,23 @@ public class NotificationService {
                     .setApnsConfig(apnsConfig);
 
             // Data Payload for Flutter navigation
-            String route = deepLinkService.normalizeAppRoute(redirectUrl);
-            String deepLinkUrl = deepLinkService.toDeepLink(route);
             messageBuilder.putData("click_action", "FLUTTER_NOTIFICATION_CLICK");
             if (actionType != null) messageBuilder.putData("actionType", actionType);
-            if (redirectUrl != null) messageBuilder.putData("redirectUrl", redirectUrl);
-            messageBuilder.putData("route", route);
-            messageBuilder.putData("deepLinkUrl", deepLinkUrl);
+            if (devicePlatform != null) messageBuilder.putData("devicePlatform", devicePlatform);
+
+            if (isExternalPushAction(actionType)) {
+                if (redirectUrl != null && !redirectUrl.isBlank()) {
+                    messageBuilder.putData("url", redirectUrl);
+                    messageBuilder.putData("externalUrl", redirectUrl);
+                    messageBuilder.putData("redirectUrl", redirectUrl);
+                }
+            } else {
+                String route = deepLinkService.normalizeAppRoute(redirectUrl);
+                String deepLinkUrl = deepLinkService.toDeepLink(route);
+                if (redirectUrl != null) messageBuilder.putData("redirectUrl", redirectUrl);
+                messageBuilder.putData("route", route);
+                messageBuilder.putData("deepLinkUrl", deepLinkUrl);
+            }
 
             // Text Payload for UI
             messageBuilder.putData("title", title);
@@ -621,6 +639,7 @@ public class NotificationService {
 
             case BUDGET_LIMIT_WARNING, BUDGET_END_SOON, BUDGET_ENDS_TODAY, DISBURSEMENT_FAILED,
                     SAVINGS_MATURING_SOON,
+                    BUDGET_ENGAGEMENT_NUDGE,
                     WELCOME -> NotificationPriority.MEDIUM;
             default -> NotificationPriority.LOW;
         };
@@ -767,11 +786,78 @@ public class NotificationService {
         }
     }
 
+    public void sendBudgetEngagementNudgePush(Long userId,
+                                              BudgetEngagementNudgeType type,
+                                              BigDecimal walletBalance,
+                                              String lastBudgetName) {
+        if (userId == null) {
+            return;
+        }
+
+        BudgetEngagementNudgeType safeType = type != null
+                ? type
+                : BudgetEngagementNudgeType.WALLET_READY_NO_BUDGET;
+
+        try {
+            Map<String, Object> payload = new java.util.HashMap<>();
+            payload.put("__title", budgetNudgePushTitle(safeType));
+            payload.put("__message", budgetNudgePushMessage(safeType, walletBalance, lastBudgetName));
+            payload.put("__actionType", ACTION_OPEN_EXTERNAL_URL);
+            payload.put("__redirectUrl", ANDROID_PLAY_STORE_URL);
+            payload.put("__androidUrl", ANDROID_PLAY_STORE_URL);
+
+            String iosAppStoreUrl = deepLinkService.iosAppStoreUrl();
+            if (iosAppStoreUrl != null && !iosAppStoreUrl.isBlank()) {
+                payload.put("__iosUrl", iosAppStoreUrl);
+            }
+
+            OutboxEvent event = new OutboxEvent();
+            event.setEventType(NotificationType.BUDGET_ENGAGEMENT_NUDGE.name());
+            event.setUserId(userId);
+            event.setPayload(payload);
+            event.setStatus("PENDING");
+            event.setCreatedAt(LocalDateTime.now());
+            event.setTtlSeconds(86_400L);
+            outboxEventRepository.save(event);
+        } catch (Exception e) {
+            logger.error("Failed to enqueue budget engagement push {} for user {}", safeType, userId, e);
+        }
+    }
+
     private String budgetNudgeSubject(BudgetEngagementNudgeType type) {
         return switch (type) {
             case FUNDED_WALLET_NO_BUDGET -> "Your Wisemonie balance needs a simple plan";
             case POST_BUDGET_COMPLETION -> "Ready for your next Wisemonie budget?";
             case WALLET_READY_NO_BUDGET -> "Your Wisemonie wallet is ready for a plan";
+        };
+    }
+
+    private String budgetNudgePushTitle(BudgetEngagementNudgeType type) {
+        return switch (type) {
+            case FUNDED_WALLET_NO_BUDGET -> "Give your money a job";
+            case POST_BUDGET_COMPLETION -> "Ready for your next budget?";
+            case WALLET_READY_NO_BUDGET -> "Your wallet is ready";
+        };
+    }
+
+    private String budgetNudgePushMessage(BudgetEngagementNudgeType type,
+                                          BigDecimal walletBalance,
+                                          String lastBudgetName) {
+        return switch (type) {
+            case FUNDED_WALLET_NO_BUDGET -> {
+                String balance = walletBalance != null && walletBalance.compareTo(BigDecimal.ZERO) > 0
+                        ? "Your NGN " + formatAmount(walletBalance) + " balance"
+                        : "Your Wisemonie balance";
+                yield balance + " is ready for structure. Create a budget and give the money a clear plan.";
+            }
+            case POST_BUDGET_COMPLETION -> {
+                String budgetName = lastBudgetName != null && !lastBudgetName.isBlank()
+                        ? "'" + lastBudgetName + "'"
+                        : "your last budget";
+                yield budgetName + " has ended. Start the next money cycle with a fresh Wisemonie plan.";
+            }
+            case WALLET_READY_NO_BUDGET ->
+                    "Your Wisemonie wallet is ready. Fund it and create a simple budget so every naira has a purpose.";
         };
     }
 
@@ -785,7 +871,7 @@ public class NotificationService {
 
     private String budgetNudgeHeadline(BudgetEngagementNudgeType type) {
         return switch (type) {
-            case FUNDED_WALLET_NO_BUDGET -> "Give your balance a job before it disappears";
+            case FUNDED_WALLET_NO_BUDGET -> "Give your money a job before it disappears";
             case POST_BUDGET_COMPLETION -> "Your next money cycle can feel lighter";
             case WALLET_READY_NO_BUDGET -> "Start with a small plan, not pressure";
         };
@@ -1177,11 +1263,13 @@ public class NotificationService {
         // --- FCM push: NO DB transaction / row lock is held across these network calls ---
         Set<String> delivered = new java.util.LinkedHashSet<>(plan.alreadyDelivered);
         String transientError = null;
-        for (String token : plan.tokensToPush) {
+        for (AuthSessionService.PushTarget target : plan.tokensToPush) {
             try {
-                sendFCMMessage(token, plan.title, plan.message, plan.actionType, plan.redirectUrl,
-                        plan.type, plan.userId, plan.envelopeId);
-                delivered.add(token); // delivered (or dead token cleaned) — don't resend
+                String actionType = plan.actionTypeFor(target.devicePlatform());
+                String redirectUrl = plan.redirectUrlFor(target.devicePlatform());
+                sendFCMMessage(target.token(), plan.title, plan.message, actionType, redirectUrl,
+                        plan.type, plan.userId, plan.envelopeId, target.devicePlatform());
+                delivered.add(target.token());
             } catch (RuntimeException fcmError) {
                 transientError = fcmError.getMessage(); // stop; persist progress + retry below
                 break;
@@ -1230,11 +1318,15 @@ public class NotificationService {
         String message = resolveMessage(type, params);
         String redirectUrl = resolveRedirectUrl(event, params);
         String actionType = paramString(params, "__actionType");
+        String androidExternalUrl = paramString(params, "__androidUrl");
+        String iosExternalUrl = paramString(params, "__iosUrl");
         NotificationPriority priority = getPriority(type);
         boolean pushEligible = priority == NotificationPriority.HIGH
                 || priority == NotificationPriority.MEDIUM;
 
-        List<String> tokens = pushEligible ? getPushTokensForUser(event.getUserId()) : List.of();
+        List<AuthSessionService.PushTarget> pushTargets = pushEligible
+                ? getPushTargetsForUser(event.getUserId())
+                : List.of();
 
         // In-app inbox — written once, atomically with the inboxSaved flag.
         if (!event.isInboxSaved() && shouldPersistToDatabase(type)) {
@@ -1250,18 +1342,18 @@ public class NotificationService {
             notification.setRead(false);
             // No active token right now (e.g. mid logout/re-login) — flag so
             // redeliverMissedPushes() catches up once a fresh token registers.
-            notification.setPushSent(!pushEligible || !tokens.isEmpty());
+            notification.setPushSent(!pushEligible || !pushTargets.isEmpty());
             notificationRepository.save(notification);
             event.setInboxSaved(true);
         }
 
         // Which tokens still need a push (skip any a prior attempt already delivered).
         Set<String> alreadyDelivered = parseTokenSet(event.getDeliveredTokens());
-        List<String> tokensToPush = new ArrayList<>();
+        List<AuthSessionService.PushTarget> tokensToPush = new ArrayList<>();
         if (pushEligible && !"stub".equals(activeProfile) && firebaseMessaging != null) {
-            for (String token : tokens) {
-                if (!alreadyDelivered.contains(token)) {
-                    tokensToPush.add(token);
+            for (AuthSessionService.PushTarget target : pushTargets) {
+                if (!alreadyDelivered.contains(target.token())) {
+                    tokensToPush.add(target);
                 }
             }
         }
@@ -1269,7 +1361,7 @@ public class NotificationService {
         if (tokensToPush.isEmpty()) {
             // Nothing to push (not eligible, no active token, or all already delivered).
             // redeliverMissedPushes() covers the no-token case via the pushSent=false flag.
-            if (pushEligible && tokens.isEmpty()) {
+            if (pushEligible && pushTargets.isEmpty()) {
                 logger.info("[OUTBOX] No active token for user {} — will redeliver on next token registration",
                         event.getUserId());
             }
@@ -1286,9 +1378,11 @@ public class NotificationService {
 
         DeliveryPlan plan = new DeliveryPlan();
         plan.message = message;
-        plan.title = getNotificationTitle(type);
+        plan.title = resolveTitle(type, params);
         plan.redirectUrl = redirectUrl;
         plan.actionType = actionType;
+        plan.androidExternalUrl = androidExternalUrl;
+        plan.iosExternalUrl = iosExternalUrl;
         plan.type = type;
         plan.userId = event.getUserId();
         plan.envelopeId = event.getEnvelopeId();
@@ -1325,11 +1419,43 @@ public class NotificationService {
         String title;
         String redirectUrl;
         String actionType;
+        String androidExternalUrl;
+        String iosExternalUrl;
         NotificationType type;
         Long userId;
         Long envelopeId;
-        List<String> tokensToPush;
+        List<AuthSessionService.PushTarget> tokensToPush;
         Set<String> alreadyDelivered;
+
+        String actionTypeFor(String devicePlatform) {
+            if (!ACTION_OPEN_EXTERNAL_URL.equals(actionType)) {
+                return actionType;
+            }
+            String resolvedUrl = redirectUrlFor(devicePlatform);
+            if (resolvedUrl == null && isIos(devicePlatform)) {
+                return ACTION_IOS_APP_COMING_SOON;
+            }
+            return actionType;
+        }
+
+        String redirectUrlFor(String devicePlatform) {
+            if (!ACTION_OPEN_EXTERNAL_URL.equals(actionType)) {
+                return redirectUrl;
+            }
+            if (isIos(devicePlatform)) {
+                return blankToNull(iosExternalUrl);
+            }
+            String androidUrl = blankToNull(androidExternalUrl);
+            return androidUrl != null ? androidUrl : blankToNull(redirectUrl);
+        }
+
+        private static boolean isIos(String devicePlatform) {
+            return "IOS".equalsIgnoreCase(devicePlatform);
+        }
+
+        private static String blankToNull(String value) {
+            return value == null || value.isBlank() ? null : value;
+        }
     }
 
     /** Bumps retry count and moves the event to PENDING (retry) or FAILED (exhausted). */
@@ -1354,6 +1480,12 @@ public class NotificationService {
         return (pre != null) ? pre : generateMessage(type, params);
     }
 
+    /** Prefer the caller's pre-formatted title ("__title"); else use the type title. */
+    private String resolveTitle(NotificationType type, Map<String, Object> params) {
+        String pre = paramString(params, "__title");
+        return (pre != null) ? pre : getNotificationTitle(type);
+    }
+
     /** Prefer an explicit "__redirectUrl" from the payload; else derive one from context ids. */
     private String resolveRedirectUrl(OutboxEvent event, Map<String, Object> params) {
         String pre = paramString(params, "__redirectUrl");
@@ -1371,6 +1503,11 @@ public class NotificationService {
         }
         String s = v.toString();
         return s.isBlank() ? null : s;
+    }
+
+    private boolean isExternalPushAction(String actionType) {
+        return ACTION_OPEN_EXTERNAL_URL.equals(actionType)
+                || ACTION_IOS_APP_COMING_SOON.equals(actionType);
     }
 
     private String buildRedirectUrl(OutboxEvent event) {
@@ -1395,30 +1532,37 @@ public class NotificationService {
     }
 
     private List<String> getPushTokensForUser(Long userId) {
-        List<String> tokens = new java.util.ArrayList<>();
+        return getPushTargetsForUser(userId).stream()
+                .map(AuthSessionService.PushTarget::token)
+                .toList();
+    }
+
+    private List<AuthSessionService.PushTarget> getPushTargetsForUser(Long userId) {
+        java.util.LinkedHashMap<String, AuthSessionService.PushTarget> targets = new java.util.LinkedHashMap<>();
 
         try {
-            List<String> activeTokens = authSessionService.getActiveFcmTokens(userId);
-            if (activeTokens != null) {
-                tokens.addAll(activeTokens);
+            List<AuthSessionService.PushTarget> activeTargets = authSessionService.getActivePushTargets(userId);
+            if (activeTargets != null) {
+                for (AuthSessionService.PushTarget target : activeTargets) {
+                    if (target != null && target.token() != null && !target.token().isBlank()) {
+                        targets.putIfAbsent(target.token(), target);
+                    }
+                }
             }
         } catch (Exception e) {
-            logger.warn("Failed to fetch active FCM tokens for user {}", userId, e);
+            logger.warn("Failed to fetch active FCM targets for user {}", userId, e);
         }
 
         try {
             String fallbackToken = userRepository.findFcmTokenById(userId);
             if (fallbackToken != null && !fallbackToken.isBlank()) {
-                tokens.add(fallbackToken);
+                targets.putIfAbsent(fallbackToken, new AuthSessionService.PushTarget(fallbackToken, null));
             }
         } catch (Exception e) {
             logger.warn("Failed to fetch fallback FCM token for user {}", userId, e);
         }
 
-        return tokens.stream()
-                .filter(token -> token != null && !token.isBlank())
-                .distinct()
-                .toList();
+        return List.copyOf(targets.values());
     }
 
     /**
@@ -1443,8 +1587,8 @@ public class NotificationService {
                     .findByUserIdAndPushSentFalseAndCreatedAtAfter(userId, cutoff);
             if (missed.isEmpty()) return;
 
-            List<String> fcmTokens = getPushTokensForUser(userId);
-            if (fcmTokens.isEmpty()) return;
+            List<AuthSessionService.PushTarget> pushTargets = getPushTargetsForUser(userId);
+            if (pushTargets.isEmpty()) return;
 
             int redelivered = 0;
             for (Notification n : missed) {
@@ -1454,9 +1598,10 @@ public class NotificationService {
                 }
                 try {
                     String title = getNotificationTitle(n.getType());
-                    for (String token : fcmTokens) {
-                        sendFCMMessage(token, title, n.getMessage(), n.getActionType(),
-                                n.getRedirectUrl(), n.getType(), userId, n.getEnvelopeId());
+                    for (AuthSessionService.PushTarget target : pushTargets) {
+                        sendFCMMessage(target.token(), title, n.getMessage(), n.getActionType(),
+                                n.getRedirectUrl(), n.getType(), userId, n.getEnvelopeId(),
+                                target.devicePlatform());
                     }
                     n.setPushSent(true);
                     redelivered++;

@@ -24,6 +24,9 @@ public class AuthSession {
     @Column(name = "fcm_token")
     private String fcmToken;
 
+    @Column(name = "device_platform")
+    private String devicePlatform;
+
     @Column(name = "revoked", nullable = false)
     private boolean revoked = false;
 
@@ -66,6 +69,14 @@ public class AuthSession {
 
     public void setFcmToken(String fcmToken) {
         this.fcmToken = fcmToken;
+    }
+
+    public String getDevicePlatform() {
+        return devicePlatform;
+    }
+
+    public void setDevicePlatform(String devicePlatform) {
+        this.devicePlatform = devicePlatform;
     }
 
     public boolean isRevoked() {

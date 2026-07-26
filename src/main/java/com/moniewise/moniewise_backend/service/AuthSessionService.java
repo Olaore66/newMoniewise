@@ -8,6 +8,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Locale;
 import java.util.UUID;
 
 @Service
@@ -36,6 +37,8 @@ public class AuthSessionService {
         return session.getSessionId();
     }
 
+    public record PushTarget(String token, String devicePlatform) {}
+
     @Transactional(readOnly = true)
     public boolean isSessionActive(String email, String sessionId) {
         return authSessionRepository.findByUserEmailAndSessionIdAndRevokedFalse(email, sessionId).isPresent();
@@ -48,11 +51,17 @@ public class AuthSessionService {
 
     @Transactional
     public void attachFcmToken(String email, String sessionId, String token) {
+        attachFcmToken(email, sessionId, token, null);
+    }
+
+    @Transactional
+    public void attachFcmToken(String email, String sessionId, String token, String devicePlatform) {
         AuthSession session = authSessionRepository.findByUserEmailAndSessionIdAndRevokedFalse(email, sessionId)
                 .orElseThrow(() -> new IllegalStateException("Active session not found"));
 
         authSessionRepository.clearTokenFromOtherSessions(token, sessionId);
         session.setFcmToken(token);
+        session.setDevicePlatform(normalizeDevicePlatform(devicePlatform));
         session.setLastSeenAt(LocalDateTime.now());
         authSessionRepository.save(session);
     }
@@ -62,6 +71,7 @@ public class AuthSessionService {
         AuthSession session = authSessionRepository.findByUserEmailAndSessionIdAndRevokedFalse(email, sessionId)
                 .orElseThrow(() -> new IllegalStateException("Active session not found"));
         session.setFcmToken(null);
+        session.setDevicePlatform(null);
         session.setLastSeenAt(LocalDateTime.now());
         authSessionRepository.save(session);
     }
@@ -73,6 +83,7 @@ public class AuthSessionService {
 
         if (token == null || token.isBlank() || token.equals(session.getFcmToken())) {
             session.setFcmToken(null);
+            session.setDevicePlatform(null);
             session.setLastSeenAt(LocalDateTime.now());
             authSessionRepository.save(session);
         }
@@ -83,8 +94,27 @@ public class AuthSessionService {
         return authSessionRepository.findActiveFcmTokensByUserId(userId);
     }
 
+    @Transactional(readOnly = true)
+    public List<PushTarget> getActivePushTargets(Long userId) {
+        return authSessionRepository.findActivePushSessionsByUserId(userId).stream()
+                .map(session -> new PushTarget(session.getFcmToken(), session.getDevicePlatform()))
+                .toList();
+    }
+
     @Transactional
     public void clearDeadFcmToken(String token) {
         authSessionRepository.clearFcmTokenByToken(token);
+    }
+
+    private String normalizeDevicePlatform(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        String normalized = value.trim().toUpperCase(Locale.ROOT);
+        return switch (normalized) {
+            case "ANDROID" -> "ANDROID";
+            case "IOS", "IPHONE", "IPAD", "IPADOS" -> "IOS";
+            default -> null;
+        };
     }
 }
