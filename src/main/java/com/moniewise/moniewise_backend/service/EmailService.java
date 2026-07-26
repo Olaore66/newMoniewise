@@ -49,7 +49,7 @@ public class EmailService {
             helper.setTo(to);
             helper.setSubject("Reset Your Password");
             helper.setText(htmlContent, true); // true = HTML
-            helper.setFrom("assist@moniewise.com");
+            helper.setFrom("support@wisemonie.app");
             try {
                 org.springframework.core.io.ClassPathResource logo =
                     new org.springframework.core.io.ClassPathResource("images/main logo white background.png");
