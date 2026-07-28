@@ -26,4 +26,5 @@ public class WalletResponse {
      *  - others  → legacy pre-linked settlement account form
      */
     String providerName;
+    BigDecimal totalHoldings;
 }

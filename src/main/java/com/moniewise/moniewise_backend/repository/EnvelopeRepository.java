@@ -8,6 +8,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
@@ -15,6 +16,12 @@ import java.util.stream.Stream;
 
 @Repository
 public interface EnvelopeRepository extends JpaRepository<Envelope, Long> {
+
+    @Query("SELECT COALESCE(SUM(e.totalRemainingAmount), 0) FROM Envelope e " +
+           "WHERE e.budget.user.id = :userId AND e.budget.status = :status AND e.deletedAt IS NULL")
+    BigDecimal sumTotalRemainingByUserIdAndBudgetStatus(
+            @Param("userId") Long userId,
+            @Param("status") BudgetStatus status);
     @Query("SELECT e FROM Envelope e WHERE e.budget.id = :budgetId")
     List<Envelope> findByBudgetId(Long budgetId);
     Optional<Envelope> findById(Long id);

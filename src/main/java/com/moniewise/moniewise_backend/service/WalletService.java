@@ -17,7 +17,9 @@ import com.moniewise.moniewise_backend.psp.PaymentGateway;
 import com.moniewise.moniewise_backend.psp.PaymentGatewayResolver;
 import com.moniewise.moniewise_backend.psp.ProvidusExpressGateway;
 import com.moniewise.moniewise_backend.entity.RevenueLog;
+import com.moniewise.moniewise_backend.repository.EnvelopeRepository;
 import com.moniewise.moniewise_backend.repository.RevenueLogRepository;
+import com.moniewise.moniewise_backend.repository.SavingsGoalRepository;
 import com.moniewise.moniewise_backend.repository.TransactionLogRepository;
 import com.moniewise.moniewise_backend.repository.UserRepository;
 import com.moniewise.moniewise_backend.repository.WalletRepository;
@@ -68,6 +70,8 @@ public class WalletService {
 
     private final RevenueLogRepository revenueLogRepository;
 
+    private final SavingsGoalRepository savingsGoalRepository;
+    private final EnvelopeRepository envelopeRepository;
     private final SystemConfigService systemConfigService;
     private final RedisTemplate<String, String> redisTemplate;
     private final MonnieCacheInvalidationService monnieCacheInvalidationService;
@@ -81,6 +85,7 @@ public class WalletService {
      *  Only scalar response fields are cached — no JPA proxies, no lazy loading. */
     private static final String WALLET_CACHE_PREFIX     = "wallet:snapshot:";
     private static final long   WALLET_CACHE_TTL_SECS   = 30;
+    private static final String TOTAL_HOLDINGS_PREFIX   = "total_holdings:";
     private static final String RUBIES_P2P_CREDIT_REF_PREFIX = "P2P-RB-CR-";
     private static final String RUBIES_P2P_SETTLEMENT_MARKER_PREFIX = "P2P-RB-WH-";
 
@@ -101,6 +106,8 @@ public class WalletService {
             TransferFeeService transferFeeService,
             MarkupCalculatorService markupCalculatorService,
             RevenueLogRepository revenueLogRepository,
+            SavingsGoalRepository savingsGoalRepository,
+            EnvelopeRepository envelopeRepository,
             SystemConfigService systemConfigService,
             RedisTemplate<String, String> redisTemplate,
             MonnieCacheInvalidationService monnieCacheInvalidationService) {
@@ -116,6 +123,8 @@ public class WalletService {
         this.transferFeeService = transferFeeService;
         this.markupCalculatorService = markupCalculatorService;
         this.revenueLogRepository = revenueLogRepository;
+        this.savingsGoalRepository = savingsGoalRepository;
+        this.envelopeRepository = envelopeRepository;
         this.systemConfigService = systemConfigService;
         this.redisTemplate = redisTemplate;
         this.monnieCacheInvalidationService = monnieCacheInvalidationService;
@@ -187,13 +196,47 @@ public class WalletService {
                 .orElseThrow(() -> new IllegalArgumentException("Wallet not found for user ID: " + userId));
     }
 
-    /** Evict the wallet snapshot from Redis after balance-affecting operations. */
+    /** Evict the wallet snapshot and total holdings from Redis after balance-affecting operations. */
     private void evictWalletCache(Long userId) {
         try {
             redisTemplate.delete(WALLET_CACHE_PREFIX + userId);
+            redisTemplate.delete(TOTAL_HOLDINGS_PREFIX + userId);
         } catch (Exception e) {
             logger.debug("[WalletCache] Failed to evict cache for userId={}: {}", userId, e.getMessage());
         }
+    }
+
+    @Transactional(readOnly = true)
+    public BigDecimal getTotalHoldings(Long userId) {
+        String cacheKey = TOTAL_HOLDINGS_PREFIX + userId;
+        try {
+            String cached = redisTemplate.opsForValue().get(cacheKey);
+            if (cached != null) {
+                return new BigDecimal(cached);
+            }
+        } catch (Exception e) {
+            logger.debug("[TotalHoldings] Cache miss for userId={}: {}", userId, e.getMessage());
+        }
+
+        BigDecimal walletBalance = walletRepository.findByUserId(userId)
+                .map(w -> w.getBalance() != null ? w.getBalance() : BigDecimal.ZERO)
+                .orElse(BigDecimal.ZERO);
+
+        BigDecimal envelopeTotal = envelopeRepository.sumTotalRemainingByUserIdAndBudgetStatus(
+                userId, BudgetStatus.ACTIVE);
+        BigDecimal savingsTotal = savingsGoalRepository.sumBalanceByUserIdAndStatus(
+                userId, SavingsStatus.ACTIVE);
+
+        BigDecimal total = walletBalance.add(envelopeTotal).add(savingsTotal);
+
+        try {
+            redisTemplate.opsForValue().set(cacheKey, total.toPlainString(),
+                    WALLET_CACHE_TTL_SECS, TimeUnit.SECONDS);
+        } catch (Exception e) {
+            logger.debug("[TotalHoldings] Failed to cache for userId={}: {}", userId, e.getMessage());
+        }
+
+        return total;
     }
     public Map<String, Object> getLinkedBankInfo(Long userId, String email) {
         Wallet wallet = walletRepository.findByUserId(userId)

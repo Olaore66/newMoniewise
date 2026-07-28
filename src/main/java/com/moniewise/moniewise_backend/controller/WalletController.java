@@ -58,6 +58,7 @@ public class WalletController {
         Long userId = currentUser(authentication.getName()).getId();
 
         Wallet wallet = walletService.getWalletByUserId(userId);
+        BigDecimal totalHoldings = walletService.getTotalHoldings(userId);
 
         return ResponseEntity.ok(new WalletResponse(
                 wallet.getBalance(),
@@ -66,7 +67,8 @@ public class WalletController {
                 wallet.getBankName(),
                 wallet.getStatus().name(),
                 wallet.getUpdatedAt(),
-                wallet.getProviderName()   // lets frontend detect Rubies vs legacy
+                wallet.getProviderName(),
+                totalHoldings
         ));
     }
 

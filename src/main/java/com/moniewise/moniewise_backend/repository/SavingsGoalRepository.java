@@ -10,11 +10,18 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.stereotype.Repository;
 
 import javax.persistence.LockModeType;
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.Optional;
 
 @Repository
 public interface SavingsGoalRepository extends JpaRepository<SavingsGoal, Long> {
+
+    @Query("SELECT COALESCE(SUM(s.currentBalance), 0) FROM SavingsGoal s " +
+           "WHERE s.user.id = :userId AND s.status = :status")
+    BigDecimal sumBalanceByUserIdAndStatus(
+            @org.springframework.data.repository.query.Param("userId") Long userId,
+            @org.springframework.data.repository.query.Param("status") SavingsStatus status);
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT s FROM SavingsGoal s WHERE s.id = :id")
