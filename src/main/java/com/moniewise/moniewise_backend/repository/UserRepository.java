@@ -283,6 +283,34 @@ List<UserSummary> searchUsers(@Param("query") String query, Pageable pageable);
             @Param("completedBefore") LocalDate completedBefore,
             @Param("limit") int limit);
 
+    /**
+     * Users who have a successfully provisioned wallet and at least one active
+     * app session capable of receiving FCM push. Used for salary-period nudges:
+     * push only, no email fallback.
+     */
+    @Query(value = """
+            SELECT DISTINCT u.id
+            FROM users u
+            JOIN wallets w ON w.user_id = u.id
+            JOIN auth_sessions s ON s.user_id = u.id
+            WHERE u.is_deleted = false
+              AND u.id > :afterUserId
+              AND u.is_verified = true
+              AND coalesce(u.test_account, false) = false
+              AND w.status = 'ACTIVE'
+              AND coalesce(w.is_revenue_wallet, false) = false
+              AND w.account_number IS NOT NULL
+              AND btrim(w.account_number) <> ''
+              AND s.revoked = false
+              AND s.fcm_token IS NOT NULL
+              AND btrim(s.fcm_token) <> ''
+            ORDER BY u.id ASC
+            LIMIT :limit
+            """, nativeQuery = true)
+    List<Long> findPushEligibleWalletUserIdsAfter(
+            @Param("afterUserId") Long afterUserId,
+            @Param("limit") int limit);
+
     Optional<User> findByEmail(String email);
 
     /**

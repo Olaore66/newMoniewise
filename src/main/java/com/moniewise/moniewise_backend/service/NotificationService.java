@@ -238,7 +238,8 @@ public class NotificationService {
 
         return switch (type) {
             // âŒ DO NOT SAVE TO INBOX (Transient, Nudges, or Bundled Noise)
-            case PRE_DISBURSEMENT, DISBURSEMENT_REMINDER, POSITIVE_NUDGE, BUDGET_ENGAGEMENT_NUDGE, WELCOME,
+            case PRE_DISBURSEMENT, DISBURSEMENT_REMINDER, POSITIVE_NUDGE, BUDGET_ENGAGEMENT_NUDGE,
+                    SALARY_WEEK_NUDGE, POST_SALARY_NUDGE, WELCOME,
                     BUDGET_CREATION_FEE, ENVELOPE_CREATED -> false; // <--- Added here!
 
             // âœ… SAVE TO INBOX (Financial / Important)
@@ -423,6 +424,41 @@ public class NotificationService {
         }
     }
 
+    public void enqueuePushOnlyNotification(Long userId,
+                                            NotificationType type,
+                                            String title,
+                                            String message,
+                                            String redirectUrl,
+                                            long ttlSeconds) {
+        if (userId == null) {
+            throw new IllegalArgumentException("userId is required");
+        }
+        if (type == null) {
+            throw new IllegalArgumentException("notification type is required");
+        }
+        if (message == null || message.isBlank()) {
+            throw new IllegalArgumentException("message is required");
+        }
+
+        Map<String, Object> payload = new java.util.HashMap<>();
+        if (title != null && !title.isBlank()) {
+            payload.put("__title", title);
+        }
+        payload.put("__message", message);
+        if (redirectUrl != null && !redirectUrl.isBlank()) {
+            payload.put("__redirectUrl", redirectUrl);
+        }
+
+        OutboxEvent event = new OutboxEvent();
+        event.setEventType(type.name());
+        event.setUserId(userId);
+        event.setPayload(payload);
+        event.setStatus("PENDING");
+        event.setCreatedAt(LocalDateTime.now());
+        event.setTtlSeconds(ttlSeconds > 0 ? ttlSeconds : 86_400L);
+        outboxEventRepository.save(event);
+    }
+
     // =========================================================================
     // 3. CORE FCM LOGIC
     // =========================================================================
@@ -598,6 +634,8 @@ public class NotificationService {
             case MATURITY_ALERT -> "Maturity Alert 📅";
             case WEEKLY_SUMMARY -> "Weekly Recap 📊";
             case WELCOME -> "Welcome to Wisemonie 👋";
+            case SALARY_WEEK_NUDGE -> "Happy salary week! \uD83D\uDE42";
+            case POST_SALARY_NUDGE -> "Plan the month \uD83D\uDE0A";
             case SYSTEM -> "System Update 📢";
             case POSITIVE_NUDGE -> "Keep it up! 💪";
             default -> "Wisemonie Notification";
@@ -640,6 +678,7 @@ public class NotificationService {
             case BUDGET_LIMIT_WARNING, BUDGET_END_SOON, BUDGET_ENDS_TODAY, DISBURSEMENT_FAILED,
                     SAVINGS_MATURING_SOON,
                     BUDGET_ENGAGEMENT_NUDGE,
+                    SALARY_WEEK_NUDGE, POST_SALARY_NUDGE,
                     WELCOME -> NotificationPriority.MEDIUM;
             default -> NotificationPriority.LOW;
         };
