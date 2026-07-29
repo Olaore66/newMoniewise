@@ -135,7 +135,7 @@ public class SavingsService {
         // 3. Handle Initial Deposit (e.g., the 800k)
         if (initialDeposit != null && initialDeposit.compareTo(BigDecimal.ZERO) > 0) {
             // Deduct from Main Wallet
-            walletService.debitWalletForWithdrawal(userId, initialDeposit);
+            walletService.debitWalletForWithdrawal(userId, initialDeposit, "fund this savings pot");
 
             goal.setCurrentBalance(initialDeposit);
 
@@ -721,7 +721,7 @@ public class SavingsService {
         }
 
         // 1. Deduct silently from Wallet
-        walletService.debitWalletForWithdrawal(userId, amount);
+        walletService.debitWalletForWithdrawal(userId, amount, "top up this savings pot");
 
         // 2. Add to Savings Pot
         goal.setCurrentBalance(goal.getCurrentBalance().add(amount));

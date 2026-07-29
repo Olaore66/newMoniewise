@@ -338,11 +338,7 @@ public class WalletService {
                 .orElseThrow(() -> new IllegalArgumentException("Wallet not found for user ID: " + userId));
 
         if (wallet.getBalance().compareTo(amount) < 0) {
-            String message = String.format(
-                    "Insufficient wallet balance: ₦%.2f needed, ₦%.2f available",
-                    amount,
-                    wallet.getBalance()
-            );
+            String message = insufficientWalletOnlyBalanceMessage("complete this action", amount, wallet.getBalance());
             notificationService.sendNotification(userId.toString(), message,
                     NotificationType.INSUFFICIENT_BALANCE, null, null, "VIEW_WALLET", "/wallet");
             throw new InsufficientFundsException(message);
@@ -1407,11 +1403,17 @@ public class WalletService {
 
     @Transactional
     public void debitWalletForWithdrawal(Long userId, BigDecimal amount) {
+        debitWalletForWithdrawal(userId, amount, "complete this transaction");
+    }
+
+    @Transactional
+    public void debitWalletForWithdrawal(Long userId, BigDecimal amount, String actionDescription) {
         Wallet wallet = walletRepository.findByUserId(userId)
                 .orElseThrow(() -> new IllegalArgumentException("Wallet not found"));
 
         if (wallet.getBalance().compareTo(amount) < 0) {
-            throw new IllegalArgumentException("Insufficient funds in wallet for this transaction.");
+            throw new IllegalArgumentException(
+                    insufficientWalletOnlyBalanceMessage(actionDescription, amount, wallet.getBalance()));
         }
         wallet.setBalance(wallet.getBalance().subtract(amount));
         walletRepository.save(wallet);
@@ -1721,6 +1723,22 @@ public class WalletService {
                 feePart,
                 formatMoney(walletBalance),
                 formatMoney(totalDebit));
+    }
+
+    private String insufficientWalletOnlyBalanceMessage(String actionDescription,
+                                                        BigDecimal amountNeeded,
+                                                        BigDecimal walletBalance) {
+        String action = actionDescription != null && !actionDescription.isBlank()
+                ? actionDescription
+                : "complete this transaction";
+        return String.format(
+                "Your wallet balance is not enough to %s. "
+                        + "Your dashboard total includes money in budgets and savings, but this action can only use "
+                        + "money in your wallet balance. Please top up your wallet or reduce the amount to fit your wallet balance. "
+                        + "Wallet available: \u20A6%s. Amount needed: \u20A6%s.",
+                action,
+                formatMoney(walletBalance),
+                formatMoney(amountNeeded));
     }
 
     private String formatMoney(BigDecimal amount) {
