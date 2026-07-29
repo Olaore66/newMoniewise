@@ -395,10 +395,12 @@ public class WalletService {
         BigDecimal balance = wallet.getBalance() != null ? wallet.getBalance() : BigDecimal.ZERO;
         if (balance.compareTo(totalFee) < 0) {
             throw new IllegalStateException(String.format(
-                "Insufficient wallet balance to cover transfer charges. " +
-                "You need ₦%,.2f in your wallet (NIP fee: ₦%,.2f + Service fee: ₦%,.2f). " +
-                "Please top up your wallet to proceed.",
-                totalFee, bankCharge, markupFee));
+                "Your wallet balance is not enough to cover the \u20A6%,.2f transfer charges " +
+                "(NIP fee: \u20A6%,.2f + Service fee: \u20A6%,.2f). " +
+                "Your dashboard total includes money in budgets and savings, but transfer charges " +
+                "can only be paid from your wallet balance. Please top up your wallet to continue. " +
+                "Wallet available: \u20A6%,.2f.",
+                totalFee, bankCharge, markupFee, balance));
         }
         wallet.setBalance(balance.subtract(totalFee));
         wallet.setUpdatedAt(LocalDateTime.now());
@@ -1231,14 +1233,16 @@ public class WalletService {
 
         if (wallet.getBalance().compareTo(totalDebit) < 0) {
             if (nipFee.compareTo(BigDecimal.ZERO) > 0) {
-                BigDecimal maxSendable = wallet.getBalance().subtract(nipFee).subtract(transferFee)
-                        .max(BigDecimal.ZERO);
                 BigDecimal totalFee = nipFee.add(transferFee);
-                throw new IllegalArgumentException(String.format(
-                        "Insufficient balance. Tranx fee ₦%,.2f · Max sendable ₦%,.2f.",
-                        totalFee, maxSendable));
+                throw new IllegalArgumentException(insufficientWithdrawalBalanceMessage(
+                        totalDebit,
+                        totalFee,
+                        wallet.getBalance()));
             }
-            throw new IllegalArgumentException(insufficientWithdrawalBalanceMessage(totalDebit, transferFee));
+            throw new IllegalArgumentException(insufficientWithdrawalBalanceMessage(
+                    totalDebit,
+                    transferFee,
+                    wallet.getBalance()));
         }
 
         String narration = buildWithdrawalNarration(destBankName, request);
@@ -1611,7 +1615,10 @@ public class WalletService {
         BigDecimal fee = withdrawal.getFeeAmount() != null ? withdrawal.getFeeAmount() : BigDecimal.ZERO;
         BigDecimal totalDebit = withdrawal.getTotalDebit();
         if (wallet.getBalance().compareTo(totalDebit) < 0) {
-            throw new IllegalArgumentException(insufficientWithdrawalBalanceMessage(totalDebit, fee));
+            throw new IllegalArgumentException(insufficientWithdrawalBalanceMessage(
+                    totalDebit,
+                    fee,
+                    wallet.getBalance()));
         }
 
         wallet.setBalance(wallet.getBalance().subtract(totalDebit));
@@ -1700,10 +1707,20 @@ public class WalletService {
         return withdrawal.getClientReference() + "-FEE";
     }
 
-    private String insufficientWithdrawalBalanceMessage(BigDecimal totalDebit, BigDecimal fee) {
-        return String.format("Insufficient balance. You need ₦%s including the ₦%s withdrawal fee.",
-                formatMoney(totalDebit),
-                formatMoney(fee));
+    private String insufficientWithdrawalBalanceMessage(BigDecimal totalDebit,
+                                                        BigDecimal fee,
+                                                        BigDecimal walletBalance) {
+        String feePart = fee != null && fee.compareTo(BigDecimal.ZERO) > 0
+                ? " and its \u20A6" + formatMoney(fee) + " charges"
+                : "";
+        return String.format(
+                "Your wallet balance is not enough to cover this withdrawal%s. "
+                        + "Your dashboard total includes budgets and savings, but withdrawals and fees "
+                        + "can only come from your wallet balance. Please top up your wallet to continue. "
+                        + "Wallet available: \u20A6%s. Total needed: \u20A6%s.",
+                feePart,
+                formatMoney(walletBalance),
+                formatMoney(totalDebit));
     }
 
     private String formatMoney(BigDecimal amount) {

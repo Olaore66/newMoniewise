@@ -2040,10 +2040,12 @@ public class EnvelopeService {
             BigDecimal walletBalance = safeAmount(wallet != null ? wallet.getBalance() : null);
             if (walletBalance.compareTo(totalFee) < 0) {
                 throw new IllegalStateException(String.format(
-                        "Insufficient wallet balance to cover transfer charges. " +
-                        "You need ₦%,.2f in your wallet. " +
-                        "Please top up your wallet.",
-                        totalFee, bankCharge, markupFee));
+                        "Your wallet balance is not enough to cover the \u20A6%,.2f transfer charges "
+                                + "(NIP fee: \u20A6%,.2f + Service fee: \u20A6%,.2f). "
+                                + "Your dashboard total includes money in budgets and savings, but transfer charges "
+                                + "can only be paid from your wallet balance. Please top up your wallet to continue. "
+                                + "Wallet available: \u20A6%,.2f.",
+                        totalFee, bankCharge, markupFee, walletBalance));
             }
 
             return new ExternalTransferQuoteResponse(
@@ -2098,9 +2100,11 @@ public class EnvelopeService {
         BigDecimal legacyWalletBalance = safeAmount(wallet != null ? wallet.getBalance() : null);
         if (legacyWalletBalance.compareTo(fee) < 0) {
             throw new IllegalStateException(String.format(
-                    "Insufficient wallet balance to cover the ₦%,.2f service fee. " +
-                    "Please top up your wallet.",
-                    fee));
+                    "Your wallet balance is not enough to cover the \u20A6%,.2f service fee. "
+                            + "Your dashboard total includes money in budgets and savings, but transfer charges "
+                            + "can only be paid from your wallet balance. Please top up your wallet to continue. "
+                            + "Wallet available: \u20A6%,.2f.",
+                    fee, legacyWalletBalance));
         }
 
         if (wallet.getSettlementAccountNumber() == null || wallet.getSettlementAccountNumber().isBlank()) {
@@ -2218,4 +2222,3 @@ public class EnvelopeService {
         return oldDescription + " | " + extra;
     }
 }
-
