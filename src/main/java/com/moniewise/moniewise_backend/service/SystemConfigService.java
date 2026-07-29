@@ -166,6 +166,23 @@ public class SystemConfigService {
     /** Minutes to suppress repeat low-balance alerts after one fires. Default: 360 (6h). */
     public static final String PAYEELORD_BALANCE_ALERT_COOLDOWN_MINUTES = "payeelord.balance.alert.cooldown_minutes";
 
+    // App update gate. The mobile app calls /app/version-check on startup.
+    public static final String APP_UPDATE_ENABLED = "app.update.enabled";
+    public static final String APP_UPDATE_REQUIRED_TITLE = "app.update.required_title";
+    public static final String APP_UPDATE_REQUIRED_MESSAGE = "app.update.required_message";
+    public static final String APP_UPDATE_OPTIONAL_TITLE = "app.update.optional_title";
+    public static final String APP_UPDATE_OPTIONAL_MESSAGE = "app.update.optional_message";
+    public static final String APP_UPDATE_ANDROID_MIN_VERSION = "app.update.android.min_version";
+    public static final String APP_UPDATE_ANDROID_MIN_BUILD = "app.update.android.min_build";
+    public static final String APP_UPDATE_ANDROID_LATEST_VERSION = "app.update.android.latest_version";
+    public static final String APP_UPDATE_ANDROID_LATEST_BUILD = "app.update.android.latest_build";
+    public static final String APP_UPDATE_ANDROID_STORE_URL = "app.update.android.store_url";
+    public static final String APP_UPDATE_IOS_MIN_VERSION = "app.update.ios.min_version";
+    public static final String APP_UPDATE_IOS_MIN_BUILD = "app.update.ios.min_build";
+    public static final String APP_UPDATE_IOS_LATEST_VERSION = "app.update.ios.latest_version";
+    public static final String APP_UPDATE_IOS_LATEST_BUILD = "app.update.ios.latest_build";
+    public static final String APP_UPDATE_IOS_STORE_URL = "app.update.ios.store_url";
+
     // ──────────────────────────────────────────────────────────────────────────
 
     private final SystemConfigRepository repository;

@@ -86,6 +86,7 @@ public class SecurityConfig {
                 // with no login. The JSON /legal/** API for the in-app viewer stays
                 // authenticated below.
                 .antMatchers("/privacy-policy", "/terms-of-use", "/delete-account").permitAll()
+                .antMatchers("/app/version-check", "/app/update-status").permitAll()
                 .antMatchers("/admin/**").hasRole("ADMIN")   // URL-level guard (defence-in-depth alongside @PreAuthorize)
                 .antMatchers("/auth/logout", "/auth/refresh", "/auth/delete").authenticated()
                 .antMatchers("/users/**", "/notifications/**", "/disbursements/**", "/transactions/**", "/legal/**", "/ai/**", "/budgets/**", "/envelopes/**", "/wallets/**", "/transactions/pin/**", "/beneficiaries/**", "/savings/**").authenticated()
@@ -124,7 +125,7 @@ public class SecurityConfig {
             configuration.setAllowedOrigins(origins);
         }
         configuration.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
-        configuration.setAllowedHeaders(Arrays.asList("Authorization", "Content-Type", "Accept", "Origin", "X-Requested-With", "X-Signature", "monnify-signature"));
+        configuration.setAllowedHeaders(Arrays.asList("Authorization", "Content-Type", "Accept", "Origin", "X-Requested-With", "X-Signature", "monnify-signature", "X-App-Platform", "X-App-Version", "X-App-Build"));
         configuration.setAllowCredentials(true);
         configuration.setMaxAge(3600L);
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();

@@ -322,19 +322,41 @@ public class NotificationService {
                     String name = safeText(params.get("envelopeName"), "selected");
                     yield "\u20A6" + amount + " has been unlocked in your '" + name + "' envelope. It's ready to spend!";
                 }
-//                case PRE_DISBURSEMENT -> {
-//                    String amount = formatAmount(params.getOrDefault("amount", "0"));
-//                    String name = safeText(params.get("envelopeName"), "selected");
-//                    String time = safeText(params.get("time"), "shortly");
-//                    yield "Get ready! \u20A6" + amount + " will be unlocked in your '" + name + "' envelope in " + time + ".";
-//                }
+                case DISBURSEMENT, DISBURSEMENT_READY -> {
+                    String amount = formatAmount(params.getOrDefault("amount", "0"));
+                    String name = safeText(params.get("envelopeName"), "selected");
+                    yield "\u20A6" + amount + " is ready in your '" + name + "' envelope.";
+                }
+                case PRE_DISBURSEMENT, DISBURSEMENT_REMINDER -> {
+                    String amount = formatAmount(params.getOrDefault("amount", "0"));
+                    String name = safeText(params.get("envelopeName"), "selected");
+                    String time = safeText(params.get("time"), "shortly");
+                    yield "Heads up: \u20A6" + amount + " will unlock in your '" + name + "' envelope " + time + ".";
+                }
                 case EXPIRED_DISBURSEMENT -> {
                     String name = safeText(params.get("envelopeName"), "selected");
                     yield "The spending window for your '" + name + "' envelope has closed. The funds remain safely in your vault.";
                 }
+                case DISBURSEMENT_FAILED -> {
+                    String name = safeText(params.get("envelopeName"), "selected");
+                    yield "We could not complete the scheduled release for your '" + name + "' envelope. Please open Wisemonie to review it.";
+                }
+                case ENVELOPE_LOW_BALANCE -> {
+                    String name = safeText(params.get("envelopeName"), "selected");
+                    yield "Your '" + name + "' envelope did not have enough money for its scheduled release.";
+                }
+                case LOW_BALANCE_WARNING -> "Your wallet balance is getting low. Please top up if you still have important payments planned.";
+                case BUDGET_END_SOON, BUDGET_ENDING_SOON -> {
+                    String name = safeText(params.get("budgetName"), "your");
+                    yield "Your '" + name + "' budget is ending soon. Review your envelopes and prepare the next plan.";
+                }
                 case BUDGET_ENDS_TODAY -> {
                     String name = safeText(params.get("budgetName"), "your");
                     yield "Today is the last day of your '" + name + "' budget.";
+                }
+                case BUDGET_END, BUDGET_EXPIRED -> {
+                    String name = safeText(params.get("budgetName"), "your");
+                    yield "Your '" + name + "' budget has ended.";
                 }
                 default -> "You have a new update regarding your account.";
             };
@@ -675,7 +697,9 @@ public class NotificationService {
                     SAVINGS_MATURED,
                     ADMIN_PAYEELORD_LOW_BALANCE -> NotificationPriority.HIGH;
 
-            case BUDGET_LIMIT_WARNING, BUDGET_END_SOON, BUDGET_ENDS_TODAY, DISBURSEMENT_FAILED,
+            case BUDGET_LIMIT_WARNING, BUDGET_END_SOON, BUDGET_ENDING_SOON, BUDGET_ENDS_TODAY,
+                    PRE_DISBURSEMENT, DISBURSEMENT_REMINDER,
+                    EXPIRED_DISBURSEMENT, DISBURSEMENT_FAILED,
                     SAVINGS_MATURING_SOON,
                     BUDGET_ENGAGEMENT_NUDGE,
                     SALARY_WEEK_NUDGE, POST_SALARY_NUDGE,
@@ -1621,7 +1645,8 @@ public class NotificationService {
     @Transactional
     public void redeliverMissedPushes(Long userId) {
         try {
-            LocalDateTime cutoff = LocalDateTime.now().minusHours(2);
+            LocalDateTime now = LocalDateTime.now();
+            LocalDateTime cutoff = now.minusHours(72);
             List<Notification> missed = notificationRepository
                     .findByUserIdAndPushSentFalseAndCreatedAtAfter(userId, cutoff);
             if (missed.isEmpty()) return;
@@ -1630,9 +1655,24 @@ public class NotificationService {
             if (pushTargets.isEmpty()) return;
 
             int redelivered = 0;
+            int stale = 0;
+            int notPushEligible = 0;
+            missed.sort(java.util.Comparator.comparing(
+                    Notification::getCreatedAt,
+                    java.util.Comparator.nullsLast(java.util.Comparator.naturalOrder())));
             for (Notification n : missed) {
                 NotificationPriority priority = getPriority(n.getType());
                 if (priority != NotificationPriority.HIGH && priority != NotificationPriority.MEDIUM) {
+                    n.setPushSent(true);
+                    notPushEligible++;
+                    continue;
+                }
+                if (isMissedPushStale(n, now)) {
+                    n.setPushSent(true);
+                    stale++;
+                    continue;
+                }
+                if (redelivered >= 10) {
                     continue;
                 }
                 try {
@@ -1650,10 +1690,18 @@ public class NotificationService {
                 }
             }
             notificationRepository.saveAll(missed);
-            logger.info("[FCM] Redelivery sweep for user {}: {} of {} candidate(s) sent",
-                    userId, redelivered, missed.size());
+            logger.info("[FCM] Redelivery sweep for user {}: {} sent, {} stale, {} not-push-eligible, {} candidate(s)",
+                    userId, redelivered, stale, notPushEligible, missed.size());
         } catch (Exception e) {
             logger.warn("[FCM] Failed to redeliver missed pushes for user {}", userId, e);
         }
+    }
+
+    private boolean isMissedPushStale(Notification notification, LocalDateTime now) {
+        if (notification == null || notification.getCreatedAt() == null) {
+            return false;
+        }
+        long ttlMs = computeFcmTtlMs(notification.getType());
+        return now.isAfter(notification.getCreatedAt().plusNanos(ttlMs * 1_000_000L));
     }
 }
