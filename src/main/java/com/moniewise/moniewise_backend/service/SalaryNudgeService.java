@@ -99,7 +99,7 @@ public class SalaryNudgeService {
             candidates += userIds.size();
             for (Long userId : userIds) {
                 afterUserId = userId;
-                if (!isSelectedSendDay(userId, plan)) {
+                if (!hasScheduledSendDueByToday(userId, plan)) {
                     continue;
                 }
 
@@ -123,7 +123,7 @@ public class SalaryNudgeService {
         }
 
         if (sent > 0) {
-            logger.info("[SALARY-NUDGE] Sent {} {} push nudge(s), dueToday={}, candidates={}",
+            logger.info("[SALARY-NUDGE] Sent {} {} push nudge(s), dueOrCatchupToday={}, candidates={}",
                     sent, plan.window(), dueToday, candidates);
         }
     }
@@ -150,6 +150,10 @@ public class SalaryNudgeService {
                 plan.period().getYear(),
                 plan.period().getMonthValue(),
                 plan.today())) {
+            return false;
+        }
+
+        if (!shouldSendToday(userId, plan, alreadySent)) {
             return false;
         }
 
@@ -200,8 +204,41 @@ public class SalaryNudgeService {
         return Optional.empty();
     }
 
-    private boolean isSelectedSendDay(Long userId, NudgeWindowPlan plan) {
-        return selectedSendDays(userId, plan).contains(plan.today().getDayOfMonth());
+    private boolean hasScheduledSendDueByToday(Long userId, NudgeWindowPlan plan) {
+        int todayDay = plan.today().getDayOfMonth();
+        for (Integer day : selectedSendDays(userId, plan)) {
+            if (day <= todayDay) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean shouldSendToday(Long userId, NudgeWindowPlan plan, int alreadySent) {
+        List<Integer> selectedDays = selectedSendDays(userId, plan);
+        int todayDay = plan.today().getDayOfMonth();
+        if (selectedDays.contains(todayDay)) {
+            return true;
+        }
+
+        int scheduledSendsDueByToday = 0;
+        for (Integer day : selectedDays) {
+            if (day <= todayDay) {
+                scheduledSendsDueByToday++;
+            }
+        }
+
+        if (alreadySent < scheduledSendsDueByToday) {
+            return true;
+        }
+
+        int minimumSendCount = minimumSendCount(plan);
+        if (alreadySent >= minimumSendCount) {
+            return false;
+        }
+
+        int remainingDaysIncludingToday = remainingWindowDaysIncludingToday(plan);
+        return minimumSendCount - alreadySent >= remainingDaysIncludingToday;
     }
 
     private List<Integer> selectedSendDays(Long userId, NudgeWindowPlan plan) {
@@ -217,13 +254,22 @@ public class SalaryNudgeService {
         return selected;
     }
 
+    private int minimumSendCount(NudgeWindowPlan plan) {
+        int windowSize = windowDays(plan.window(), plan.period()).size();
+        if (windowSize <= 0) {
+            return 0;
+        }
+        int min = Math.max(1, Math.min(configuredMinPerWindow, MAX_ALLOWED_SENDS_PER_WINDOW));
+        return Math.min(min, windowSize);
+    }
+
     private int targetSendCount(Long userId, NudgeWindowPlan plan) {
         int windowSize = windowDays(plan.window(), plan.period()).size();
         if (windowSize <= 0) {
             return 0;
         }
 
-        int min = Math.max(1, Math.min(configuredMinPerWindow, MAX_ALLOWED_SENDS_PER_WINDOW));
+        int min = minimumSendCount(plan);
         int max = Math.max(min, Math.min(configuredMaxPerWindow, MAX_ALLOWED_SENDS_PER_WINDOW));
         max = Math.min(max, windowSize);
         min = Math.min(min, max);
@@ -232,6 +278,17 @@ public class SalaryNudgeService {
             return min;
         }
         return min + new Random(stableSeed(userId, plan, "count")).nextInt(max - min + 1);
+    }
+
+    private int remainingWindowDaysIncludingToday(NudgeWindowPlan plan) {
+        int todayDay = plan.today().getDayOfMonth();
+        int remaining = 0;
+        for (Integer day : windowDays(plan.window(), plan.period())) {
+            if (day >= todayDay) {
+                remaining++;
+            }
+        }
+        return remaining;
     }
 
     private List<Integer> windowDays(SalaryNudgeWindow window, YearMonth period) {
