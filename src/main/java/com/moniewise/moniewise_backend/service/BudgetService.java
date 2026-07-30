@@ -19,6 +19,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Lazy;
+import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -31,6 +32,7 @@ import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 import static com.moniewise.moniewise_backend.enums.TransactionType.*;
@@ -60,6 +62,11 @@ public class BudgetService {
 
     private final SystemConfigService systemConfig;
     private final MonnieCacheInvalidationService monnieCacheInvalidationService;
+    private final RedisTemplate<String, String> redisTemplate;
+
+    /** Short-lived cache for read-heavy GET /budgets/{id}/envelopes calls. */
+    private static final String ENVELOPES_CACHE_PREFIX = "envelopes:";
+    private static final long ENVELOPES_CACHE_TTL_SECS = 30;
 
     @Value("${moniewise.revenue.wallet.user-id}")
     private Long revenueWalletUserId;
@@ -75,7 +82,8 @@ public class BudgetService {
             @Lazy EnvelopeService envelopeService, BudgetLifeCycleManager budgetLifeCycleManager,
             ApplicationEventPublisher eventPublisher, SavingsService savingsService,
             SystemConfigService systemConfig,
-            MonnieCacheInvalidationService monnieCacheInvalidationService) {
+            MonnieCacheInvalidationService monnieCacheInvalidationService,
+            RedisTemplate<String, String> redisTemplate) {
         this.envelopeRepository = envelopeRepository;
         this.budgetRepository = budgetRepository;
         this.revenueLogRepository = revenueLogRepository;
@@ -91,6 +99,7 @@ public class BudgetService {
         this.savingsService = savingsService;
         this.systemConfig = systemConfig;
         this.monnieCacheInvalidationService = monnieCacheInvalidationService;
+        this.redisTemplate = redisTemplate;
     }
 
     private static final Logger logger = LoggerFactory.getLogger(BudgetService.class);
@@ -887,11 +896,40 @@ public class BudgetService {
             throw new SecurityException("You do not have permission to view this budget");
         }
 
+        String cacheKey = ENVELOPES_CACHE_PREFIX + budgetId;
+        try {
+            String cached = redisTemplate.opsForValue().get(cacheKey);
+            if (cached != null) {
+                return objectMapper.readValue(cached,
+                        objectMapper.getTypeFactory().constructCollectionType(List.class, EnvelopeResponse.class));
+            }
+        } catch (Exception e) {
+            logger.debug("[EnvelopeCache] Cache miss or read error for budgetId={}: {}", budgetId, e.getMessage());
+        }
+
         List<Envelope> envelopes = envelopeRepository.findByBudgetId(budgetId);
 
-        return envelopes.stream()
+        List<EnvelopeResponse> responses = envelopes.stream()
                 .map(envelope -> mapEnvelopeToResponse(envelope, budget, email))
                 .collect(Collectors.toList());
+
+        try {
+            redisTemplate.opsForValue().set(cacheKey, objectMapper.writeValueAsString(responses),
+                    ENVELOPES_CACHE_TTL_SECS, TimeUnit.SECONDS);
+        } catch (Exception e) {
+            logger.debug("[EnvelopeCache] Failed to write cache for budgetId={}: {}", budgetId, e.getMessage());
+        }
+
+        return responses;
+    }
+
+    /** Evict the cached envelope list after operations that change envelope state. */
+    private void evictEnvelopeCache(Long budgetId) {
+        try {
+            redisTemplate.delete(ENVELOPES_CACHE_PREFIX + budgetId);
+        } catch (Exception e) {
+            logger.debug("[EnvelopeCache] Failed to evict cache for budgetId={}: {}", budgetId, e.getMessage());
+        }
     }
 
     // 12/04/2025 -----> New: Top-up Budget
@@ -954,6 +992,8 @@ public class BudgetService {
             envelope.setRemainingAmount(envelope.getRemainingAmount().add(additionalAmount));
             envelopeRepository.save(envelope);
         }
+
+        evictEnvelopeCache(budgetId);
 
         // Update allocated amount
         BigDecimal newAllocatedAmount = budget.getAllocatedAmount().add(topupAmount);
@@ -1204,6 +1244,7 @@ public class BudgetService {
 
         envelope.setConditions(conditions);
         envelopeRepository.save(envelope);
+        evictEnvelopeCache(envelope.getBudget().getId());
         Budget budget = budgetRepository.findById(envelope.getBudget().getId())
                 .orElseThrow(() -> new IllegalStateException("Budget not found for envelope " + envelope.getId()));
 
@@ -1381,8 +1422,6 @@ public class BudgetService {
     }
 
     private EnvelopeResponse mapEnvelopeToResponse(Envelope envelope, Budget budget, String email) {
-        envelopeService.getRemainingLimit(envelope, email);
-
         BigDecimal periodLimit = getLimitFromConditions(envelope);
         BigDecimal periodRemaining = envelope.getRemainingAmount() != null
                 ? envelope.getRemainingAmount()

@@ -86,6 +86,12 @@ public class WalletService {
     private static final String WALLET_CACHE_PREFIX     = "wallet:snapshot:";
     private static final long   WALLET_CACHE_TTL_SECS   = 30;
     private static final String TOTAL_HOLDINGS_PREFIX   = "total_holdings:";
+
+    /** Caches Rubies name-enquiry results so the same (bankCode, accountNumber) pair
+     *  isn't resolved twice within a few minutes — e.g. once by the client's
+     *  preview call and again by processWithdrawal()'s server-side re-verification. */
+    private static final String RESOLVE_ACCOUNT_PREFIX  = "resolve_account:";
+    private static final long   RESOLVE_ACCOUNT_TTL_SECS = 300; // 5 minutes
     private static final String RUBIES_P2P_CREDIT_REF_PREFIX = "P2P-RB-CR-";
     private static final String RUBIES_P2P_SETTLEMENT_MARKER_PREFIX = "P2P-RB-WH-";
 
@@ -829,12 +835,33 @@ public class WalletService {
     }
 
     public String resolveBankAccount(Long userId, String bankCode, String accountNumber) {
+        String cacheKey = RESOLVE_ACCOUNT_PREFIX + bankCode + ":" + accountNumber;
+        try {
+            String cached = redisTemplate.opsForValue().get(cacheKey);
+            if (cached != null) {
+                return cached;
+            }
+        } catch (Exception e) {
+            logger.debug("[ResolveAccountCache] Cache miss or read error for {}:{}: {}",
+                    bankCode, accountNumber, e.getMessage());
+        }
+
         Wallet wallet = walletRepository.findByUserId(userId)
                 .orElse(null);
         PaymentGateway gateway = wallet != null
                 ? paymentGatewayResolver.resolveForWallet(wallet)
                 : paymentGatewayResolver.resolveDefault();
-        return gateway.resolveAccount(bankCode, accountNumber);
+        String accountName = gateway.resolveAccount(bankCode, accountNumber);
+
+        try {
+            redisTemplate.opsForValue().set(cacheKey, accountName,
+                    RESOLVE_ACCOUNT_TTL_SECS, TimeUnit.SECONDS);
+        } catch (Exception e) {
+            logger.debug("[ResolveAccountCache] Failed to cache {}:{}: {}",
+                    bankCode, accountNumber, e.getMessage());
+        }
+
+        return accountName;
     }
 
     // ── OPay-style bank auto-detect ────────────────────────────────────────────
@@ -1156,7 +1183,7 @@ public class WalletService {
             // unverified destination.
             String verifiedAccountName;
             try {
-                verifiedAccountName = gateway.resolveAccount(destBankCode, destAccountNumber);
+                verifiedAccountName = resolveBankAccount(userId, destBankCode, destAccountNumber);
             } catch (RuntimeException e) {
                 logger.warn("[Withdrawal] Could not re-verify destination account for user={} bank={} acct={}: {}",
                         userId, destBankCode, destAccountNumber, e.getMessage());

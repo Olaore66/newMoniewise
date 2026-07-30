@@ -9,6 +9,7 @@ import com.moniewise.moniewise_backend.psp.rubies.dto.*;
 import com.moniewise.moniewise_backend.service.SystemConfigService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
 import org.springframework.stereotype.Component;
@@ -48,6 +49,7 @@ public class RubiesGateway implements PaymentGateway {
     private static final Logger logger = LoggerFactory.getLogger(RubiesGateway.class);
 
     private final RestTemplate restTemplate;
+    private final RestTemplate nameEnquiryRestTemplate;
     private final ObjectMapper objectMapper;
     private final SystemConfigService systemConfig;
 
@@ -83,9 +85,11 @@ public class RubiesGateway implements PaymentGateway {
     private final ReentrantLock tokenRefreshLock = new ReentrantLock();
 
     public RubiesGateway(RestTemplate restTemplate,
+                         @Qualifier("nameEnquiryRestTemplate") RestTemplate nameEnquiryRestTemplate,
                          ObjectMapper objectMapper,
                          SystemConfigService systemConfig) {
         this.restTemplate = restTemplate;
+        this.nameEnquiryRestTemplate = nameEnquiryRestTemplate;
         this.objectMapper  = objectMapper;
         this.systemConfig  = systemConfig;
     }
@@ -273,7 +277,7 @@ public class RubiesGateway implements PaymentGateway {
 
         try {
             ResponseEntity<RubiesNameEnquiryResponse> response =
-                    restTemplate.exchange(
+                    nameEnquiryRestTemplate.exchange(
                             url,
                             HttpMethod.POST,
                             new HttpEntity<>(req, authHeaders()),

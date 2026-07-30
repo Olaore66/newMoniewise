@@ -45,6 +45,14 @@ public class MoniewiseBackendApplication extends SpringBootServletInitializer {
 		factory.setReadTimeout(45_000);     // 45 s — data purchases can be legitimately slow on the provider side
 		return new RestTemplate(factory);
 	}
+
+	@Bean(name = "nameEnquiryRestTemplate")
+	public RestTemplate nameEnquiryRestTemplate() {
+		SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
+		factory.setConnectTimeout(5_000);   // 5s connect
+		factory.setReadTimeout(10_000);     // 10s read — name enquiries should be fast
+		return new RestTemplate(factory);
+	}
 	@Bean
 	public WebMvcConfigurer corsConfigurer() {
 		return new WebMvcConfigurer() {

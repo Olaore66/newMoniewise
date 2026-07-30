@@ -85,7 +85,7 @@ public class UserPinController {
                 return ResponseEntity.ok(Map.of("valid", true));
             } else {
                 abuseProtectionService.recordFailure(AbuseProtectionService.PIN_VERIFY, throttleKey);
-                return ResponseEntity.status(401).body(Map.of("valid", false, "error", "Incorrect PIN"));
+                return ResponseEntity.badRequest().body(Map.of("valid", false, "error", "Incorrect PIN"));
             }
         } catch (IllegalStateException e) {
             abuseProtectionService.recordFailure(AbuseProtectionService.PIN_VERIFY, throttleKey);
