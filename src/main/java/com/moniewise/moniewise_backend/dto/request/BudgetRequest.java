@@ -32,4 +32,5 @@ public class BudgetRequest {
     @NotEmpty
     private List<EnvelopeRequest> envelopes;
 
+    private Boolean termsAccepted;
 }

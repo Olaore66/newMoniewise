@@ -1339,6 +1339,11 @@ public class EnvelopeService {
     }
 
     Envelope createEnvelopeEntity(EnvelopeRequest request, Budget budget, String email, boolean isSilent) {
+        return createEnvelopeEntity(request, budget, email, isSilent, false);
+    }
+
+    Envelope createEnvelopeEntity(EnvelopeRequest request, Budget budget, String email,
+                                  boolean isSilent, boolean deferScheduling) {
         BigDecimal amount;
         if (request.getExactAmount() != null && request.getExactAmount().compareTo(BigDecimal.ZERO) > 0) {
             amount = request.getExactAmount();
@@ -1415,9 +1420,11 @@ public class EnvelopeService {
             envelope.setRemainingAmount(startingPocket);
         }
 
-        envelopeRepository.save(envelope);
-
-        budgetLifeCycleManager.scheduleDynamicTasks(envelope);
+        if (deferScheduling) {
+            envelopeRepository.save(envelope);
+        } else {
+            budgetLifeCycleManager.scheduleDynamicTasks(envelope);
+        }
 
         if (!isSilent) {
             Map<String, Object> params = Map.of(

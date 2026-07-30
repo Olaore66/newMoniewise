@@ -495,6 +495,11 @@ public class BudgetService {
         User user = userService.findByEmail(email);
         logger.debug("Starting budget creation for {}", email);
 
+        if (request.getTermsAccepted() != null && request.getTermsAccepted()
+                && !Boolean.TRUE.equals(user.getTncAccepted())) {
+            userService.acceptTnc(email, true);
+        }
+
         // 0. CHECK ACTIVE BUDGET LIMIT (Max 10)
         List<Budget> userBudgets = budgetRepository.findByUserId(user.getId());
         long activeBudgetCount = userBudgets.stream()
@@ -647,14 +652,14 @@ public class BudgetService {
 
         Budget savedBudget = budgetRepository.save(budget);
 
-        // Create envelopes
+        // Create envelopes — deferScheduling=true so we batch-create scheduled tasks below
         List<Envelope> envelopes = new ArrayList<>();
         for (EnvelopeRequest envelopeRequest : request.getEnvelopes()) {
             BigDecimal correctAmount = finalAmounts.get(envelopeRequest);
             envelopeRequest.setExactAmount(correctAmount);
             envelopeRequest.setBudgetId(savedBudget.getId());
 
-            Envelope envelope = envelopeService.createEnvelopeEntity(envelopeRequest, savedBudget, email, true);
+            Envelope envelope = envelopeService.createEnvelopeEntity(envelopeRequest, savedBudget, email, true, true);
 
             // Savings sweep logic (unchanged)
             Map<String, Object> conditions = envelope.getConditions();
@@ -675,6 +680,18 @@ public class BudgetService {
             }
 
             envelopes.add(envelope);
+        }
+
+        // Batch-create disbursement tasks (replaces per-envelope scheduleDynamicTasks calls)
+        List<ScheduledTask> disbursementTasks = new ArrayList<>();
+        for (Envelope envelope : envelopes) {
+            LocalDateTime nextDisb = envelope.getNextDisbursementAt();
+            if (nextDisb != null && savedBudget.getStatus() == BudgetStatus.ACTIVE) {
+                disbursementTasks.add(new ScheduledTask(envelope.getId(), "DISBURSEMENT", nextDisb));
+            }
+        }
+        if (!disbursementTasks.isEmpty()) {
+            scheduledTaskRepository.saveAll(disbursementTasks);
         }
 
         savedBudget.clearEnvelopes();
