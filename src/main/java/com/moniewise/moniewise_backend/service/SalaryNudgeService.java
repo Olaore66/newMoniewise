@@ -38,8 +38,8 @@ public class SalaryNudgeService {
     private static final ZoneId LAGOS_ZONE = ZoneId.of("Africa/Lagos");
     private static final DateTimeFormatter MONTH_NAME_FORMATTER =
             DateTimeFormatter.ofPattern("MMMM", Locale.ENGLISH);
-    private static final int MAX_ALLOWED_SENDS_PER_WINDOW = 3;
-    private static final int COPY_VARIATION_COUNT = 5;
+    private static final int SALARY_WEEK_MAX_ALLOWED_SENDS_PER_WINDOW = 4;
+    private static final int POST_SALARY_MAX_ALLOWED_SENDS_PER_WINDOW = 3;
     private static final long PUSH_TTL_SECONDS = 86_400L;
     private static final String BUDGET_ROUTE = "/budgets";
 
@@ -60,7 +60,7 @@ public class SalaryNudgeService {
     @Value("${moniewise.engagement.salary-nudges.min-per-window:2}")
     private int configuredMinPerWindow;
 
-    @Value("${moniewise.engagement.salary-nudges.max-per-window:3}")
+    @Value("${moniewise.engagement.salary-nudges.max-per-window:4}")
     private int configuredMaxPerWindow;
 
     public SalaryNudgeService(UserRepository userRepository,
@@ -259,7 +259,7 @@ public class SalaryNudgeService {
         if (windowSize <= 0) {
             return 0;
         }
-        int min = Math.max(1, Math.min(configuredMinPerWindow, MAX_ALLOWED_SENDS_PER_WINDOW));
+        int min = Math.max(1, Math.min(configuredMinPerWindow, maxAllowedSends(plan)));
         return Math.min(min, windowSize);
     }
 
@@ -270,7 +270,7 @@ public class SalaryNudgeService {
         }
 
         int min = minimumSendCount(plan);
-        int max = Math.max(min, Math.min(configuredMaxPerWindow, MAX_ALLOWED_SENDS_PER_WINDOW));
+        int max = Math.max(min, Math.min(configuredMaxPerWindow, maxAllowedSends(plan)));
         max = Math.min(max, windowSize);
         min = Math.min(min, max);
 
@@ -278,6 +278,12 @@ public class SalaryNudgeService {
             return min;
         }
         return min + new Random(stableSeed(userId, plan, "count")).nextInt(max - min + 1);
+    }
+
+    private int maxAllowedSends(NudgeWindowPlan plan) {
+        return plan.window() == SalaryNudgeWindow.SALARY_WEEK
+                ? SALARY_WEEK_MAX_ALLOWED_SENDS_PER_WINDOW
+                : POST_SALARY_MAX_ALLOWED_SENDS_PER_WINDOW;
     }
 
     private int remainingWindowDaysIncludingToday(NudgeWindowPlan plan) {
@@ -317,7 +323,7 @@ public class SalaryNudgeService {
         if (period.getMonthValue() == 2) {
             return period.lengthOfMonth();
         }
-        return Math.min(30, period.lengthOfMonth());
+        return period.lengthOfMonth();
     }
 
     private int selectVariationIndex(Long userId, NudgeWindowPlan plan) {
@@ -334,9 +340,10 @@ public class SalaryNudgeService {
                 previousPeriod.getYear(),
                 previousPeriod.getMonthValue()));
 
-        List<Integer> primaryPool = variationPool(sentThisPeriod, sentPreviousPeriod);
+        int copyVariationCount = copyVariationCount(plan.window());
+        List<Integer> primaryPool = variationPool(sentThisPeriod, sentPreviousPeriod, copyVariationCount);
         List<Integer> candidates = primaryPool.isEmpty()
-                ? variationPool(sentThisPeriod, Set.of())
+                ? variationPool(sentThisPeriod, Set.of(), copyVariationCount)
                 : primaryPool;
 
         Collections.shuffle(candidates, new Random(stableSeed(
@@ -346,9 +353,11 @@ public class SalaryNudgeService {
         return candidates.get(0);
     }
 
-    private List<Integer> variationPool(Set<Integer> sentThisPeriod, Set<Integer> sentPreviousPeriod) {
+    private List<Integer> variationPool(Set<Integer> sentThisPeriod,
+                                        Set<Integer> sentPreviousPeriod,
+                                        int copyVariationCount) {
         List<Integer> pool = new ArrayList<>();
-        for (int i = 0; i < COPY_VARIATION_COUNT; i++) {
+        for (int i = 0; i < copyVariationCount; i++) {
             if (!sentThisPeriod.contains(i) && !sentPreviousPeriod.contains(i)) {
                 pool.add(i);
             }
@@ -361,6 +370,12 @@ public class SalaryNudgeService {
                 ? salaryWeekCopies()
                 : postSalaryCopies(monthName(period));
         return copies.get(Math.floorMod(variationIndex, copies.size()));
+    }
+
+    private int copyVariationCount(SalaryNudgeWindow window) {
+        return window == SalaryNudgeWindow.SALARY_WEEK
+                ? salaryWeekCopies().size()
+                : postSalaryCopies("").size();
     }
 
     private List<SalaryNudgeCopy> salaryWeekCopies() {
@@ -379,7 +394,10 @@ public class SalaryNudgeService {
                         "This month may have stretched you, but payday is near. Let Wisemonie help you turn relief into a simple spending plan."),
                 new SalaryNudgeCopy(
                         "Payday is approaching \u23F3",
-                        "Remember the promise to do better when money comes? Set the plan before the alert, and let Wisemonie hold the structure.")
+                        "Remember the promise to do better when money comes? Set the plan before the alert, and let Wisemonie hold the structure."),
+                new SalaryNudgeCopy(
+                        "One more calm check \uD83D\uDC40",
+                        "Salary is very close now. Before the month resets, decide what should go to bills, food, transport, savings and soft life.")
         );
     }
 

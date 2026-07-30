@@ -5,6 +5,7 @@ import com.moniewise.moniewise_backend.enums.NotificationType;
 import com.moniewise.moniewise_backend.enums.SavingsStatus;
 import com.moniewise.moniewise_backend.repository.SavingsGoalRepository;
 import com.moniewise.moniewise_backend.service.NotificationService;
+import com.moniewise.moniewise_backend.service.SavingsCacheService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
@@ -20,7 +21,9 @@ import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 @Component
 public class SavingsLifeCycleManager {
@@ -31,11 +34,14 @@ public class SavingsLifeCycleManager {
 
     private final SavingsGoalRepository savingsGoalRepository;
     private final NotificationService notificationService;
+    private final SavingsCacheService savingsCacheService;
 
     public SavingsLifeCycleManager(SavingsGoalRepository savingsGoalRepository,
-                                   NotificationService notificationService) {
+                                   NotificationService notificationService,
+                                   SavingsCacheService savingsCacheService) {
         this.savingsGoalRepository = savingsGoalRepository;
         this.notificationService = notificationService;
+        this.savingsCacheService = savingsCacheService;
     }
 
     /**
@@ -54,6 +60,7 @@ public class SavingsLifeCycleManager {
         int pageNumber = 0;
         int pageSize = 100; // Process 100 pots at a time to save RAM
         Page<SavingsGoal> page;
+        Set<Long> changedUserIds = new HashSet<>();
 
         do {
             Pageable pageable = PageRequest.of(pageNumber, pageSize);
@@ -115,6 +122,7 @@ public class SavingsLifeCycleManager {
 
                     goal.setLastProcessedDate(today);
                     savingsGoalRepository.save(goal);
+                    changedUserIds.add(goal.getUser().getId());
 
                 } catch (Exception e) {
                     // We catch inside the loop so one bad pot doesn't crash the whole batch
@@ -124,6 +132,8 @@ public class SavingsLifeCycleManager {
 
             pageNumber++;
         } while (page.hasNext());
+
+        savingsCacheService.evictUsersSavingsCachesAfterCommit(changedUserIds);
 
         logger.info("💤 Savings Engine finished daily processing.");
     }
@@ -141,6 +151,7 @@ public class SavingsLifeCycleManager {
         }
         goal.setStatus(SavingsStatus.MATURED);
         savingsGoalRepository.save(goal);
+        savingsCacheService.evictUserSavingsCachesAfterCommit(goal.getUser().getId());
 
         logger.info("🎉 Savings Goal '{}' (ID: {}) for User {} has MATURED!",
                 goal.getName(), goal.getId(), goal.getUser().getId());

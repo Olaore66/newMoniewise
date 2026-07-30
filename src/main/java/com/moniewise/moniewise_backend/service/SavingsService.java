@@ -37,6 +37,7 @@ public class SavingsService {
     private final TransactionLogRepository transactionLogRepository;
     private final EnvelopeRepository envelopeRepository;
     private final NotificationService notificationService;
+    private final SavingsCacheService savingsCacheService;
     private final SavingsLifeCycleManager savingsLifeCycleManager;
     private final UserService userService;
     private final PaymentGatewayResolver paymentGatewayResolver;
@@ -52,11 +53,12 @@ public class SavingsService {
     public SavingsService(SavingsGoalRepository savingsGoalRepository,
                           UserRepository userRepository,
                           WalletService walletService,
-                          TransactionLogRepository transactionLogRepository,
-                          EnvelopeRepository envelopeRepository,
-                          NotificationService notificationService,
-                          SavingsLifeCycleManager savingsLifeCycleManager,
-                          UserService userService,
+                           TransactionLogRepository transactionLogRepository,
+                           EnvelopeRepository envelopeRepository,
+                           NotificationService notificationService,
+                           SavingsCacheService savingsCacheService,
+                           SavingsLifeCycleManager savingsLifeCycleManager,
+                           UserService userService,
                           PaymentGatewayResolver paymentGatewayResolver,
                           BeneficiaryService beneficiaryService,
                           MarkupCalculatorService markupCalculatorService) {
@@ -66,6 +68,7 @@ public class SavingsService {
         this.transactionLogRepository = transactionLogRepository;
         this.envelopeRepository = envelopeRepository;
         this.notificationService = notificationService;
+        this.savingsCacheService = savingsCacheService;
         this.savingsLifeCycleManager = savingsLifeCycleManager;
         this.userService = userService;
         this.paymentGatewayResolver = paymentGatewayResolver;
@@ -155,6 +158,7 @@ public class SavingsService {
         }
 
         SavingsGoal saved = savingsGoalRepository.save(goal);
+        savingsCacheService.evictUserSavingsCachesAfterCommit(userId);
         logger.info("Created Savings Goal '{}' for User {} with initial balance ₦{}", name, userId, saved.getCurrentBalance());
 
         boolean funded = initialDeposit != null && initialDeposit.compareTo(BigDecimal.ZERO) > 0;
@@ -189,6 +193,7 @@ public class SavingsService {
 
         goal.setCurrentBalance(goal.getCurrentBalance().add(amount));
         savingsGoalRepository.save(goal);
+        savingsCacheService.evictUserSavingsCachesAfterCommit(userId);
 
         TransactionLog log = new TransactionLog();
         log.setUserId(userId);
@@ -212,8 +217,15 @@ public class SavingsService {
 
     @Transactional
     public List<SavingsGoal> getActiveSavingsForUser(Long userId) {
+        var cached = savingsCacheService.getActiveSavings(userId);
+        if (cached.isPresent()) {
+            return cached.get();
+        }
+
         reconcileMaturedGoals(userId);
-        return savingsGoalRepository.findByUserIdAndStatus(userId, SavingsStatus.ACTIVE);
+        List<SavingsGoal> goals = savingsGoalRepository.findByUserIdAndStatusOrderByCreatedAtDesc(userId, SavingsStatus.ACTIVE);
+        savingsCacheService.putActiveSavings(userId, goals);
+        return goals;
     }
 
     @Transactional(rollbackFor = Exception.class)
@@ -253,8 +265,15 @@ public class SavingsService {
 
     @Transactional
     public List<SavingsGoal> getAllSavingsForUser(Long userId) {
+        var cached = savingsCacheService.getAllSavings(userId);
+        if (cached.isPresent()) {
+            return cached.get();
+        }
+
         reconcileMaturedGoals(userId);
-        return savingsGoalRepository.findByUserIdOrderByCreatedAtDesc(userId);
+        List<SavingsGoal> goals = savingsGoalRepository.findByUserIdOrderByCreatedAtDesc(userId);
+        savingsCacheService.putAllSavings(userId, goals);
+        return goals;
     }
 
     /** Full withdrawal — kept for existing callers; delegates to the amount-aware version. */
@@ -333,6 +352,7 @@ public class SavingsService {
             goal.setStatus(SavingsStatus.WITHDRAWN);
         }
         SavingsGoal saved = savingsGoalRepository.save(goal);
+        savingsCacheService.evictUserSavingsCachesAfterCommit(userId);
 
         logger.info("User {} withdrew ₦{} ({}) from savings goal {} ({})",
                 userId, amount, isFull ? "full" : "partial", savingsGoalId, goal.getName());
@@ -386,6 +406,7 @@ public class SavingsService {
         goal.setCurrentBalance(BigDecimal.ZERO);
         goal.setStatus(SavingsStatus.CANCELLED);
         SavingsGoal saved = savingsGoalRepository.save(goal);
+        savingsCacheService.evictUserSavingsCachesAfterCommit(userId);
 
         logger.info("User {} early-broke ACTIVE savings goal {} ({}) on account closure — ₦{} principal to wallet, ₦{} bonus forfeited",
                 userId, savingsGoalId, goal.getName(), principal, forfeitedBonus);
@@ -517,6 +538,7 @@ public class SavingsService {
             goal.setStatus(SavingsStatus.WITHDRAWN);
         }
         SavingsGoal saved = savingsGoalRepository.save(goal);
+        savingsCacheService.evictUserSavingsCachesAfterCommit(userId);
 
         String baseRef = providerReference != null && !providerReference.isBlank()
                 ? providerReference
@@ -676,6 +698,7 @@ public class SavingsService {
             goal.setStatus(SavingsStatus.WITHDRAWN);
         }
         savingsGoalRepository.save(goal);
+        savingsCacheService.evictUserSavingsCachesAfterCommit(userId);
 
         // 2) Credit the wallet with amount + flatFee so processWithdrawal can debit
         //    the exact totalDebit (amount + nipFee + revenue) without shortfall.
@@ -726,6 +749,7 @@ public class SavingsService {
         // 2. Add to Savings Pot
         goal.setCurrentBalance(goal.getCurrentBalance().add(amount));
         SavingsGoal updatedGoal = savingsGoalRepository.save(goal);
+        savingsCacheService.evictUserSavingsCachesAfterCommit(userId);
 
         // 3. Log the transaction
         TransactionLog log = new TransactionLog();

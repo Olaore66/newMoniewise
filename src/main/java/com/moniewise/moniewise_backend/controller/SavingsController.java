@@ -7,6 +7,7 @@ import com.moniewise.moniewise_backend.dto.request.WithdrawSavingsRequest;
 import com.moniewise.moniewise_backend.dto.request.WithdrawalRequest;
 import com.moniewise.moniewise_backend.entity.SavingsGoal;
 import com.moniewise.moniewise_backend.entity.User;
+import com.moniewise.moniewise_backend.security.AuthenticatedUserHolder;
 import com.moniewise.moniewise_backend.service.MarkupCalculatorService;
 import com.moniewise.moniewise_backend.service.SavingsService;
 import com.moniewise.moniewise_backend.service.UserService;
@@ -31,12 +32,19 @@ public class SavingsController {
     private final SavingsService savingsService;
     private final UserService userService;
     private final MarkupCalculatorService markupCalculatorService;
+    private final AuthenticatedUserHolder userHolder;
 
     public SavingsController(SavingsService savingsService, UserService userService,
-                             MarkupCalculatorService markupCalculatorService) {
+                             MarkupCalculatorService markupCalculatorService,
+                             AuthenticatedUserHolder userHolder) {
         this.savingsService = savingsService;
         this.userService = userService;
         this.markupCalculatorService = markupCalculatorService;
+        this.userHolder = userHolder;
+    }
+
+    private User currentUser(String email) {
+        return userHolder.isPresent() ? userHolder.getUser() : userService.findByEmail(email);
     }
 
     /**
@@ -48,7 +56,7 @@ public class SavingsController {
             Principal principal) {
         try {
             // 1. Get the securely authenticated user
-            User user = userService.findByEmail(principal.getName());
+            User user = currentUser(principal.getName());
 
             // 2. Call the Wealth Engine
             SavingsGoal createdGoal = savingsService.createSavingsGoal(
@@ -78,7 +86,7 @@ public class SavingsController {
     @GetMapping
     public ResponseEntity<?> getAllSavings(Principal principal) {
         try {
-            User user = userService.findByEmail(principal.getName());
+            User user = currentUser(principal.getName());
             return ResponseEntity.ok(savingsService.getAllSavingsForUser(user.getId()));
         } catch (Exception e) {
             logger.error("Failed to fetch savings for {}", principal.getName(), e);
@@ -92,7 +100,7 @@ public class SavingsController {
     @GetMapping("/active")
     public ResponseEntity<?> getActiveSavings(Principal principal) {
         try {
-            User user = userService.findByEmail(principal.getName());
+            User user = currentUser(principal.getName());
             return ResponseEntity.ok(savingsService.getActiveSavingsForUser(user.getId()));
         } catch (Exception e) {
             logger.error("Failed to fetch active savings for {}", principal.getName(), e);
@@ -110,7 +118,7 @@ public class SavingsController {
             @RequestBody(required = false) WithdrawSavingsRequest body,
             Principal principal) {
         try {
-            User user = userService.findByEmail(principal.getName());
+            User user = currentUser(principal.getName());
             SavingsGoal result = savingsService.withdrawSavings(
                     user.getId(), savingsGoalId, body != null ? body.getAmount() : null);
             return ResponseEntity.ok(result);
@@ -134,7 +142,7 @@ public class SavingsController {
             @RequestBody WithdrawalRequest request,
             Principal principal) {
         try {
-            User user = userService.findByEmail(principal.getName());
+            User user = currentUser(principal.getName());
             SavingsGoal result = savingsService.transferSavingsToBank(user.getId(), savingsGoalId, request);
             return ResponseEntity.ok(result);
         } catch (SecurityException | IllegalArgumentException | IllegalStateException e) {
@@ -155,7 +163,7 @@ public class SavingsController {
             @RequestBody SavingsP2PTransferRequest request,
             Principal principal) {
         try {
-            User user = userService.findByEmail(principal.getName());
+            User user = currentUser(principal.getName());
             SavingsGoal result = savingsService.transferSavingsToUser(user.getId(), savingsGoalId, request);
             return ResponseEntity.ok(result);
         } catch (SecurityException | IllegalArgumentException | IllegalStateException e) {
@@ -196,7 +204,7 @@ public class SavingsController {
             Principal principal) {
         try {
             // 1. Authenticate user
-            User user = userService.findByEmail(principal.getName());
+            User user = currentUser(principal.getName());
 
             // 2. Execute manual top-up
             SavingsGoal updatedGoal = savingsService.manualTopUp(

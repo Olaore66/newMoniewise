@@ -33,6 +33,8 @@ public interface SavingsGoalRepository extends JpaRepository<SavingsGoal, Long> 
     // For the Mobile Dashboard: Get only active pots for a specific user
     List<SavingsGoal> findByUserIdAndStatus(Long userId, SavingsStatus status);
 
+    List<SavingsGoal> findByUserIdAndStatusOrderByCreatedAtDesc(Long userId, SavingsStatus status);
+
     // For the Backend CRON Engine: Fetch ALL active pots globally to calculate daily interest
     Page<SavingsGoal> findByStatus(SavingsStatus status, Pageable pageable);
     
