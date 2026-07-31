@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title th:text="${subject}">Wisemonie</title>
+</head>
+<body style="margin:0;background:#f5f7f5;font-family:Arial,Helvetica,sans-serif;color:#18342f;">
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f5f7f5;padding:24px 12px;">
+    <tr>
+        <td align="center">
+            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:560px;background:#ffffff;border-radius:16px;overflow:hidden;border:1px solid #dfe8e3;">
+                <tr>
+                    <td style="padding:28px 28px 10px;">
+                        <img th:src="${logoUrl}" alt="Wisemonie" style="height:36px;display:block;margin-bottom:24px;">
+                        <div style="font-size:13px;letter-spacing:.04em;text-transform:uppercase;color:#2b8068;font-weight:700;" th:text="${tag}">Money check</div>
+                        <h1 style="font-size:26px;line-height:1.25;margin:12px 0 12px;color:#0e2b25;" th:text="${headline}">A calmer money week</h1>
+                        <p style="font-size:16px;line-height:1.7;margin:0 0 14px;color:#37534c;">
+                            Hi <span th:text="${firstName}">there</span>,
+                        </p>
+                        <p style="font-size:16px;line-height:1.7;margin:0 0 14px;color:#37534c;" th:text="${body}">
+                            Your money can feel easier when it has a plan.
+                        </p>
+                        <p style="font-size:15px;line-height:1.7;margin:0 0 22px;color:#5c726c;" th:text="${footerNote}">
+                            Wisemonie is here to help you spend with less pressure.
+                        </p>
+                        <a th:href="${ctaUrl}" style="display:inline-block;background:#0c7c59;color:#ffffff;text-decoration:none;font-weight:700;border-radius:8px;padding:13px 18px;" th:text="${ctaLabel}">Open Wisemonie</a>
+                    </td>
+                </tr>
+                <tr>
+                    <td style="padding:20px 28px 28px;color:#70857f;font-size:12px;line-height:1.6;">
+                        You are receiving this because you use Wisemonie to plan and manage your money.
+                    </td>
+                </tr>
+            </table>
+        </td>
+    </tr>
+</table>
+</body>
+</html>

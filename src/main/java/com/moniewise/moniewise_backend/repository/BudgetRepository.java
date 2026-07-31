@@ -20,6 +20,8 @@ public interface BudgetRepository extends JpaRepository<Budget, Long> {
 
     List<Budget> findByUserIdAndStatus(Long userId, BudgetStatus status);
 
+    boolean existsByUserIdAndStatus(Long userId, BudgetStatus status);
+
     @Query(value = "SELECT CURRENT_TIMESTAMP AT TIME ZONE 'Africa/Lagos'", nativeQuery = true)
     LocalDateTime getCurrentLagosTime();
 

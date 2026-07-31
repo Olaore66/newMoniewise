@@ -38,6 +38,9 @@ public enum NotificationType {
     DISBURSEMENT_REMINDER,
     SALARY_WEEK_NUDGE,
     POST_SALARY_NUDGE,
+    MID_MONTH_NUDGE,
+    SPECIAL_OCCASION_NUDGE,
+    BIRTHDAY_NUDGE,
     SYSTEM,
     BUDGET_CREATION_SUCCESS,
     WALLET_DEPOSIT,
@@ -56,6 +59,9 @@ public enum NotificationType {
     AIRTIME_PURCHASE_FAILED,
     DATA_PURCHASE_SUCCESS,
     DATA_PURCHASE_FAILED,
+
+    // ── Onboarding recovery ────────────────────────────────────────────────
+    ONBOARDING_REMINDER,
 
     // ── Admin / ops alerts ──────────────────────────────────────────────────
     ADMIN_PAYEELORD_LOW_BALANCE

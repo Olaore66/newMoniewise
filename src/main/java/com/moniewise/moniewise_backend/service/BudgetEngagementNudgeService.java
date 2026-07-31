@@ -8,6 +8,8 @@ import com.moniewise.moniewise_backend.enums.BudgetEngagementNudgeType;
 import com.moniewise.moniewise_backend.enums.BudgetStatus;
 import com.moniewise.moniewise_backend.repository.BudgetEngagementNudgeRepository;
 import com.moniewise.moniewise_backend.repository.BudgetRepository;
+import com.moniewise.moniewise_backend.repository.EngagementNudgeNotificationRepository;
+import com.moniewise.moniewise_backend.repository.SalaryNudgeNotificationRepository;
 import com.moniewise.moniewise_backend.repository.UserRepository;
 import com.moniewise.moniewise_backend.repository.WalletRepository;
 import org.slf4j.Logger;
@@ -35,11 +37,15 @@ public class BudgetEngagementNudgeService {
     private static final int FUNDED_WALLET_DELAY_DAYS = 2;
     private static final int COMPLETED_BUDGET_DELAY_DAYS = 5;
     private static final int REPEAT_INTERVAL_DAYS = 5;
+    private static final int LEGACY_SENDS_PER_RUN = 2;
+    private static final int MAX_TRACKED_NUDGES_PER_DAY = 2;
 
     private final UserRepository userRepository;
     private final WalletRepository walletRepository;
     private final BudgetRepository budgetRepository;
     private final BudgetEngagementNudgeRepository nudgeRepository;
+    private final EngagementNudgeNotificationRepository engagementNudgeRepository;
+    private final SalaryNudgeNotificationRepository salaryNudgeRepository;
     private final NotificationService notificationService;
 
     @Value("${moniewise.engagement.budget-nudges.enabled:true}")
@@ -52,11 +58,15 @@ public class BudgetEngagementNudgeService {
                                         WalletRepository walletRepository,
                                         BudgetRepository budgetRepository,
                                         BudgetEngagementNudgeRepository nudgeRepository,
+                                        EngagementNudgeNotificationRepository engagementNudgeRepository,
+                                        SalaryNudgeNotificationRepository salaryNudgeRepository,
                                         NotificationService notificationService) {
         this.userRepository = userRepository;
         this.walletRepository = walletRepository;
         this.budgetRepository = budgetRepository;
         this.nudgeRepository = nudgeRepository;
+        this.engagementNudgeRepository = engagementNudgeRepository;
+        this.salaryNudgeRepository = salaryNudgeRepository;
         this.notificationService = notificationService;
     }
 
@@ -116,6 +126,9 @@ public class BudgetEngagementNudgeService {
             if (contactedThisRun.contains(user.getId()) || wasContactedRecently(user.getId(), now)) {
                 continue;
             }
+            if (!hasDailyRoomForLegacyNudge(user.getId(), now)) {
+                continue;
+            }
 
             try {
                 BigDecimal walletBalance = walletBalanceFor(user.getId());
@@ -148,6 +161,13 @@ public class BudgetEngagementNudgeService {
                 .map(nudge -> nudge.getLastSentAt() != null
                         && nudge.getLastSentAt().isAfter(now.minusDays(REPEAT_INTERVAL_DAYS)))
                 .orElse(false);
+    }
+
+    private boolean hasDailyRoomForLegacyNudge(Long userId, LocalDateTime now) {
+        LocalDate today = now.toLocalDate();
+        int trackedToday = engagementNudgeRepository.countByUserIdAndSentDate(userId, today)
+                + salaryNudgeRepository.countByUserIdAndSentDate(userId, today);
+        return trackedToday + LEGACY_SENDS_PER_RUN <= MAX_TRACKED_NUDGES_PER_DAY;
     }
 
     private void recordSend(Long userId,

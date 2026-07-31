@@ -24,6 +24,8 @@ public interface SalaryNudgeNotificationRepository extends JpaRepository<SalaryN
             int periodMonth,
             LocalDate sentDate);
 
+    int countByUserIdAndSentDate(Long userId, LocalDate sentDate);
+
     @Query("""
             SELECT n.variationIndex
             FROM SalaryNudgeNotification n

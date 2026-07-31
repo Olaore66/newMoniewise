@@ -26,7 +26,8 @@ public class UserResponse { // Renamed to UserResponse to avoid confusion
     private boolean isVerified;
     private String profileImageUrl;
     private String gender; // Top-level so Flutter UserProfile.fromJson reads it
-    
+    private boolean needsProfileUpdate;
+
     // ✅ The Contract: Always return a Wallet object, never null.
     private WalletInfo wallet;
 
@@ -57,6 +58,11 @@ public class UserResponse { // Renamed to UserResponse to avoid confusion
 
         this.profileData = pd;
 
+        String fn = pd.getOrDefault("firstName", "").toString();
+        String ln = pd.getOrDefault("lastName", "").toString();
+        this.needsProfileUpdate = isBlank(user.getPhone()) || isBlank(user.getBvn())
+                || isBlank(fn) || isBlank(ln);
+
         // 🛡️ Production Logic: Handle "Empty Shell" Users
         if (walletEntity != null) {
             this.wallet = new WalletInfo(
@@ -69,6 +75,10 @@ public class UserResponse { // Renamed to UserResponse to avoid confusion
             // ✅ Default State for Google Users
             this.wallet = new WalletInfo("PENDING_SETUP", "PENDING_SETUP", "0.00");
         }
+    }
+
+    private static boolean isBlank(String value) {
+        return value == null || value.trim().isEmpty();
     }
 
     @Getter

@@ -311,6 +311,75 @@ List<UserSummary> searchUsers(@Param("query") String query, Pageable pageable);
             @Param("afterUserId") Long afterUserId,
             @Param("limit") int limit);
 
+    @Query(value = """
+            SELECT DISTINCT u.*
+            FROM users u
+            JOIN wallets w ON w.user_id = u.id
+            JOIN budgets b ON b.user_id = u.id
+            WHERE u.is_deleted = false
+              AND u.id > :afterUserId
+              AND u.is_verified = true
+              AND coalesce(u.test_account, false) = false
+              AND w.status = 'ACTIVE'
+              AND coalesce(w.is_revenue_wallet, false) = false
+              AND w.account_number IS NOT NULL
+              AND btrim(w.account_number) <> ''
+              AND b.status = 'ACTIVE'
+            ORDER BY u.id ASC
+            LIMIT :limit
+            """, nativeQuery = true)
+    List<User> findActiveBudgetEngagementUsersAfter(
+            @Param("afterUserId") Long afterUserId,
+            @Param("limit") int limit);
+
+    @Query(value = """
+            SELECT DISTINCT u.*
+            FROM users u
+            JOIN wallets w ON w.user_id = u.id
+            WHERE u.is_deleted = false
+              AND u.id > :afterUserId
+              AND u.is_verified = true
+              AND coalesce(u.test_account, false) = false
+              AND w.status = 'ACTIVE'
+              AND coalesce(w.is_revenue_wallet, false) = false
+              AND w.account_number IS NOT NULL
+              AND btrim(w.account_number) <> ''
+              AND NOT EXISTS (
+                    SELECT 1
+                    FROM budgets b_active
+                    WHERE b_active.user_id = u.id
+                      AND b_active.status = 'ACTIVE'
+              )
+            ORDER BY u.id ASC
+            LIMIT :limit
+            """, nativeQuery = true)
+    List<User> findNoActiveBudgetEngagementUsersAfter(
+            @Param("afterUserId") Long afterUserId,
+            @Param("limit") int limit);
+
+    @Query(value = """
+            SELECT DISTINCT u.*
+            FROM users u
+            JOIN wallets w ON w.user_id = u.id
+            WHERE u.is_deleted = false
+              AND u.id > :afterUserId
+              AND u.is_verified = true
+              AND coalesce(u.test_account, false) = false
+              AND w.status = 'ACTIVE'
+              AND coalesce(w.is_revenue_wallet, false) = false
+              AND w.account_number IS NOT NULL
+              AND btrim(w.account_number) <> ''
+              AND u.email IS NOT NULL
+              AND btrim(u.email) <> ''
+              AND substring(u.profile_data ->> 'dateOfBirth' from 6 for 5) = :monthDay
+            ORDER BY u.id ASC
+            LIMIT :limit
+            """, nativeQuery = true)
+    List<User> findBirthdayWalletUsersAfter(
+            @Param("monthDay") String monthDay,
+            @Param("afterUserId") Long afterUserId,
+            @Param("limit") int limit);
+
     Optional<User> findByEmail(String email);
 
     /**

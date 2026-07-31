@@ -239,7 +239,8 @@ public class NotificationService {
         return switch (type) {
             // âŒ DO NOT SAVE TO INBOX (Transient, Nudges, or Bundled Noise)
             case PRE_DISBURSEMENT, DISBURSEMENT_REMINDER, POSITIVE_NUDGE, BUDGET_ENGAGEMENT_NUDGE,
-                    SALARY_WEEK_NUDGE, POST_SALARY_NUDGE, WELCOME,
+                    SALARY_WEEK_NUDGE, POST_SALARY_NUDGE, MID_MONTH_NUDGE,
+                    SPECIAL_OCCASION_NUDGE, BIRTHDAY_NUDGE, ONBOARDING_REMINDER, WELCOME,
                     BUDGET_CREATION_FEE, ENVELOPE_CREATED -> false; // <--- Added here!
 
             // âœ… SAVE TO INBOX (Financial / Important)
@@ -502,6 +503,7 @@ public class NotificationService {
         if (type == null) return 86_400_000L;
         return switch (type) {
             case PRE_DISBURSEMENT, DISBURSEMENT_REMINDER                  -> 2_700_000L;   // 45 min
+            case ONBOARDING_REMINDER                                      -> 7_200_000L;   // 2 h
             case DISBURSEMENT_SUCCESS, DISBURSEMENT_READY, DISBURSEMENT,
                  WALLET_FUNDED, WALLET_DEPOSIT, EXTERNAL_TRANSFER,
                  ENVELOPE_TRANSFER, REFUND_ISSUED, DISBURSEMENT_REFUNDED,
@@ -658,6 +660,10 @@ public class NotificationService {
             case WELCOME -> "Welcome to Wisemonie 👋";
             case SALARY_WEEK_NUDGE -> "Happy salary week! \uD83D\uDE42";
             case POST_SALARY_NUDGE -> "Plan the month \uD83D\uDE0A";
+            case MID_MONTH_NUDGE -> "Money check \uD83E\uDDED";
+            case SPECIAL_OCCASION_NUDGE -> "Wisemonie note \uD83C\uDF89";
+            case BIRTHDAY_NUDGE -> "Happy birthday \uD83C\uDF82";
+            case ONBOARDING_REMINDER -> "Complete your profile \uD83D\uDCDD";
             case SYSTEM -> "System Update 📢";
             case POSITIVE_NUDGE -> "Keep it up! 💪";
             default -> "Wisemonie Notification";
@@ -702,7 +708,8 @@ public class NotificationService {
                     EXPIRED_DISBURSEMENT, DISBURSEMENT_FAILED,
                     SAVINGS_MATURING_SOON,
                     BUDGET_ENGAGEMENT_NUDGE,
-                    SALARY_WEEK_NUDGE, POST_SALARY_NUDGE,
+                    SALARY_WEEK_NUDGE, POST_SALARY_NUDGE, MID_MONTH_NUDGE,
+                    SPECIAL_OCCASION_NUDGE, BIRTHDAY_NUDGE, ONBOARDING_REMINDER,
                     WELCOME -> NotificationPriority.MEDIUM;
             default -> NotificationPriority.LOW;
         };
@@ -884,6 +891,55 @@ public class NotificationService {
             outboxEventRepository.save(event);
         } catch (Exception e) {
             logger.error("Failed to enqueue budget engagement push {} for user {}", safeType, userId, e);
+        }
+    }
+
+    @Async
+    public void sendEngagementNudgeEmail(String email,
+                                         String firstName,
+                                         String subject,
+                                         String tag,
+                                         String headline,
+                                         String body,
+                                         String footerNote,
+                                         String ctaLabel,
+                                         String ctaUrl) {
+        if ("stub".equals(activeProfile) || mailSender == null) {
+            logger.info("[STUB] Sending engagement nudge email '{}' to {}", subject, email);
+            return;
+        }
+
+        try {
+            Context context = new Context();
+            context.setVariable("logoUrl", logoUrl());
+            context.setVariable("firstName", firstName != null && !firstName.isBlank() ? firstName : "there");
+            context.setVariable("subject", subject != null && !subject.isBlank() ? subject : "Wisemonie");
+            context.setVariable("tag", tag != null && !tag.isBlank() ? tag : "Money check");
+            context.setVariable("headline", headline != null && !headline.isBlank() ? headline : "A calmer money week");
+            context.setVariable("body", body != null && !body.isBlank()
+                    ? body
+                    : "Your money can feel easier when it has a clear plan.");
+            context.setVariable("footerNote", footerNote != null && !footerNote.isBlank()
+                    ? footerNote
+                    : "Wisemonie is here to help you spend with less pressure.");
+            context.setVariable("ctaLabel", ctaLabel != null && !ctaLabel.isBlank() ? ctaLabel : "Open Wisemonie");
+            context.setVariable("ctaUrl", ctaUrl != null && !ctaUrl.isBlank() ? ctaUrl : appBaseUrl);
+
+            String htmlContent = templateEngine.process("engagement-nudge", context);
+
+            MimeMessage mimeMessage = mailSender.createMimeMessage();
+            MimeMessageHelper helper = new MimeMessageHelper(mimeMessage, true);
+
+            helper.setFrom(fromEmail);
+            helper.setTo(email);
+            helper.setSubject(subject != null && !subject.isBlank() ? subject : "Wisemonie");
+            helper.setText(htmlContent, true);
+            attachLogo(helper);
+
+            mailSender.send(mimeMessage);
+            logger.info("Sent engagement nudge email '{}' to {}", subject, email);
+        } catch (Exception e) {
+            logger.error("Failed to send engagement nudge email '{}' to {}", subject, email, e);
         }
     }
 

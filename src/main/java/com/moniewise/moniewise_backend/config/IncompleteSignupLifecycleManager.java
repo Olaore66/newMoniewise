@@ -1,7 +1,9 @@
 package com.moniewise.moniewise_backend.config;
 
 import com.moniewise.moniewise_backend.entity.User;
+import com.moniewise.moniewise_backend.enums.NotificationType;
 import com.moniewise.moniewise_backend.repository.UserRepository;
+import com.moniewise.moniewise_backend.service.AuthSessionService;
 import com.moniewise.moniewise_backend.service.NotificationService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -28,9 +30,10 @@ import java.util.Map;
  *
  * <ul>
  *   <li><b>Day 1</b>  — first "complete your profile" nudge (~24h after signup)</li>
- *   <li><b>Day 6, 11, 16, 21, 26</b> — gentle follow-ups every 5 days
- *       (the last two are flagged "urgent" so the email shows a soft warning
+ *   <li><b>Day 2–30</b> — daily email + push reminders
+ *       (the last 5 are flagged "urgent" so the email shows a soft warning
  *       that the slot will be released soon)</li>
+ *   <li><b>Every 2 hours</b> — FCM-only push nudges between the daily emails</li>
  *   <li><b>Day 30</b> — if STILL incomplete, the registration is purged along
  *       with every dependent row, in the same leaf-to-root order as the
  *       manual cleanup script (transaction history → budgets/envelopes →
@@ -51,7 +54,7 @@ public class IncompleteSignupLifecycleManager {
     private static final int FIRST_REMINDER_DAY = 1;
 
     /** Every nudge after the first one is spaced this many days apart. */
-    private static final int REMINDER_INTERVAL_DAYS = 5;
+    private static final int REMINDER_INTERVAL_DAYS = 1;
 
     /** Show the "your slot will be released soon" notice once we're this close to the purge. */
     private static final int URGENCY_THRESHOLD_DAYS = 5;
@@ -59,15 +62,21 @@ public class IncompleteSignupLifecycleManager {
     /** Registrations that are still incomplete after this many days get purged. */
     private static final int PURGE_AFTER_DAYS = 30;
 
+    private static final String COMPLETE_PROFILE_ROUTE = "/complete_profile/";
+    private static final long PUSH_TTL_SECONDS = 7_200L;
+
     private final UserRepository userRepository;
     private final NotificationService notificationService;
+    private final AuthSessionService authSessionService;
     private final NamedParameterJdbcTemplate jdbc;
 
     public IncompleteSignupLifecycleManager(UserRepository userRepository,
                                              NotificationService notificationService,
+                                             AuthSessionService authSessionService,
                                              NamedParameterJdbcTemplate jdbc) {
         this.userRepository = userRepository;
         this.notificationService = notificationService;
+        this.authSessionService = authSessionService;
         this.jdbc = jdbc;
     }
 
@@ -143,13 +152,78 @@ public class IncompleteSignupLifecycleManager {
                 urgent
         );
 
+        sendPushIfReachable(user, urgent);
+
         user.setOnboardingReminderCount(user.getOnboardingReminderCount() + 1);
         user.setLastOnboardingReminderAt(LocalDateTime.now());
         userRepository.save(user);
 
-        logger.info("[ONBOARDING] Sent reminder #{} to {} (day {} since signup, {} day(s) until purge{})",
+        logger.info("[ONBOARDING] Sent reminder #{} (email+push) to {} (day {} since signup, {} day(s) until purge{})",
                 user.getOnboardingReminderCount(), user.getEmail(), daysSinceSignup, daysRemaining,
                 urgent ? ", URGENT" : "");
+    }
+
+    /**
+     * Runs every 2 hours — sends FCM-only push to incomplete users so they
+     * re-open the app and finish onboarding. No email on this cadence.
+     */
+    @Scheduled(cron = "0 0 */2 * * ?")
+    public void pushIncompleteSignups() {
+        List<User> incomplete = userRepository.findIncompleteSignups();
+        if (incomplete.isEmpty()) {
+            return;
+        }
+
+        int sent = 0;
+        for (User user : incomplete) {
+            long hoursSinceSignup = ChronoUnit.HOURS.between(user.getCreatedAt(), LocalDateTime.now());
+            if (hoursSinceSignup < 1) {
+                continue;
+            }
+            try {
+                if (sendPushIfReachable(user, false)) {
+                    sent++;
+                }
+            } catch (Exception e) {
+                logger.debug("[ONBOARDING] Push failed for user={}: {}", user.getId(), e.getMessage());
+            }
+        }
+
+        if (sent > 0) {
+            logger.info("[ONBOARDING] 2h push cycle: sent {} onboarding push(es)", sent);
+        }
+    }
+
+    private boolean sendPushIfReachable(User user, boolean urgent) {
+        if (!hasPushTarget(user.getId())) {
+            return false;
+        }
+        String title = urgent
+                ? "Your account will be removed soon"
+                : "Complete your profile to start using Wisemonie";
+        String body = urgent
+                ? "Finish setting up your profile now to keep your Wisemonie account."
+                : "You're almost there! Complete your profile to unlock your wallet and start budgeting.";
+        notificationService.enqueuePushOnlyNotification(
+                user.getId(),
+                NotificationType.ONBOARDING_REMINDER,
+                title,
+                body,
+                COMPLETE_PROFILE_ROUTE,
+                PUSH_TTL_SECONDS);
+        return true;
+    }
+
+    private boolean hasPushTarget(Long userId) {
+        if (userId == null) return false;
+        try {
+            if (!authSessionService.getActiveFcmTokens(userId).isEmpty()) return true;
+        } catch (Exception ignored) {}
+        try {
+            String fallback = userRepository.findFcmTokenById(userId);
+            return fallback != null && !fallback.isBlank();
+        } catch (Exception ignored) {}
+        return false;
     }
 
     /** Mirrors the same best-effort name extraction used for the welcome email. */

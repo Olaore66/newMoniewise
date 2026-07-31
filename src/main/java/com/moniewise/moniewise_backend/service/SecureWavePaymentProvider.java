@@ -108,13 +108,27 @@ public class SecureWavePaymentProvider implements PaymentProvider {
 
         } catch (HttpClientErrorException e) {
             log.error("[BVN] SecureWave rejected request — HTTP {}: {}", e.getStatusCode(), e.getResponseBodyAsString());
-            throw new RuntimeException("BVN verification failed: " + e.getResponseBodyAsString());
+            String swMessage = extractSecureWaveMessage(e.getResponseBodyAsString());
+            throw new IllegalArgumentException(swMessage);
         } catch (RuntimeException e) {
             throw e; // already wrapped, re-throw as-is
         } catch (Exception e) {
             log.error("[BVN] Unexpected error during BVN verification: {}", e.getMessage(), e);
             throw new RuntimeException("BVN verification failed: " + e.getMessage());
         }
+    }
+
+    @SuppressWarnings("unchecked")
+    private String extractSecureWaveMessage(String responseBody) {
+        try {
+            Map<String, Object> body = new com.fasterxml.jackson.databind.ObjectMapper()
+                    .readValue(responseBody, Map.class);
+            Object message = body.get("message");
+            if (message != null && !message.toString().isBlank()) {
+                return message.toString();
+            }
+        } catch (Exception ignored) {}
+        return "BVN verification failed";
     }
 
     /** Maps the SecureWave {@code data} block to our DTO (image field excluded). */
