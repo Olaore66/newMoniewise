@@ -7,6 +7,7 @@ import com.moniewise.moniewise_backend.enums.EngagementNudgeCampaign;
 import com.moniewise.moniewise_backend.enums.EngagementNudgeChannel;
 import com.moniewise.moniewise_backend.enums.EngagementNudgeSegment;
 import com.moniewise.moniewise_backend.enums.BudgetStatus;
+import com.moniewise.moniewise_backend.enums.Gender;
 import com.moniewise.moniewise_backend.enums.NotificationType;
 import com.moniewise.moniewise_backend.repository.BudgetEngagementNudgeRepository;
 import com.moniewise.moniewise_backend.repository.BudgetRepository;
@@ -259,6 +260,9 @@ public class EngagementNudgeService {
 
             for (User user : users) {
                 afterUserId = user.getId();
+                if (!isUserEligibleForOccasion(user, occasion)) {
+                    continue;
+                }
                 if (isBirthdayToday(user, now.toLocalDate())) {
                     continue;
                 }
@@ -324,6 +328,9 @@ public class EngagementNudgeService {
                                                      SpecialOccasion occasion,
                                                      LocalDateTime now) {
         if (!canContact(user, now.toLocalDate())) {
+            return false;
+        }
+        if (!isUserEligibleForOccasion(user, occasion)) {
             return false;
         }
 
@@ -400,6 +407,20 @@ public class EngagementNudgeService {
             return false;
         }
         return totalTrackedMessagesToday(user.getId(), today) < MAX_ENGAGEMENT_MESSAGES_PER_DAY;
+    }
+
+    private boolean isUserEligibleForOccasion(User user, SpecialOccasion occasion) {
+        if (user == null || occasion == null || occasion.key() == null) {
+            return false;
+        }
+
+        return switch (occasion.key()) {
+            case "WORLD_GIRLFRIENDS_DAY", "INTERNATIONAL_MENS_DAY", "FATHERS_DAY" ->
+                    user.getGender() == Gender.MALE;
+            case "INTERNATIONAL_WOMENS_DAY", "MOTHERS_DAY" ->
+                    user.getGender() == Gender.FEMALE;
+            default -> true;
+        };
     }
 
     private int totalTrackedMessagesToday(Long userId, LocalDate today) {
