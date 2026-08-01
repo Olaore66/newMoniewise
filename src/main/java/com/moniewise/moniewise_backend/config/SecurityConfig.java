@@ -82,7 +82,7 @@ public class SecurityConfig {
                 .antMatchers("/images/**").permitAll()
                 .antMatchers("/.well-known/**", "/apple-app-site-association", "/open", "/open/**").permitAll()
                 // Public legal pages — Google Play (and reviewers generally) require the
-                // privacy policy and the account-deletion page to be world-readable HTML
+                // privacy policy and the account-deletion page to be world-readable HTM
                 // with no login. The JSON /legal/** API for the in-app viewer stays
                 // authenticated below.
                 .antMatchers("/privacy-policy", "/terms-of-use", "/delete-account").permitAll()
