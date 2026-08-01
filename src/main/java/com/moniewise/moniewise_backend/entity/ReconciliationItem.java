@@ -24,11 +24,13 @@ public class ReconciliationItem {
     public static final String REFERENCE_TYPE_WALLET = "WALLET";
     public static final String REFERENCE_TYPE_WITHDRAWAL = "WITHDRAWAL";
     public static final String REFERENCE_TYPE_TRANSACTION = "TRANSACTION";
+    public static final String REFERENCE_TYPE_HOLDINGS = "HOLDINGS";
 
     public static final String MISMATCH_BALANCE = "BALANCE_MISMATCH";
     public static final String MISMATCH_STATUS = "STATUS_MISMATCH";
     public static final String MISMATCH_MISSING_PROVIDER = "MISSING_PROVIDER_RECORD";
     public static final String MISMATCH_MISSING_INTERNAL = "MISSING_INTERNAL_RECORD";
+    public static final String MISMATCH_HOLDINGS = "HOLDINGS_BALANCE_MISMATCH";
 
     public static final String STATUS_OPEN = "OPEN";
     public static final String STATUS_RESOLVED = "RESOLVED";

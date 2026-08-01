@@ -7,10 +7,14 @@ import com.moniewise.moniewise_backend.entity.ReconciliationRun;
 import com.moniewise.moniewise_backend.entity.TransactionRequest;
 import com.moniewise.moniewise_backend.entity.Wallet;
 import com.moniewise.moniewise_backend.entity.Withdrawal;
+import com.moniewise.moniewise_backend.enums.BudgetStatus;
+import com.moniewise.moniewise_backend.enums.SavingsStatus;
 import com.moniewise.moniewise_backend.psp.PaymentGateway;
 import com.moniewise.moniewise_backend.psp.PaymentGatewayResolver;
+import com.moniewise.moniewise_backend.repository.EnvelopeRepository;
 import com.moniewise.moniewise_backend.repository.ReconciliationItemRepository;
 import com.moniewise.moniewise_backend.repository.ReconciliationRunRepository;
+import com.moniewise.moniewise_backend.repository.SavingsGoalRepository;
 import com.moniewise.moniewise_backend.repository.TransactionRequestRepository;
 import com.moniewise.moniewise_backend.repository.WalletRepository;
 import com.moniewise.moniewise_backend.repository.WithdrawalRepository;
@@ -33,11 +37,15 @@ public class ReconciliationService {
 
     private static final Logger logger = LoggerFactory.getLogger(ReconciliationService.class);
 
+    private static final BigDecimal HOLDINGS_TOLERANCE = new BigDecimal("1.00");
+
     private final ReconciliationRunRepository reconciliationRunRepository;
     private final ReconciliationItemRepository reconciliationItemRepository;
     private final WalletRepository walletRepository;
     private final WithdrawalRepository withdrawalRepository;
     private final TransactionRequestRepository transactionRequestRepository;
+    private final EnvelopeRepository envelopeRepository;
+    private final SavingsGoalRepository savingsGoalRepository;
     private final PaymentGatewayResolver paymentGatewayResolver;
     private final ObjectMapper objectMapper;
 
@@ -47,6 +55,8 @@ public class ReconciliationService {
             WalletRepository walletRepository,
             WithdrawalRepository withdrawalRepository,
             TransactionRequestRepository transactionRequestRepository,
+            EnvelopeRepository envelopeRepository,
+            SavingsGoalRepository savingsGoalRepository,
             PaymentGatewayResolver paymentGatewayResolver,
             ObjectMapper objectMapper
     ) {
@@ -55,6 +65,8 @@ public class ReconciliationService {
         this.walletRepository = walletRepository;
         this.withdrawalRepository = withdrawalRepository;
         this.transactionRequestRepository = transactionRequestRepository;
+        this.envelopeRepository = envelopeRepository;
+        this.savingsGoalRepository = savingsGoalRepository;
         this.paymentGatewayResolver = paymentGatewayResolver;
         this.objectMapper = objectMapper;
     }
@@ -96,10 +108,6 @@ public class ReconciliationService {
             }
 
             Optional<BigDecimal> providerBalance = gateway.fetchWalletBalance(providerReference);
-            if (providerBalance.isEmpty()) {
-                // Placeholder until a provider-side balance lookup endpoint is available.
-                providerBalance = Optional.of(wallet.getBalance());
-            }
             if (providerBalance.isEmpty()) {
                 recordMismatch(
                         run,
@@ -169,10 +177,6 @@ public class ReconciliationService {
 
             Optional<String> providerStatus = gateway.fetchTransactionStatus(providerReference);
             if (providerStatus.isEmpty()) {
-                // Placeholder until a provider-side status lookup endpoint is available.
-                providerStatus = Optional.of(withdrawal.getStatus().name());
-            }
-            if (providerStatus.isEmpty()) {
                 recordMismatch(
                         run,
                         ReconciliationItem.REFERENCE_TYPE_WITHDRAWAL,
@@ -241,6 +245,66 @@ public class ReconciliationService {
     }
 
     @Transactional
+    public Map<String, Object> reconcileTotalHoldings(Long runId) {
+        ReconciliationRun run = getRunOrThrow(runId);
+        int checked = 0;
+        int mismatches = 0;
+
+        for (Wallet wallet : walletRepository.findAll()) {
+            if (wallet.isRevenueWallet()) {
+                continue;
+            }
+
+            checked++;
+            Long userId = wallet.getUser().getId();
+            PaymentGateway gateway = paymentGatewayResolver.resolveForWallet(wallet);
+
+            String providerReference = firstNonBlank(wallet.getProviderWalletRef(), wallet.getSubWalletRef());
+            if (providerReference == null) {
+                continue;
+            }
+
+            Optional<BigDecimal> providerBalance = gateway.fetchWalletBalance(providerReference);
+            if (providerBalance.isEmpty()) {
+                logger.warn("[Recon] Could not fetch provider balance for wallet {} (user {})", wallet.getId(), userId);
+                continue;
+            }
+
+            BigDecimal walletBalance = wallet.getBalance() != null ? wallet.getBalance() : BigDecimal.ZERO;
+            BigDecimal envelopeTotal = envelopeRepository.sumTotalRemainingByUserIdAndBudgetStatus(userId, BudgetStatus.ACTIVE);
+            BigDecimal savingsTotal = savingsGoalRepository.sumBalanceByUserIdAndStatus(userId, SavingsStatus.ACTIVE);
+            BigDecimal internalTotal = walletBalance.add(envelopeTotal).add(savingsTotal);
+
+            BigDecimal gap = providerBalance.get().subtract(internalTotal).abs();
+
+            if (gap.compareTo(HOLDINGS_TOLERANCE) > 0) {
+                logger.warn("[Recon] Holdings mismatch for user {}: provider={}, internal={} (wallet={}, envelopes={}, savings={}), gap={}",
+                        userId, providerBalance.get(), internalTotal, walletBalance, envelopeTotal, savingsTotal, gap);
+
+                String breakdown = String.format("wallet=%s, envelopes=%s, savings=%s, total=%s",
+                        walletBalance, envelopeTotal, savingsTotal, internalTotal);
+
+                recordMismatch(
+                        run,
+                        ReconciliationItem.REFERENCE_TYPE_HOLDINGS,
+                        wallet.getId().toString(),
+                        providerReference,
+                        ReconciliationItem.MISMATCH_HOLDINGS,
+                        breakdown,
+                        stringify(providerBalance.get())
+                );
+                mismatches++;
+            }
+        }
+
+        Map<String, Object> summary = new LinkedHashMap<>();
+        summary.put("scope", "totalHoldings");
+        summary.put("checked", checked);
+        summary.put("mismatches", mismatches);
+        return summary;
+    }
+
+    @Transactional
     public ReconciliationItem recordMismatch(
             ReconciliationRun run,
             String referenceType,
@@ -290,6 +354,7 @@ public class ReconciliationService {
 
         try {
             Map<String, Object> walletSummary = reconcileWalletBalances(run.getId());
+            Map<String, Object> holdingsSummary = reconcileTotalHoldings(run.getId());
             Map<String, Object> withdrawalSummary = reconcileWithdrawals(run.getId());
             Map<String, Object> transactionSummary = reconcileTransactionRequests(run.getId());
 
@@ -297,6 +362,7 @@ public class ReconciliationService {
             finalSummary.put("providerName", providerName);
             finalSummary.put("runId", run.getId());
             finalSummary.put("wallets", walletSummary);
+            finalSummary.put("holdings", holdingsSummary);
             finalSummary.put("withdrawals", withdrawalSummary);
             finalSummary.put("transactions", transactionSummary);
             finalSummary.put("openItems", reconciliationItemRepository.findByStatus(ReconciliationItem.STATUS_OPEN).size());

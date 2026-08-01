@@ -26,7 +26,12 @@ public class ExternalTransferQuoteResponse {
      * Zero for non-Rubies providers.
      */
     private BigDecimal bankCharge;
-    /** = amount + bankCharge + fee */
+    /**
+     * Nigerian stamp duty — ₦50 flat charge on transfers above ₦10,000.
+     * Charged by the banking system, NOT Moniewise revenue. Zero for ≤ ₦10K.
+     */
+    private BigDecimal stampDuty;
+    /** = amount + bankCharge + fee + stampDuty */
     private BigDecimal totalDebit;
     private BigDecimal recipientReceives;
     private String providerName;

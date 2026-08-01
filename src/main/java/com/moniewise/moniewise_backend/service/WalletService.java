@@ -1252,7 +1252,10 @@ public class WalletService {
             nipFee      = BigDecimal.ZERO;
         }
 
-        BigDecimal totalDebit = request.getAmount().add(nipFee).add(transferFee);
+        BigDecimal stampDuty = RubiesGateway.PROVIDER_NAME.equalsIgnoreCase(wallet.getProviderName())
+                ? markupCalculatorService.calculateStampDuty(request.getAmount())
+                : BigDecimal.ZERO;
+        BigDecimal totalDebit = request.getAmount().add(nipFee).add(transferFee).add(stampDuty);
 
         if (wallet.getBalance().compareTo(totalDebit) < 0) {
             if (nipFee.compareTo(BigDecimal.ZERO) > 0) {
@@ -1347,11 +1350,13 @@ public class WalletService {
 
             // fee        = Moniewise markup only (revenue)
             // bankCharge = NIBSS NIP fee (goes to Rubies/banking system — NOT revenue)
-            // totalDebit = amount + bankCharge + fee
+            // stampDuty  = ₦50 on transfers > ₦10K (goes to government via Rubies — NOT revenue)
+            // totalDebit = amount + bankCharge + fee + stampDuty
             return new WithdrawalQuoteResponse(
                     breakdown.transferAmount(),
                     breakdown.markupFee(),
                     breakdown.bankCharge(),
+                    breakdown.stampDuty(),
                     breakdown.totalFromEnvelope(),
                     amount,
                     closure ? "CLOSURE_FLAT_FEE"
@@ -2500,6 +2505,65 @@ public class WalletService {
                         creditAccountNumber, amount, reference, sessionId);
                 settleRubiesP2pCredit(wallet, internalP2pCreditLog, amount, reference, sessionId, originatorName);
                 return;
+            }
+
+            // ── Reversal detection ─────────────────────────────────────────────
+            // When Rubies reverses a previously COMPLETED outbound transfer (e.g. NIP
+            // timeout, receiving bank rejection), the funds come back as a CR webhook.
+            // The narration typically contains "reversal". If we detect this, mark the
+            // original withdrawal as REVERSED and credit the wallet — don't treat it
+            // as a regular deposit.
+            String narrationLower = narration.toLowerCase();
+            if (narrationLower.contains("reversal") || narrationLower.contains("reversed")) {
+                Long userId = wallet.getUser().getId();
+                Optional<Withdrawal> reversedWithdrawal =
+                        withdrawalRepository.findTopByUserIdAndAmountAndStatusOrderByCompletedAtDesc(
+                                userId, amount, WithdrawalStatus.COMPLETED);
+
+                if (reversedWithdrawal.isPresent()) {
+                    Withdrawal wd = reversedWithdrawal.get();
+                    wd.setStatus(WithdrawalStatus.REVERSED);
+                    wd.setFailureReason("Bank reversal: " + narration);
+                    wd.setProcessedAt(LocalDateTime.now());
+                    withdrawalRepository.save(wd);
+
+                    transactionLogRepository.findByReference(wd.getClientReference()).ifPresent(log -> {
+                        log.setStatus(TransactionStatus.REVERSED);
+                        log.setDescription(log.getDescription() + " | Bank reversal: " + narration);
+                        transactionLogRepository.save(log);
+                    });
+                    transactionLogRepository.findByReference(buildWithdrawalFeeReference(wd)).ifPresent(log -> {
+                        log.setStatus(TransactionStatus.REVERSED);
+                        transactionLogRepository.save(log);
+                    });
+
+                    wallet.setBalance(wallet.getBalance().add(wd.getTotalDebit()));
+                    wallet.setUpdatedAt(LocalDateTime.now());
+                    walletRepository.save(wallet);
+                    monnieCacheInvalidationService.evictUserAfterCommit(userId);
+                    evictWalletCache(userId);
+
+                    logger.info("[RUBIES-WEBHOOK] Bank reversal detected: ref={} amount=₦{} original_wd={} — wallet credited ₦{}",
+                            reference, amount, wd.getClientReference(), wd.getTotalDebit());
+
+                    final String revMsg = String.format(
+                            "Your transfer of ₦%,.2f was reversed by the receiving bank. " +
+                            "₦%,.2f (including fees) has been refunded to your wallet.",
+                            amount, wd.getTotalDebit());
+                    CompletableFuture.runAsync(() -> {
+                        try {
+                            notificationService.sendNotification(
+                                    userId.toString(), revMsg,
+                                    NotificationType.WITHDRAWAL, null, null, "VIEW_WALLET", "/wallet"
+                            );
+                        } catch (Exception e) {
+                            logger.error("[RUBIES-WEBHOOK] Failed to send reversal notification", e);
+                        }
+                    });
+                    return;
+                }
+                logger.info("[RUBIES-WEBHOOK] Narration contains 'reversal' but no matching COMPLETED withdrawal found " +
+                        "for user={} amount=₦{} — processing as regular deposit", wallet.getUser().getId(), amount);
             }
 
             String description = "Inbound transfer: " + narration;

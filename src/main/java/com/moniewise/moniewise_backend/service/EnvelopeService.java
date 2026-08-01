@@ -930,21 +930,24 @@ public class EnvelopeService {
                 ? RubiesGateway.PROVIDER_NAME
                 : (providusExpressGateway.isEnabled() ? ProvidusExpressGateway.PROVIDER_NAME : SecureWaveGateway.PROVIDER_NAME);
 
-        // markupFee  = Moniewise revenue (₦50 / ₦75 / ₦120 for Rubies; flat fee for legacy).
+        // markupFee  = Moniewise revenue (flat fee for Rubies; flat fee for legacy).
         // bankCharge = NIBSS NIP fee charged by Rubies at BaaS level (₦10.75/₦26.88/₦53.75).
         //              This goes to Rubies / NIBSS — Moniewise does NOT collect it.
-        // totalDebit = amount + bankCharge + markupFee
+        // stampDuty  = ₦50 on transfers > ₦10K (charged by Rubies — NOT revenue).
+        // totalDebit = amount + bankCharge + markupFee + stampDuty
         BigDecimal markupFee;
         BigDecimal bankCharge;
+        BigDecimal stampDuty;
         BigDecimal totalDebit;
         if (isRubies) {
             if (userWallet.getProviderWalletRef() == null) {
                 throw new IllegalStateException("Rubies wallet not configured");
             }
-            // Rubies: markup-tier fee (waived for premium users) + NIP bank charge
+            // Rubies: markup-tier fee (waived for premium users) + NIP bank charge + stamp duty
             WithdrawalQuoteResponse rubiesQuote = walletService.quoteWithdrawal(amount, user.getId());
             markupFee  = rubiesQuote.getFee();
             bankCharge = rubiesQuote.getBankCharge();
+            stampDuty  = rubiesQuote.getStampDuty();
             totalDebit = rubiesQuote.getTotalDebit();
         } else {
             TransferFeeQuote feeQuote = transferFeeService.quoteFee(
@@ -954,11 +957,12 @@ public class EnvelopeService {
             );
             markupFee  = feeQuote.getFee();
             bankCharge = BigDecimal.ZERO;   // legacy providers handle their fees differently
+            stampDuty  = BigDecimal.ZERO;
             totalDebit = feeQuote.getTotalDebit();
         }
         // totalFee is what goes into error messages; markupFee is what goes on txn.setFee()
         final BigDecimal fee      = markupFee;  // alias kept for downstream uses (txn log, FEE log)
-        final BigDecimal totalFee = bankCharge.add(markupFee);
+        final BigDecimal totalFee = bankCharge.add(markupFee).add(stampDuty);
 
         // Period-limit check — only the send amount counts against the envelope limit.
         // Fees come from the main wallet, not the envelope.
@@ -2018,12 +2022,14 @@ public class EnvelopeService {
             // supplied at transfer time (OPay-style), so we return null for bank fields here.
             WithdrawalQuoteResponse quote = walletService.quoteWithdrawal(amount, user.getId());
 
-            // markupFee  = Moniewise revenue (₦50 / ₦75 / ₦120)
+            // markupFee  = Moniewise revenue (flat fee)
             // bankCharge = NIBSS NIP fee charged by Rubies (₦10.75 / ₦26.88 / ₦53.75)
-            // totalDebit = amount + bankCharge + markupFee
+            // stampDuty  = ₦50 on transfers > ₦10K
+            // totalDebit = amount + bankCharge + markupFee + stampDuty
             BigDecimal markupFee   = quote.getFee();
             BigDecimal bankCharge  = quote.getBankCharge();
-            BigDecimal totalFee    = bankCharge.add(markupFee);
+            BigDecimal stampDuty   = quote.getStampDuty();
+            BigDecimal totalFee    = bankCharge.add(markupFee).add(stampDuty);
             BigDecimal totalDebit  = quote.getTotalDebit();
 
             // Fees come from the wallet — only check the send amount against the envelope limit.
@@ -2060,6 +2066,7 @@ public class EnvelopeService {
                     amount,
                     markupFee,
                     bankCharge,
+                    stampDuty,
                     totalDebit,
                     quote.getRecipientReceives(),
                     RubiesGateway.PROVIDER_NAME,
@@ -2123,6 +2130,7 @@ public class EnvelopeService {
                 amount,
                 fee,
                 BigDecimal.ZERO,    // non-Rubies: no separate NIP bank charge to expose
+                BigDecimal.ZERO,    // non-Rubies: no stamp duty
                 totalDebit,
                 feeQuote.getRecipientReceives(),
                 providerName,

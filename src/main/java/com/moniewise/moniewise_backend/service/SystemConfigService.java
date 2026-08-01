@@ -97,6 +97,11 @@ public class SystemConfigService {
     /** NIP fee for tier 3 transfers (NGN — above tier2 max) — default ₦53.75 */
     public static final String NIP_TIER3_FEE         = "transfer.nip.tier3.fee";
 
+    /** Stamp duty threshold (NGN) — transfers above this attract stamp duty. Default ₦10,000. */
+    public static final String STAMP_DUTY_THRESHOLD   = "transfer.stamp_duty.threshold";
+    /** Stamp duty amount (NGN) — flat charge on qualifying transfers. Default ₦50. */
+    public static final String STAMP_DUTY_AMOUNT      = "transfer.stamp_duty.amount";
+
     /** Budget creation fee per 30-day interval (NGN). Set to 0 to disable. */
     public static final String BUDGET_CREATION_FEE   = "budget.creation.fee";
 

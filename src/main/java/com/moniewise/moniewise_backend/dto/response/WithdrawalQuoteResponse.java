@@ -16,7 +16,13 @@ public class WithdrawalQuoteResponse {
      * Zero for non-Rubies providers (they handle fees differently).
      */
     private BigDecimal bankCharge;
-    /** = withdrawalAmount + bankCharge + fee */
+    /**
+     * Nigerian stamp duty — ₦50 flat charge on transfers above ₦10,000.
+     * Charged by the banking system, NOT Moniewise revenue.
+     * Zero for transfers ≤ ₦10,000.
+     */
+    private BigDecimal stampDuty;
+    /** = withdrawalAmount + bankCharge + fee + stampDuty */
     private BigDecimal totalDebit;
     private BigDecimal recipientReceives;
     private String feePolicy;
@@ -26,10 +32,11 @@ public class WithdrawalQuoteResponse {
     public WithdrawalQuoteResponse() {
     }
 
-    /** Full constructor including the NIP bank charge split. */
+    /** Full constructor including NIP bank charge and stamp duty. */
     public WithdrawalQuoteResponse(BigDecimal withdrawalAmount,
                                    BigDecimal fee,
                                    BigDecimal bankCharge,
+                                   BigDecimal stampDuty,
                                    BigDecimal totalDebit,
                                    BigDecimal recipientReceives,
                                    String feePolicy,
@@ -38,6 +45,7 @@ public class WithdrawalQuoteResponse {
         this.withdrawalAmount = withdrawalAmount;
         this.fee = fee;
         this.bankCharge = bankCharge;
+        this.stampDuty = stampDuty;
         this.totalDebit = totalDebit;
         this.recipientReceives = recipientReceives;
         this.feePolicy = feePolicy;
@@ -45,7 +53,20 @@ public class WithdrawalQuoteResponse {
         this.message = message;
     }
 
-    /** Backward-compatible constructor (bankCharge defaults to ZERO — for legacy paths). */
+    /** Constructor without stamp duty (defaults to ZERO). */
+    public WithdrawalQuoteResponse(BigDecimal withdrawalAmount,
+                                   BigDecimal fee,
+                                   BigDecimal bankCharge,
+                                   BigDecimal totalDebit,
+                                   BigDecimal recipientReceives,
+                                   String feePolicy,
+                                   String feeSource,
+                                   String message) {
+        this(withdrawalAmount, fee, bankCharge, BigDecimal.ZERO, totalDebit,
+                recipientReceives, feePolicy, feeSource, message);
+    }
+
+    /** Backward-compatible constructor (bankCharge and stampDuty default to ZERO — for legacy paths). */
     public WithdrawalQuoteResponse(BigDecimal withdrawalAmount,
                                    BigDecimal fee,
                                    BigDecimal totalDebit,
@@ -53,7 +74,7 @@ public class WithdrawalQuoteResponse {
                                    String feePolicy,
                                    String feeSource,
                                    String message) {
-        this(withdrawalAmount, fee, BigDecimal.ZERO, totalDebit,
+        this(withdrawalAmount, fee, BigDecimal.ZERO, BigDecimal.ZERO, totalDebit,
                 recipientReceives, feePolicy, feeSource, message);
     }
 
@@ -79,6 +100,14 @@ public class WithdrawalQuoteResponse {
 
     public void setBankCharge(BigDecimal bankCharge) {
         this.bankCharge = bankCharge;
+    }
+
+    public BigDecimal getStampDuty() {
+        return stampDuty != null ? stampDuty : BigDecimal.ZERO;
+    }
+
+    public void setStampDuty(BigDecimal stampDuty) {
+        this.stampDuty = stampDuty;
     }
 
     public BigDecimal getTotalDebit() {

@@ -76,8 +76,9 @@ public class MarkupCalculatorService {
     public FeeBreakdown buildBreakdown(BigDecimal transferAmount, Long userId) {
         BigDecimal markup    = calculateMarkup(transferAmount, userId);
         BigDecimal nipFee    = calculateNipFee(transferAmount);
-        BigDecimal total     = transferAmount.add(nipFee).add(markup);
-        return new FeeBreakdown(transferAmount, nipFee, markup, total);
+        BigDecimal stampDuty = calculateStampDuty(transferAmount);
+        BigDecimal total     = transferAmount.add(nipFee).add(markup).add(stampDuty);
+        return new FeeBreakdown(transferAmount, nipFee, markup, stampDuty, total);
     }
 
     /** Flat charge applied to an account-closure withdrawal, whatever the amount. */
@@ -94,11 +95,12 @@ public class MarkupCalculatorService {
      */
     public FeeBreakdown buildClosureBreakdown(BigDecimal sendAmount) {
         BigDecimal nipFee = calculateNipFee(sendAmount);
+        BigDecimal stampDuty = calculateStampDuty(sendAmount);
         // If NIP ever exceeded the flat charge, Moniewise takes nothing rather
         // than letting the markup go negative.
         BigDecimal markup = CLOSURE_FLAT_FEE.subtract(nipFee).max(BigDecimal.ZERO);
-        return new FeeBreakdown(sendAmount, nipFee, markup,
-                sendAmount.add(nipFee).add(markup));
+        return new FeeBreakdown(sendAmount, nipFee, markup, stampDuty,
+                sendAmount.add(nipFee).add(markup).add(stampDuty));
     }
 
     /**
@@ -129,6 +131,21 @@ public class MarkupCalculatorService {
         return tier3Fee;
     }
 
+    /**
+     * Nigerian stamp duty: ₦50 flat charge on electronic transfers above ₦10,000.
+     * Both threshold and amount are configurable via {@code system_config}.
+     */
+    public BigDecimal calculateStampDuty(BigDecimal amount) {
+        if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) return BigDecimal.ZERO;
+
+        BigDecimal threshold = systemConfig.getBigDecimal(
+                SystemConfigService.STAMP_DUTY_THRESHOLD, new BigDecimal("10000"));
+        BigDecimal duty = systemConfig.getBigDecimal(
+                SystemConfigService.STAMP_DUTY_AMOUNT, new BigDecimal("50"));
+
+        return amount.compareTo(threshold) > 0 ? duty : BigDecimal.ZERO;
+    }
+
     // ── Fee resolution ────────────────────────────────────────────────────────
 
     /** Returns the flat markup fee — same value for every transfer amount. */
@@ -154,15 +171,19 @@ public class MarkupCalculatorService {
             BigDecimal transferAmount,
             BigDecimal bankCharge,
             BigDecimal markupFee,
+            BigDecimal stampDuty,
             BigDecimal totalFromEnvelope
     ) {
         /** Human-readable summary for the pre-confirmation screen. */
         public String displayText() {
-            BigDecimal totalFee = bankCharge.add(markupFee);
+            BigDecimal totalFee = bankCharge.add(markupFee).add(stampDuty);
             if (totalFee.compareTo(BigDecimal.ZERO) > 0) {
+                String stampNote = stampDuty.compareTo(BigDecimal.ZERO) > 0
+                        ? String.format(" (incl. ₦%,.0f stamp duty)", stampDuty)
+                        : "";
                 return String.format(
-                        "Send ₦%,.2f · Tranx fee ₦%,.2f · Total ₦%,.2f",
-                        transferAmount, totalFee, totalFromEnvelope);
+                        "Send ₦%,.2f · Tranx fee ₦%,.2f%s · Total ₦%,.2f",
+                        transferAmount, totalFee, stampNote, totalFromEnvelope);
             }
             return String.format("Send ₦%,.2f · No fee · Total ₦%,.2f",
                     transferAmount, totalFromEnvelope);

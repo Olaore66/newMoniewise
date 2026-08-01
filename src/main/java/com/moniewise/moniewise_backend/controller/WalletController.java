@@ -287,18 +287,16 @@ public class WalletController {
                                                 Principal principal) {
         User user = currentUser(principal.getName());
         WithdrawalQuoteResponse quote = walletService.quoteWithdrawal(amount, user.getId());
-        return ResponseEntity.ok(Map.of(
-                "status", true,
-                "data", Map.of(
-                        "transferAmount",   quote.getWithdrawalAmount(),
-                        "bankCharge",       quote.getBankCharge(),     // NIBSS NIP fee — goes to bank, NOT revenue
-                        "fee",              quote.getFee(),             // Moniewise markup — goes to revenue
-                        "totalDebit",       quote.getTotalDebit(),      // transferAmount + bankCharge + fee
-                        "feePolicy",        quote.getFeePolicy(),
-                        "feeWaived",        quote.getFee().compareTo(java.math.BigDecimal.ZERO) == 0,
-                        "displayText",      quote.getMessage()
-                )
-        ));
+        java.util.Map<String, Object> data = new java.util.LinkedHashMap<>();
+        data.put("transferAmount",   quote.getWithdrawalAmount());
+        data.put("bankCharge",       quote.getBankCharge());
+        data.put("fee",              quote.getFee());
+        data.put("stampDuty",        quote.getStampDuty());
+        data.put("totalDebit",       quote.getTotalDebit());
+        data.put("feePolicy",        quote.getFeePolicy());
+        data.put("feeWaived",        quote.getFee().compareTo(java.math.BigDecimal.ZERO) == 0);
+        data.put("displayText",      quote.getMessage());
+        return ResponseEntity.ok(Map.of("status", true, "data", data));
     }
 
     @PostMapping("/withdraw")

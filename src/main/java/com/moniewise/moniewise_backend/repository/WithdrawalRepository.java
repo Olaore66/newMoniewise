@@ -5,6 +5,7 @@ import com.moniewise.moniewise_backend.enums.WithdrawalStatus;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.List;
@@ -33,4 +34,7 @@ public interface WithdrawalRepository extends JpaRepository<Withdrawal, Long> {
      * scanning the user's entire withdrawal history.
      */
     List<Withdrawal> findTop50ByUserIdAndStatusOrderByCreatedAtDesc(Long userId, WithdrawalStatus status);
+
+    Optional<Withdrawal> findTopByUserIdAndAmountAndStatusOrderByCompletedAtDesc(
+            Long userId, BigDecimal amount, WithdrawalStatus status);
 }
