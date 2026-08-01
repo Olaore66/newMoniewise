@@ -248,6 +248,7 @@ public class UserController {
                 platform = payload.get("devicePlatform");
             }
             authSessionService.attachFcmToken(email, sessionId, token, platform);
+            userService.updateFcmToken(email, token);
 
             // This device just became reachable — catch up on anything that was
             // saved to the inbox but never pushed because no token was active
@@ -273,6 +274,7 @@ public class UserController {
             String sessionId = extractSessionId(authHeader);
             String token = payload != null ? payload.get("token") : null;
             authSessionService.clearSessionFcmTokenByValue(email, sessionId, token);
+            userService.updateFcmToken(email, null);
             return ResponseEntity.ok(Map.of("message", "FCM token removed successfully"));
         } catch (IllegalArgumentException | IllegalStateException e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
