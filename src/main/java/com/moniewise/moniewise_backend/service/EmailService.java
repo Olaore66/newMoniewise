@@ -36,25 +36,17 @@ public class EmailService {
             MimeMessage message = mailSender.createMimeMessage();
             MimeMessageHelper helper = new MimeMessageHelper(message, true, "UTF-8");
 
-            // 1. Set Parameters into Thymeleaf Context
             Context context = new Context();
-            context.setVariable("userName", userName);  // Must match <span th:text="${userName}">
-            context.setVariable("resetLink", resetLink); // Must match <a th:href="${resetLink}">
+            context.setVariable("userName", userName);
+            context.setVariable("resetLink", resetLink);
+            context.setVariable("logoUrl", "https://wisemonie-backend.onrender.com/images/main_logo.png");
 
-            // 2. Process the Template
-            // Ensure file exists at: src/main/resources/templates/reset-password.html
             String htmlContent = templateEngine.process("reset-password", context);
 
-            // 3. Configure Email
             helper.setTo(to);
             helper.setSubject("Reset Your Password");
-            helper.setText(htmlContent, true); // true = HTML
-            helper.setFrom("support@wisemonie.app");
-            try {
-                org.springframework.core.io.ClassPathResource logo =
-                    new org.springframework.core.io.ClassPathResource("images/main logo white background.png");
-                if (logo.exists()) helper.addInline("wisemonie-logo", logo, "image/png");
-            } catch (Exception ignored) {}
+            helper.setText(htmlContent, true);
+            helper.setFrom("support@wisemonie.app", "Timi from Wisemonie");
 
             // 4. Send
             mailSender.send(message);

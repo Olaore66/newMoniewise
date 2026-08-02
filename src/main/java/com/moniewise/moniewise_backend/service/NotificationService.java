@@ -726,7 +726,7 @@ public class NotificationService {
      * renders in every email client (webmail, mobile, desktop) without CID issues.
      */
     private String logoUrl() {
-        return appBaseUrl + "/images/wisemonie-logo.png";
+        return appBaseUrl + "/images/main_logo.png";
     }
 
     /** No-op kept for backward compatibility — CID approach replaced by hosted URL. */
@@ -749,7 +749,7 @@ public class NotificationService {
             MimeMessage mimeMessage = mailSender.createMimeMessage();
             MimeMessageHelper helper = new MimeMessageHelper(mimeMessage, true);
 
-            helper.setFrom(fromEmail);
+            helper.setFrom(fromEmail, "Timi from Wisemonie");
             helper.setTo(email);
             helper.setSubject("🎊 Welcome to Wisemonie! Your Account is Ready");
             helper.setText(htmlContent, true);
@@ -794,7 +794,7 @@ public class NotificationService {
             MimeMessage mimeMessage = mailSender.createMimeMessage();
             MimeMessageHelper helper = new MimeMessageHelper(mimeMessage, true);
 
-            helper.setFrom(fromEmail);
+            helper.setFrom(fromEmail, "Timi from Wisemonie");
             helper.setTo(email);
             helper.setSubject(buildOnboardingReminderSubject(daysSinceSignup, showUrgencyNotice));
             helper.setText(htmlContent, true);
@@ -843,7 +843,7 @@ public class NotificationService {
             MimeMessage mimeMessage = mailSender.createMimeMessage();
             MimeMessageHelper helper = new MimeMessageHelper(mimeMessage, true);
 
-            helper.setFrom(fromEmail);
+            helper.setFrom(fromEmail, "Timi from Wisemonie");
             helper.setTo(email);
             helper.setSubject(budgetNudgeSubject(safeType));
             helper.setText(htmlContent, true);
@@ -930,7 +930,7 @@ public class NotificationService {
             MimeMessage mimeMessage = mailSender.createMimeMessage();
             MimeMessageHelper helper = new MimeMessageHelper(mimeMessage, true);
 
-            helper.setFrom(fromEmail);
+            helper.setFrom(fromEmail, "Timi from Wisemonie");
             helper.setTo(email);
             helper.setSubject(subject != null && !subject.isBlank() ? subject : "Wisemonie");
             helper.setText(htmlContent, true);
@@ -1090,7 +1090,7 @@ public class NotificationService {
             MimeMessage mimeMessage = mailSender.createMimeMessage();
             MimeMessageHelper helper = new MimeMessageHelper(mimeMessage, true);
 
-            helper.setFrom(fromEmail);
+            helper.setFrom(fromEmail, "Timi from Wisemonie");
             helper.setTo(email);
             helper.setSubject("⏳ Your '" + goalName + "' savings is maturing soon");
             helper.setText(htmlContent, true);
@@ -1134,7 +1134,7 @@ public class NotificationService {
             MimeMessage mimeMessage = mailSender.createMimeMessage();
             MimeMessageHelper helper = new MimeMessageHelper(mimeMessage, true);
 
-            helper.setFrom(fromEmail);
+            helper.setFrom(fromEmail, "Timi from Wisemonie");
             helper.setTo(email);
             helper.setSubject("🎉 Your '" + goalName + "' savings has matured!");
             helper.setText(htmlContent, true);
@@ -1170,7 +1170,7 @@ public class NotificationService {
             MimeMessage mimeMessage = mailSender.createMimeMessage();
             MimeMessageHelper helper = new MimeMessageHelper(mimeMessage, true);
 
-            helper.setFrom(fromEmail);
+            helper.setFrom(fromEmail, "Timi from Wisemonie");
             helper.setTo(email);
             helper.setSubject("📩 Wisemonie Verification Code: " + otpCode);
             helper.setText(htmlContent, true);
@@ -1199,7 +1199,7 @@ public class NotificationService {
             MimeMessage mimeMessage = mailSender.createMimeMessage();
             MimeMessageHelper helper = new MimeMessageHelper(mimeMessage, true);
 
-            helper.setFrom(fromEmail);
+            helper.setFrom(fromEmail, "Timi from Wisemonie");
             helper.setTo(to);
             helper.setSubject("🔓 Password Reset Code: " + otpCode);
             helper.setText(htmlContent, true);
@@ -1234,7 +1234,7 @@ public class NotificationService {
             MimeMessage mimeMessage = mailSender.createMimeMessage();
             MimeMessageHelper helper = new MimeMessageHelper(mimeMessage, true);
 
-            helper.setFrom(fromEmail);
+            helper.setFrom(fromEmail, "Timi from Wisemonie");
             helper.setTo(to);
             helper.setSubject("🔐 Your Wisemonie transaction PIN was changed");
             helper.setText(htmlContent, true);
@@ -1274,7 +1274,7 @@ public class NotificationService {
             MimeMessage mimeMessage = mailSender.createMimeMessage();
             MimeMessageHelper helper = new MimeMessageHelper(mimeMessage, true);
 
-            helper.setFrom(fromEmail);
+            helper.setFrom(fromEmail, "Timi from Wisemonie");
             helper.setTo(to);
             helper.setSubject("🔔 New sign-in to your Wisemonie account");
             helper.setText(htmlContent, true);
@@ -1309,7 +1309,7 @@ public class NotificationService {
             MimeMessage mimeMessage = mailSender.createMimeMessage();
             MimeMessageHelper helper = new MimeMessageHelper(mimeMessage, true);
 
-            helper.setFrom(fromEmail);
+            helper.setFrom(fromEmail, "Timi from Wisemonie");
             helper.setTo(to);
             helper.setSubject("You are valued — a note from Wisemonie 💚");
             helper.setText(htmlContent, true);
@@ -1339,7 +1339,7 @@ public class NotificationService {
             MimeMessage mimeMessage = mailSender.createMimeMessage();
             MimeMessageHelper helper = new MimeMessageHelper(mimeMessage, true);
 
-            helper.setFrom(fromEmail);
+            helper.setFrom(fromEmail, "Timi from Wisemonie");
             helper.setTo(to);
             helper.setSubject("Transaction PIN Reset Code: " + otpCode);
             helper.setText(htmlContent, true);
