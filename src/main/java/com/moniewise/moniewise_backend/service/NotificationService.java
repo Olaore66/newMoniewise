@@ -28,6 +28,7 @@ import org.thymeleaf.context.Context;
 import javax.annotation.PostConstruct;
 import javax.mail.MessagingException;
 import javax.mail.internet.MimeMessage;
+import java.io.UnsupportedEncodingException;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import com.moniewise.moniewise_backend.entity.OutboxEvent;
@@ -734,6 +735,14 @@ public class NotificationService {
         // intentionally empty — logo is now served via public URL (logoUrl())
     }
 
+    private void setWisemonieSender(MimeMessageHelper helper) throws MessagingException {
+        try {
+            helper.setFrom(fromEmail, "Timi from Wisemonie");
+        } catch (UnsupportedEncodingException e) {
+            throw new MessagingException("Failed to encode Wisemonie email sender name", e);
+        }
+    }
+
     @Async
     public void sendWelcomeEmail(String email, String firstName, String accountNumber, String bankName, BigDecimal balance) {
         if ("stub".equals(activeProfile) || mailSender == null) return;
@@ -749,7 +758,7 @@ public class NotificationService {
             MimeMessage mimeMessage = mailSender.createMimeMessage();
             MimeMessageHelper helper = new MimeMessageHelper(mimeMessage, true);
 
-            helper.setFrom(fromEmail, "Timi from Wisemonie");
+            setWisemonieSender(helper);
             helper.setTo(email);
             helper.setSubject("🎊 Welcome to Wisemonie! Your Account is Ready");
             helper.setText(htmlContent, true);
@@ -794,7 +803,7 @@ public class NotificationService {
             MimeMessage mimeMessage = mailSender.createMimeMessage();
             MimeMessageHelper helper = new MimeMessageHelper(mimeMessage, true);
 
-            helper.setFrom(fromEmail, "Timi from Wisemonie");
+            setWisemonieSender(helper);
             helper.setTo(email);
             helper.setSubject(buildOnboardingReminderSubject(daysSinceSignup, showUrgencyNotice));
             helper.setText(htmlContent, true);
@@ -843,7 +852,7 @@ public class NotificationService {
             MimeMessage mimeMessage = mailSender.createMimeMessage();
             MimeMessageHelper helper = new MimeMessageHelper(mimeMessage, true);
 
-            helper.setFrom(fromEmail, "Timi from Wisemonie");
+            setWisemonieSender(helper);
             helper.setTo(email);
             helper.setSubject(budgetNudgeSubject(safeType));
             helper.setText(htmlContent, true);
@@ -930,7 +939,7 @@ public class NotificationService {
             MimeMessage mimeMessage = mailSender.createMimeMessage();
             MimeMessageHelper helper = new MimeMessageHelper(mimeMessage, true);
 
-            helper.setFrom(fromEmail, "Timi from Wisemonie");
+            setWisemonieSender(helper);
             helper.setTo(email);
             helper.setSubject(subject != null && !subject.isBlank() ? subject : "Wisemonie");
             helper.setText(htmlContent, true);
@@ -1090,7 +1099,7 @@ public class NotificationService {
             MimeMessage mimeMessage = mailSender.createMimeMessage();
             MimeMessageHelper helper = new MimeMessageHelper(mimeMessage, true);
 
-            helper.setFrom(fromEmail, "Timi from Wisemonie");
+            setWisemonieSender(helper);
             helper.setTo(email);
             helper.setSubject("⏳ Your '" + goalName + "' savings is maturing soon");
             helper.setText(htmlContent, true);
@@ -1134,7 +1143,7 @@ public class NotificationService {
             MimeMessage mimeMessage = mailSender.createMimeMessage();
             MimeMessageHelper helper = new MimeMessageHelper(mimeMessage, true);
 
-            helper.setFrom(fromEmail, "Timi from Wisemonie");
+            setWisemonieSender(helper);
             helper.setTo(email);
             helper.setSubject("🎉 Your '" + goalName + "' savings has matured!");
             helper.setText(htmlContent, true);
@@ -1170,7 +1179,7 @@ public class NotificationService {
             MimeMessage mimeMessage = mailSender.createMimeMessage();
             MimeMessageHelper helper = new MimeMessageHelper(mimeMessage, true);
 
-            helper.setFrom(fromEmail, "Timi from Wisemonie");
+            setWisemonieSender(helper);
             helper.setTo(email);
             helper.setSubject("📩 Wisemonie Verification Code: " + otpCode);
             helper.setText(htmlContent, true);
@@ -1199,7 +1208,7 @@ public class NotificationService {
             MimeMessage mimeMessage = mailSender.createMimeMessage();
             MimeMessageHelper helper = new MimeMessageHelper(mimeMessage, true);
 
-            helper.setFrom(fromEmail, "Timi from Wisemonie");
+            setWisemonieSender(helper);
             helper.setTo(to);
             helper.setSubject("🔓 Password Reset Code: " + otpCode);
             helper.setText(htmlContent, true);
@@ -1234,7 +1243,7 @@ public class NotificationService {
             MimeMessage mimeMessage = mailSender.createMimeMessage();
             MimeMessageHelper helper = new MimeMessageHelper(mimeMessage, true);
 
-            helper.setFrom(fromEmail, "Timi from Wisemonie");
+            setWisemonieSender(helper);
             helper.setTo(to);
             helper.setSubject("🔐 Your Wisemonie transaction PIN was changed");
             helper.setText(htmlContent, true);
@@ -1274,7 +1283,7 @@ public class NotificationService {
             MimeMessage mimeMessage = mailSender.createMimeMessage();
             MimeMessageHelper helper = new MimeMessageHelper(mimeMessage, true);
 
-            helper.setFrom(fromEmail, "Timi from Wisemonie");
+            setWisemonieSender(helper);
             helper.setTo(to);
             helper.setSubject("🔔 New sign-in to your Wisemonie account");
             helper.setText(htmlContent, true);
@@ -1309,7 +1318,7 @@ public class NotificationService {
             MimeMessage mimeMessage = mailSender.createMimeMessage();
             MimeMessageHelper helper = new MimeMessageHelper(mimeMessage, true);
 
-            helper.setFrom(fromEmail, "Timi from Wisemonie");
+            setWisemonieSender(helper);
             helper.setTo(to);
             helper.setSubject("You are valued — a note from Wisemonie 💚");
             helper.setText(htmlContent, true);
@@ -1339,7 +1348,7 @@ public class NotificationService {
             MimeMessage mimeMessage = mailSender.createMimeMessage();
             MimeMessageHelper helper = new MimeMessageHelper(mimeMessage, true);
 
-            helper.setFrom(fromEmail, "Timi from Wisemonie");
+            setWisemonieSender(helper);
             helper.setTo(to);
             helper.setSubject("Transaction PIN Reset Code: " + otpCode);
             helper.setText(htmlContent, true);
