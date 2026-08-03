@@ -2,6 +2,7 @@ package com.moniewise.moniewise_backend.repository;
 
 import com.moniewise.moniewise_backend.entity.OutboxEvent;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -31,6 +32,17 @@ public interface OutboxEventRepository extends JpaRepository<OutboxEvent, Long> 
 
     /** Count of events in a given status — used for dead-letter (FAILED) visibility. */
     long countByStatus(String status);
+
+    @Modifying
+    @Query("""
+        UPDATE OutboxEvent e
+        SET e.status = 'STALE',
+            e.processedAt = CURRENT_TIMESTAMP,
+            e.lastError = 'Cancelled: account deleted'
+        WHERE e.userId = :userId
+          AND e.status IN ('PENDING', 'PROCESSING')
+    """)
+    void cancelPendingByUserId(@Param("userId") Long userId);
 
     /** Per-type breakdown of permanently-FAILED (dead-letter) events, busiest first. */
     @Query(value = """

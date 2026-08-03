@@ -1454,6 +1454,8 @@ public class BudgetLifeCycleManager {
         List<TransactionLog> logs = new ArrayList<>();
 
         for (Envelope envelope : envelopes) {
+            scheduledTaskRepository.deleteByEnvelopeId(envelope.getId());
+
             BigDecimal refundable = calculateSafeRefundableAmount(envelope);
             if (refundable.compareTo(BigDecimal.ZERO) > 0) {
                 TransactionLog refundLog = new TransactionLog();

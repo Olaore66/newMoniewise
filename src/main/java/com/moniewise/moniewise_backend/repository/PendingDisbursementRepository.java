@@ -31,6 +31,7 @@ public interface PendingDisbursementRepository extends JpaRepository<PendingDisb
     @Query("SELECT pd FROM PendingDisbursement pd WHERE pd.expiresAt <= :expiresAt AND pd.notifiedUser = true")
     List<PendingDisbursement> findByExpiresAtBeforeAndNotifiedUserTrue(@Param("expiresAt") LocalDateTime expiresAt, Pageable pageable);
 
-    // Add this line
     Optional<PendingDisbursement> findFirstByEnvelopeIdAndStatus(Long envelopeId, Status status);
+
+    void deleteByUserId(Long userId);
 }

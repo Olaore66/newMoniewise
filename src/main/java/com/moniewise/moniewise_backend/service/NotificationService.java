@@ -4,6 +4,7 @@ import com.google.firebase.messaging.*;
 import com.moniewise.moniewise_backend.config.GenericNotificationEvent;
 import com.moniewise.moniewise_backend.dto.response.NotificationBulkReadResponse;
 import com.moniewise.moniewise_backend.entity.Notification;
+import com.moniewise.moniewise_backend.entity.User;
 import com.moniewise.moniewise_backend.enums.BudgetEngagementNudgeType;
 import com.moniewise.moniewise_backend.enums.NotificationPriority;
 import com.moniewise.moniewise_backend.enums.NotificationType;
@@ -1426,6 +1427,19 @@ public class NotificationService {
         if ("PROCESSED".equals(currentStatus) || "STALE".equals(currentStatus)
                 || "FAILED".equals(currentStatus)) {
             return null; // already resolved by another pass
+        }
+
+        // Deleted-user guard — never deliver notifications to a closed account.
+        boolean userDeleted = userRepository.findById(event.getUserId())
+                .map(u -> u.isDeleted())
+                .orElse(true);
+        if (userDeleted) {
+            event.setStatus("STALE");
+            event.setProcessedAt(LocalDateTime.now());
+            event.setLastError("Skipped: user deleted (type=" + event.getEventType() + ")");
+            outboxEventRepository.save(event);
+            logger.info("[OUTBOX] Skipping event {} for deleted user {}", event.getId(), event.getUserId());
+            return null;
         }
 
         // Staleness guard — don't deliver an alert whose relevance window has passed.

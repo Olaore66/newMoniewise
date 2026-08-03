@@ -7,6 +7,8 @@ import com.moniewise.moniewise_backend.enums.BudgetStatus;
 import com.moniewise.moniewise_backend.enums.SavingsStatus;
 import com.moniewise.moniewise_backend.enums.WithdrawalStatus;
 import com.moniewise.moniewise_backend.repository.BudgetRepository;
+import com.moniewise.moniewise_backend.repository.OutboxEventRepository;
+import com.moniewise.moniewise_backend.repository.PendingDisbursementRepository;
 import com.moniewise.moniewise_backend.repository.SavingsGoalRepository;
 import com.moniewise.moniewise_backend.repository.UserRepository;
 import com.moniewise.moniewise_backend.repository.WithdrawalRepository;
@@ -58,13 +60,17 @@ public class AccountDeletionService {
     private final BudgetRepository budgetRepository;
     private final SavingsGoalRepository savingsGoalRepository;
     private final WithdrawalRepository withdrawalRepository;
+    private final PendingDisbursementRepository pendingDisbursementRepository;
+    private final OutboxEventRepository outboxEventRepository;
 
     public AccountDeletionService(NotificationService notificationService,
                                   UserService userService, UserRepository userRepository,
                                   BudgetService budgetService, SavingsService savingsService,
                                   WalletService walletService, BudgetRepository budgetRepository,
                                   SavingsGoalRepository savingsGoalRepository,
-                                  WithdrawalRepository withdrawalRepository) {
+                                  WithdrawalRepository withdrawalRepository,
+                                  PendingDisbursementRepository pendingDisbursementRepository,
+                                  OutboxEventRepository outboxEventRepository) {
         this.notificationService = notificationService;
         this.userService = userService;
         this.userRepository = userRepository;
@@ -74,6 +80,8 @@ public class AccountDeletionService {
         this.budgetRepository = budgetRepository;
         this.savingsGoalRepository = savingsGoalRepository;
         this.withdrawalRepository = withdrawalRepository;
+        this.pendingDisbursementRepository = pendingDisbursementRepository;
+        this.outboxEventRepository = outboxEventRepository;
     }
 
     /**
@@ -128,6 +136,12 @@ public class AccountDeletionService {
         for (Budget budget : budgetRepository.findByUserIdAndStatus(userId, BudgetStatus.ACTIVE)) {
             budgetService.deleteBudget(budget.getId(), email);
         }
+
+        // Prevent ghost notifications: delete any pending disbursement records and
+        // cancel undelivered outbox events so the departing user never receives
+        // stale disbursement/expiry alerts after their account is closed.
+        pendingDisbursementRepository.deleteByUserId(userId);
+        outboxEventRepository.cancelPendingByUserId(userId);
 
         // Rake matured (unwithdrawn) savings → wallet.
         for (SavingsGoal goal : savingsGoalRepository.findByUserIdAndStatus(userId, SavingsStatus.MATURED)) {
