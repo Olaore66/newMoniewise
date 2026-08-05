@@ -4,5 +4,6 @@ public enum EngagementNudgeCampaign {
     MID_MONTH,
     SPECIAL_OCCASION,
     BIRTHDAY,
-    HOW_TO_USE_WISEMONIE
+    HOW_TO_USE_WISEMONIE,
+    SIGNUP_RETURN_48H
 }

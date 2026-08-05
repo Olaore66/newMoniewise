@@ -246,7 +246,7 @@ public class NotificationService {
             case PRE_DISBURSEMENT, DISBURSEMENT_REMINDER, POSITIVE_NUDGE, BUDGET_ENGAGEMENT_NUDGE,
                     SALARY_WEEK_NUDGE, POST_SALARY_NUDGE, MID_MONTH_NUDGE,
                     SPECIAL_OCCASION_NUDGE, BIRTHDAY_NUDGE, HOW_TO_USE_WISEMONIE,
-                    ONBOARDING_REMINDER, WELCOME,
+                    SIGNUP_RETURN_NUDGE, ONBOARDING_REMINDER, WELCOME,
                     BUDGET_CREATION_FEE, ENVELOPE_CREATED -> false; // <--- Added here!
 
             // âœ… SAVE TO INBOX (Financial / Important)
@@ -549,6 +549,7 @@ public class NotificationService {
         return switch (type) {
             case PRE_DISBURSEMENT, DISBURSEMENT_REMINDER                  -> 2_700_000L;   // 45 min
             case ONBOARDING_REMINDER                                      -> 7_200_000L;   // 2 h
+            case SIGNUP_RETURN_NUDGE                                      -> 172_800_000L; // 48 h
             case DISBURSEMENT_SUCCESS, DISBURSEMENT_READY, DISBURSEMENT,
                  WALLET_FUNDED, WALLET_DEPOSIT, EXTERNAL_TRANSFER,
                  ENVELOPE_TRANSFER, REFUND_ISSUED, DISBURSEMENT_REFUNDED,
@@ -709,6 +710,7 @@ public class NotificationService {
             case SPECIAL_OCCASION_NUDGE -> "Wisemonie note \uD83C\uDF89";
             case BIRTHDAY_NUDGE -> "Happy birthday \uD83C\uDF82";
             case HOW_TO_USE_WISEMONIE -> "Watch the Wisemonie guide \uD83C\uDFA5";
+            case SIGNUP_RETURN_NUDGE -> "Come back to Wisemonie \uD83E\uDDED";
             case ONBOARDING_REMINDER -> "Complete your profile \uD83D\uDCDD";
             case ADMIN_RECONCILIATION_ALERT -> "Reconciliation Alert";
             case SYSTEM -> "System Update 📢";
@@ -758,7 +760,7 @@ public class NotificationService {
                     BUDGET_ENGAGEMENT_NUDGE,
                     SALARY_WEEK_NUDGE, POST_SALARY_NUDGE, MID_MONTH_NUDGE,
                     SPECIAL_OCCASION_NUDGE, BIRTHDAY_NUDGE, HOW_TO_USE_WISEMONIE,
-                    ONBOARDING_REMINDER,
+                    SIGNUP_RETURN_NUDGE, ONBOARDING_REMINDER,
                     WELCOME -> NotificationPriority.MEDIUM;
             default -> NotificationPriority.LOW;
         };

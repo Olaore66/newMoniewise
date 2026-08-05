@@ -426,6 +426,48 @@ List<UserSummary> searchUsers(@Param("query") String query, Pageable pageable);
             @Param("afterUserId") Long afterUserId,
             @Param("limit") int limit);
 
+    /**
+     * Users who verified signup at least 48h ago and have not returned after
+     * the initial signup session grace window.
+     */
+    @Query(value = """
+            SELECT u.*
+            FROM users u
+            WHERE u.is_deleted = false
+              AND u.id > :afterUserId
+              AND u.is_verified = true
+              AND coalesce(u.test_account, false) = false
+              AND u.email IS NOT NULL
+              AND btrim(u.email) <> ''
+              AND u.created_at >= :createdAfter
+              AND u.created_at <= :eligibleBefore
+              AND (
+                    u.last_login IS NULL
+                    OR u.last_login <= u.created_at + (:returnGraceMinutes * INTERVAL '1 minute')
+              )
+              AND NOT EXISTS (
+                    SELECT 1
+                    FROM auth_sessions s
+                    WHERE s.user_id = u.id
+                      AND coalesce(s.last_seen_at, s.created_at)
+                          > u.created_at + (:returnGraceMinutes * INTERVAL '1 minute')
+              )
+              AND NOT EXISTS (
+                    SELECT 1
+                    FROM engagement_nudge_notifications n
+                    WHERE n.user_id = u.id
+                      AND n.campaign = 'SIGNUP_RETURN_48H'
+              )
+            ORDER BY u.id ASC
+            LIMIT :limit
+            """, nativeQuery = true)
+    List<User> findSignupUsersInactiveAfter48Hours(
+            @Param("afterUserId") Long afterUserId,
+            @Param("createdAfter") LocalDateTime createdAfter,
+            @Param("eligibleBefore") LocalDateTime eligibleBefore,
+            @Param("returnGraceMinutes") int returnGraceMinutes,
+            @Param("limit") int limit);
+
     Optional<User> findByEmail(String email);
 
     /**
