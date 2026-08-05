@@ -12,6 +12,8 @@ public interface ReconciliationItemRepository extends JpaRepository<Reconciliati
 
     List<ReconciliationItem> findByStatus(String status);
 
+    List<ReconciliationItem> findByReconciliationRunIdAndStatusIn(Long reconciliationRunId, List<String> statuses);
+
     @Query("select item from ReconciliationItem item where item.status <> 'RESOLVED'")
     List<ReconciliationItem> findByResolvedFalse();
 }

@@ -489,6 +489,88 @@ public class RubiesGateway implements PaymentGateway {
     // ── Transaction status query ──────────────────────────────────────────────
 
     @Override
+    public Optional<List<Map<String, Object>>> fetchAllWalletTransactions(
+            String startDate, String endDate, int page, int pageSize) {
+        return fetchAllWalletTransactions(startDate, endDate, null, page, pageSize);
+    }
+
+    @Override
+    public Optional<List<Map<String, Object>>> fetchAllWalletTransactions(
+            String startDate, String endDate, String searchItem, int page, int pageSize) {
+        String url = baseUrl + "/" + stage() + "/baas-wallet/read-all-wallet-transactions";
+        int currentPage = Math.max(1, page);
+        int safePageSize = pageSize > 0 ? pageSize : 100;
+        int pageGuard = 0;
+        List<Map<String, Object>> transactions = new ArrayList<>();
+
+        while (pageGuard++ < 50) {
+            RubiesReadAllTransactionsResponse body = fetchWalletTransactionsPage(
+                    url,
+                    new RubiesReadAllTransactionsRequest(
+                            startDate, endDate, searchItem, currentPage, safePageSize),
+                    false
+            );
+
+            if (body == null || !body.isSuccess()) {
+                return Optional.empty();
+            }
+
+            if (body.getData() != null) {
+                transactions.addAll(body.getData());
+            }
+
+            if (!body.isHasNext()) {
+                break;
+            }
+            currentPage++;
+        }
+
+        if (pageGuard >= 50) {
+            logger.warn("[Rubies] Stopped wallet transaction pagination after 50 pages for searchItem={}", searchItem);
+        }
+
+        return Optional.of(transactions);
+    }
+
+    private RubiesReadAllTransactionsResponse fetchWalletTransactionsPage(
+            String url,
+            RubiesReadAllTransactionsRequest req,
+            boolean isRetry) {
+        try {
+            ResponseEntity<RubiesReadAllTransactionsResponse> response =
+                    restTemplate.exchange(url, HttpMethod.POST,
+                            new HttpEntity<>(req, authHeaders()),
+                            RubiesReadAllTransactionsResponse.class);
+
+            RubiesReadAllTransactionsResponse body = response.getBody();
+            if (body == null) {
+                logger.warn("[Rubies] Read-all wallet transactions returned null body for page={} searchItem={}",
+                        req.getPage(), req.getSearchItem());
+                return null;
+            }
+
+            if (!isRetry && "22".equals(body.getResponseCode())) {
+                logger.warn("[Rubies] JWT expired (code 22) on read-all wallet transactions page={} searchItem={}. Attempting token refresh.",
+                        req.getPage(), req.getSearchItem());
+                if (tryRefreshToken()) {
+                    return fetchWalletTransactionsPage(url, req, true);
+                }
+            }
+
+            if (!body.isSuccess()) {
+                logger.warn("[Rubies] Read-all wallet transactions failed page={} searchItem={} code={} msg={}",
+                        req.getPage(), req.getSearchItem(), body.getResponseCode(), body.getResponseMessage());
+            }
+            return body;
+
+        } catch (Exception e) {
+            logger.warn("[Rubies] read-all wallet transactions exception page={} searchItem={}: {}",
+                    req.getPage(), req.getSearchItem(), e.getMessage());
+            return null;
+        }
+    }
+
+    @Override
     public Optional<String> fetchTransactionStatus(String providerReference) {
         String url = baseUrl + "/" + stage() + "/baas-transaction/tsq";
         RubiesTsqRequest req = new RubiesTsqRequest(providerReference);

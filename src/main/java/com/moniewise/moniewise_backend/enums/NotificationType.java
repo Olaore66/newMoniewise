@@ -41,6 +41,7 @@ public enum NotificationType {
     MID_MONTH_NUDGE,
     SPECIAL_OCCASION_NUDGE,
     BIRTHDAY_NUDGE,
+    HOW_TO_USE_WISEMONIE,
     SYSTEM,
     BUDGET_CREATION_SUCCESS,
     WALLET_DEPOSIT,
@@ -64,5 +65,6 @@ public enum NotificationType {
     ONBOARDING_REMINDER,
 
     // ── Admin / ops alerts ──────────────────────────────────────────────────
-    ADMIN_PAYEELORD_LOW_BALANCE
+    ADMIN_PAYEELORD_LOW_BALANCE,
+    ADMIN_RECONCILIATION_ALERT
 }

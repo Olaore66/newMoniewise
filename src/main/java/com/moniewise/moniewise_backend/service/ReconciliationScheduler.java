@@ -9,17 +9,17 @@ public class ReconciliationScheduler {
 
     private final ReconciliationService reconciliationService;
 
-    @Value("${moniewise.reconciliation.scheduler.enabled:false}")
+    @Value("${moniewise.reconciliation.scheduler.enabled:true}")
     private boolean schedulerEnabled;
 
-    @Value("${moniewise.reconciliation.provider-name:SECUREWAVE}")
+    @Value("${moniewise.reconciliation.provider-name:RUBIES}")
     private String providerName;
 
     public ReconciliationScheduler(ReconciliationService reconciliationService) {
         this.reconciliationService = reconciliationService;
     }
 
-    @Scheduled(cron = "${moniewise.reconciliation.scheduler.cron:0 0 2 * * ?}", zone = "Africa/Lagos")
+    @Scheduled(cron = "${moniewise.reconciliation.scheduler.cron:0 0 2,14 * * ?}", zone = "Africa/Lagos")
     public void runDailyReconciliation() {
         if (!schedulerEnabled) {
             return;

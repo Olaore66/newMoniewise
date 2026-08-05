@@ -203,7 +203,7 @@ public class WalletService {
     }
 
     /** Evict the wallet snapshot and total holdings from Redis after balance-affecting operations. */
-    private void evictWalletCache(Long userId) {
+    public void evictWalletCache(Long userId) {
         try {
             redisTemplate.delete(WALLET_CACHE_PREFIX + userId);
             redisTemplate.delete(TOTAL_HOLDINGS_PREFIX + userId);

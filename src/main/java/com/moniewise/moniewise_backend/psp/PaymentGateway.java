@@ -41,6 +41,16 @@ public interface PaymentGateway {
         return Optional.empty();
     }
 
+    default Optional<List<Map<String, Object>>> fetchAllWalletTransactions(
+            String startDate, String endDate, int page, int pageSize) {
+        return Optional.empty();
+    }
+
+    default Optional<List<Map<String, Object>>> fetchAllWalletTransactions(
+            String startDate, String endDate, String searchItem, int page, int pageSize) {
+        return fetchAllWalletTransactions(startDate, endDate, page, pageSize);
+    }
+
     default Optional<String> fetchTransactionStatus(String providerReference) {
         return Optional.empty();
     }

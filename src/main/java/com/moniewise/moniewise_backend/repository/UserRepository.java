@@ -214,6 +214,52 @@ List<UserSummary> searchUsers(@Param("query") String query, Pageable pageable);
             @Param("limit") int limit);
 
     /**
+     * Recent wallet users who may need the "How to use Wisemonie" guide:
+     * either their wallet balance is still zero OR they have no active budget.
+     */
+    @Query(value = """
+            SELECT DISTINCT u.*
+            FROM users u
+            JOIN wallets w ON w.user_id = u.id
+            WHERE u.is_deleted = false
+              AND u.id > :afterUserId
+              AND u.is_verified = true
+              AND coalesce(u.test_account, false) = false
+              AND u.email IS NOT NULL
+              AND btrim(u.email) <> ''
+              AND u.created_at >= :createdAfter
+              AND u.created_at <= :createdBefore
+              AND w.status = 'ACTIVE'
+              AND coalesce(w.is_revenue_wallet, false) = false
+              AND w.account_number IS NOT NULL
+              AND btrim(w.account_number) <> ''
+              AND (
+                    coalesce(w.balance, 0) = 0
+                    OR NOT EXISTS (
+                        SELECT 1
+                        FROM budgets b_active
+                        WHERE b_active.user_id = u.id
+                          AND b_active.status = 'ACTIVE'
+                    )
+              )
+              AND NOT EXISTS (
+                    SELECT 1
+                    FROM engagement_nudge_notifications n
+                    WHERE n.user_id = u.id
+                      AND n.campaign = 'HOW_TO_USE_WISEMONIE'
+                      AND n.sent_at > :sentAfter
+              )
+            ORDER BY u.id ASC
+            LIMIT :limit
+            """, nativeQuery = true)
+    List<User> findRecentWalletUsersNeedingHowToUseNudgeAfter(
+            @Param("afterUserId") Long afterUserId,
+            @Param("createdAfter") LocalDateTime createdAfter,
+            @Param("createdBefore") LocalDateTime createdBefore,
+            @Param("sentAfter") LocalDateTime sentAfter,
+            @Param("limit") int limit);
+
+    /**
      * Users who already have money in the wallet but still do not have an
      * active budget. The caller supplies the "funded before" cutoff so the
      * first reminder waits a couple of days after the wallet balance appears.

@@ -35,6 +35,8 @@ public class ReconciliationItem {
     public static final String STATUS_OPEN = "OPEN";
     public static final String STATUS_RESOLVED = "RESOLVED";
     public static final String STATUS_IGNORED = "IGNORED";
+    public static final String STATUS_AUTO_RESOLVED = "AUTO_RESOLVED";
+    public static final String STATUS_MANUAL_REVIEW = "MANUAL_REVIEW_REQUIRED";
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -62,7 +64,7 @@ public class ReconciliationItem {
     @Column(name = "provider_value", columnDefinition = "TEXT")
     private String providerValue;
 
-    @Column(name = "status", nullable = false, length = 20)
+    @Column(name = "status", nullable = false, length = 40)
     private String status = STATUS_OPEN;
 
     @Column(name = "detected_at", nullable = false)

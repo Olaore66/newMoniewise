@@ -138,6 +138,8 @@ public interface TransactionLogRepository extends JpaRepository<TransactionLog, 
 
     Optional<TransactionLog> findByProviderReference(String providerReference);
 
+    boolean existsByProviderNameAndProviderReference(String providerName, String providerReference);
+
     /**
      * Finds an envelope external transfer (sourceEnvelopeId IS NOT NULL) by provider reference.
      *

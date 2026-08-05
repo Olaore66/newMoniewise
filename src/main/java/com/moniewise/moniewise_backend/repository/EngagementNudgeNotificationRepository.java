@@ -28,6 +28,11 @@ public interface EngagementNudgeNotificationRepository extends JpaRepository<Eng
             EngagementNudgeChannel channel,
             LocalDate sentDate);
 
+    int countByUserIdAndCampaignAndSentAtAfter(
+            Long userId,
+            EngagementNudgeCampaign campaign,
+            LocalDateTime sentAfter);
+
     @Query("""
             SELECT n.copyKey
             FROM EngagementNudgeNotification n

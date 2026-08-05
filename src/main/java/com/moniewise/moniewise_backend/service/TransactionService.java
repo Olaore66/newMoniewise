@@ -55,6 +55,7 @@ public class TransactionService {
             WALLET_ENVELOPE_TRANSFER_FEE,
             // Airtime & data purchases (Payeelord VAS).
             VAS_PURCHASE,
+            RECONCILIATION_CREDIT,
             // Savings pot movements — without these the user's savings
             // withdrawals, top-ups and pot-to-friend sends were invisible in
             // the transactions list even though the money moved.
@@ -362,6 +363,11 @@ public class TransactionService {
             case WALLET_DEPOSIT:
                 title = "Wallet Funded";
                 subtitle = "Deposit";
+                iconType = "WALLET";
+                break;
+            case RECONCILIATION_CREDIT:
+                title = "Wallet Credit Recovered";
+                subtitle = "Reconciliation credit";
                 iconType = "WALLET";
                 break;
             case ENVELOPE_DISBURSEMENT:

@@ -82,6 +82,9 @@ public class NotificationService {
     @Value("${app.base-url:http://localhost:9000}")
     private String appBaseUrl;
 
+    @Value("${moniewise.reconciliation.admin-alert-email:}")
+    private String reconciliationAdminEmail;
+
     @Autowired
     public NotificationService(
             @Autowired(required = false) FirebaseMessaging firebaseMessaging,
@@ -242,7 +245,8 @@ public class NotificationService {
             // âŒ DO NOT SAVE TO INBOX (Transient, Nudges, or Bundled Noise)
             case PRE_DISBURSEMENT, DISBURSEMENT_REMINDER, POSITIVE_NUDGE, BUDGET_ENGAGEMENT_NUDGE,
                     SALARY_WEEK_NUDGE, POST_SALARY_NUDGE, MID_MONTH_NUDGE,
-                    SPECIAL_OCCASION_NUDGE, BIRTHDAY_NUDGE, ONBOARDING_REMINDER, WELCOME,
+                    SPECIAL_OCCASION_NUDGE, BIRTHDAY_NUDGE, HOW_TO_USE_WISEMONIE,
+                    ONBOARDING_REMINDER, WELCOME,
                     BUDGET_CREATION_FEE, ENVELOPE_CREATED -> false; // <--- Added here!
 
             // âœ… SAVE TO INBOX (Financial / Important)
@@ -484,6 +488,45 @@ public class NotificationService {
         outboxEventRepository.save(event);
     }
 
+    public void enqueueExternalPushOnlyNotification(Long userId,
+                                                    NotificationType type,
+                                                    String title,
+                                                    String message,
+                                                    String externalUrl,
+                                                    long ttlSeconds) {
+        if (userId == null) {
+            throw new IllegalArgumentException("userId is required");
+        }
+        if (type == null) {
+            throw new IllegalArgumentException("notification type is required");
+        }
+        if (message == null || message.isBlank()) {
+            throw new IllegalArgumentException("message is required");
+        }
+        if (externalUrl == null || externalUrl.isBlank()) {
+            throw new IllegalArgumentException("externalUrl is required");
+        }
+
+        Map<String, Object> payload = new java.util.HashMap<>();
+        if (title != null && !title.isBlank()) {
+            payload.put("__title", title);
+        }
+        payload.put("__message", message);
+        payload.put("__actionType", ACTION_OPEN_EXTERNAL_URL);
+        payload.put("__redirectUrl", externalUrl);
+        payload.put("__androidUrl", externalUrl);
+        payload.put("__iosUrl", externalUrl);
+
+        OutboxEvent event = new OutboxEvent();
+        event.setEventType(type.name());
+        event.setUserId(userId);
+        event.setPayload(payload);
+        event.setStatus("PENDING");
+        event.setCreatedAt(LocalDateTime.now());
+        event.setTtlSeconds(ttlSeconds > 0 ? ttlSeconds : 86_400L);
+        outboxEventRepository.save(event);
+    }
+
     // =========================================================================
     // 3. CORE FCM LOGIC
     // =========================================================================
@@ -665,7 +708,9 @@ public class NotificationService {
             case MID_MONTH_NUDGE -> "Money check \uD83E\uDDED";
             case SPECIAL_OCCASION_NUDGE -> "Wisemonie note \uD83C\uDF89";
             case BIRTHDAY_NUDGE -> "Happy birthday \uD83C\uDF82";
+            case HOW_TO_USE_WISEMONIE -> "Watch the Wisemonie guide \uD83C\uDFA5";
             case ONBOARDING_REMINDER -> "Complete your profile \uD83D\uDCDD";
+            case ADMIN_RECONCILIATION_ALERT -> "Reconciliation Alert";
             case SYSTEM -> "System Update 📢";
             case POSITIVE_NUDGE -> "Keep it up! 💪";
             default -> "Wisemonie Notification";
@@ -703,7 +748,8 @@ public class NotificationService {
                     // "Your money is ready" is the single most important savings push —
                     // it was missing here, falling to default LOW = push never sent.
                     SAVINGS_MATURED,
-                    ADMIN_PAYEELORD_LOW_BALANCE -> NotificationPriority.HIGH;
+                    ADMIN_PAYEELORD_LOW_BALANCE,
+                    ADMIN_RECONCILIATION_ALERT -> NotificationPriority.HIGH;
 
             case BUDGET_LIMIT_WARNING, BUDGET_END_SOON, BUDGET_ENDING_SOON, BUDGET_ENDS_TODAY,
                     PRE_DISBURSEMENT, DISBURSEMENT_REMINDER,
@@ -711,7 +757,8 @@ public class NotificationService {
                     SAVINGS_MATURING_SOON,
                     BUDGET_ENGAGEMENT_NUDGE,
                     SALARY_WEEK_NUDGE, POST_SALARY_NUDGE, MID_MONTH_NUDGE,
-                    SPECIAL_OCCASION_NUDGE, BIRTHDAY_NUDGE, ONBOARDING_REMINDER,
+                    SPECIAL_OCCASION_NUDGE, BIRTHDAY_NUDGE, HOW_TO_USE_WISEMONIE,
+                    ONBOARDING_REMINDER,
                     WELCOME -> NotificationPriority.MEDIUM;
             default -> NotificationPriority.LOW;
         };
@@ -1429,17 +1476,22 @@ public class NotificationService {
             return null; // already resolved by another pass
         }
 
+        NotificationType type = NotificationType.valueOf(event.getEventType());
+        Map<String, Object> params = event.getPayload() != null ? event.getPayload() : Map.of();
+
         // Deleted-user guard — never deliver notifications to a closed account.
-        boolean userDeleted = userRepository.findById(event.getUserId())
-                .map(u -> u.isDeleted())
-                .orElse(true);
-        if (userDeleted) {
-            event.setStatus("STALE");
-            event.setProcessedAt(LocalDateTime.now());
-            event.setLastError("Skipped: user deleted (type=" + event.getEventType() + ")");
-            outboxEventRepository.save(event);
-            logger.info("[OUTBOX] Skipping event {} for deleted user {}", event.getId(), event.getUserId());
-            return null;
+        if (type != NotificationType.ADMIN_RECONCILIATION_ALERT) {
+            boolean userDeleted = userRepository.findById(event.getUserId())
+                    .map(u -> u.isDeleted())
+                    .orElse(true);
+            if (userDeleted) {
+                event.setStatus("STALE");
+                event.setProcessedAt(LocalDateTime.now());
+                event.setLastError("Skipped: user deleted (type=" + event.getEventType() + ")");
+                outboxEventRepository.save(event);
+                logger.info("[OUTBOX] Skipping event {} for deleted user {}", event.getId(), event.getUserId());
+                return null;
+            }
         }
 
         // Staleness guard — don't deliver an alert whose relevance window has passed.
@@ -1455,8 +1507,11 @@ public class NotificationService {
             return null;
         }
 
-        NotificationType type = NotificationType.valueOf(event.getEventType());
-        Map<String, Object> params = event.getPayload();
+        if (type == NotificationType.ADMIN_RECONCILIATION_ALERT) {
+            deliverAdminReconciliationAlert(event, params);
+            return null;
+        }
+
         String message = resolveMessage(type, params);
         String redirectUrl = resolveRedirectUrl(event, params);
         String actionType = paramString(params, "__actionType");
@@ -1598,6 +1653,93 @@ public class NotificationService {
         private static String blankToNull(String value) {
             return value == null || value.isBlank() ? null : value;
         }
+    }
+
+    private void deliverAdminReconciliationAlert(OutboxEvent event, Map<String, Object> params) {
+        String to = paramString(params, "adminEmail");
+        if (to == null) {
+            to = reconciliationAdminEmail;
+        }
+        if (to == null || to.isBlank()) {
+            event.setStatus("FAILED");
+            event.setProcessedAt(LocalDateTime.now());
+            event.setLastError("moniewise.reconciliation.admin-alert-email is not configured");
+            outboxEventRepository.save(event);
+            logger.error("[OUTBOX] Reconciliation alert {} cannot be sent: admin email is not configured", event.getId());
+            return;
+        }
+
+        if ("stub".equals(activeProfile) || mailSender == null) {
+            event.setStatus("PROCESSED");
+            event.setProcessedAt(LocalDateTime.now());
+            event.setLastError(null);
+            outboxEventRepository.save(event);
+            logger.info("[STUB] Reconciliation admin alert {} would be emailed to {}", event.getId(), to);
+            return;
+        }
+
+        try {
+            MimeMessage mimeMessage = mailSender.createMimeMessage();
+            MimeMessageHelper helper = new MimeMessageHelper(mimeMessage, true);
+            setWisemonieSender(helper);
+            helper.setTo(to);
+            helper.setSubject("[Wisemonie Ops] Reconciliation review needed - run "
+                    + safeText(params.get("runId"), "unknown"));
+            helper.setText(buildReconciliationAlertHtml(params), true);
+            mailSender.send(mimeMessage);
+
+            event.setStatus("PROCESSED");
+            event.setProcessedAt(LocalDateTime.now());
+            event.setLastError(null);
+            outboxEventRepository.save(event);
+            logger.info("[OUTBOX] Reconciliation admin alert {} emailed to {}", event.getId(), to);
+        } catch (Exception e) {
+            scheduleRetry(event, "Admin reconciliation email failed: " + e.getMessage());
+            outboxEventRepository.save(event);
+        }
+    }
+
+    private String buildReconciliationAlertHtml(Map<String, Object> params) {
+        return """
+                <html>
+                  <body style="font-family: Arial, sans-serif; color: #10201b; line-height: 1.5;">
+                    <h2>Wisemonie reconciliation needs review</h2>
+                    <p>The latest BaaS reconciliation found items that need ops attention.</p>
+                    <table cellpadding="6" cellspacing="0" style="border-collapse: collapse;">
+                """
+                + adminAlertRow("Run ID", params.get("runId"))
+                + adminAlertRow("Provider", params.get("providerName"))
+                + adminAlertRow("Open items", params.get("openCount"))
+                + adminAlertRow("Manual review items", params.get("manualReviewCount"))
+                + adminAlertRow("Affected users", params.get("affectedUsers"))
+                + adminAlertRow("Total gap amount", params.get("totalGapAmount"))
+                + """
+                    </table>
+                    <h3>Summary payload</h3>
+                    <pre style="white-space: pre-wrap; background: #f5f7f6; padding: 12px;">"""
+                + escapeHtml(safeText(params.get("summaryJson"), "{}"))
+                + """
+                    </pre>
+                  </body>
+                </html>
+                """;
+    }
+
+    private String adminAlertRow(String label, Object value) {
+        return "<tr><td><strong>" + escapeHtml(label) + "</strong></td><td>"
+                + escapeHtml(safeText(value, "-")) + "</td></tr>";
+    }
+
+    private String escapeHtml(String value) {
+        if (value == null) {
+            return "";
+        }
+        return value
+                .replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+                .replace("\"", "&quot;")
+                .replace("'", "&#39;");
     }
 
     /** Bumps retry count and moves the event to PENDING (retry) or FAILED (exhausted). */

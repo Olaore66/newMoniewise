@@ -62,6 +62,12 @@ public enum TransactionType {
      * shown in the user's Activity and the envelope's history.
      * Reference pattern: {@code VAS-AT-...} / {@code VAS-DT-...}
      */
-    VAS_PURCHASE
+    VAS_PURCHASE,
+
+    /**
+     * User-facing wallet credit created by the reconciliation self-healer after
+     * proving Rubies received a credit webhook we never processed.
+     */
+    RECONCILIATION_CREDIT
 
     }
