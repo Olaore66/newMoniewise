@@ -45,6 +45,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 @Service
 @Transactional(readOnly = true)
@@ -53,9 +54,11 @@ public class ReconciliationService {
     private static final Logger logger = LoggerFactory.getLogger(ReconciliationService.class);
 
     private static final BigDecimal HOLDINGS_TOLERANCE = new BigDecimal("1.00");
-    private static final int MISSED_DEPOSIT_LOOKBACK_DAYS = 7;
     private static final int RUBIES_TRANSACTION_PAGE_SIZE = 100;
     private static final Long SYSTEM_OUTBOX_USER_ID = 0L;
+
+    @Value("${moniewise.reconciliation.lookback-days:30}")
+    private int defaultLookbackDays;
 
     private final ReconciliationRunRepository reconciliationRunRepository;
     private final ReconciliationItemRepository reconciliationItemRepository;
@@ -115,68 +118,63 @@ public class ReconciliationService {
         return reconciliationRunRepository.save(run);
     }
 
+    /**
+     * Reconciles the platform revenue wallet against its BaaS provider balance.
+     *
+     * <p>Historically this method compared {@code wallet.balance == provider.balance} on the
+     * revenue wallet and flagged any drift. That check is intentionally disabled: the Rubies
+     * revenue account holds mixed inflows — real revenue (markup fees, withdrawal fees) AND
+     * VAS operating float (money collected from users' envelopes to pay airtime/data providers
+     * from Wisemonie's Rubies account). Since VAS provider payouts are not currently tracked
+     * internally, {@code provider.balance} will always exceed {@code wallet.balance} by the
+     * outstanding VAS float, and every daily run would produce a false mismatch that drowns
+     * out real issues in the reconciliation report.
+     *
+     * <p>Once VAS payouts are tracked (or VAS float is split into its own Rubies account),
+     * restore the comparison using
+     * {@code expected_baas = wallet.balance + (vas_collected − vas_paid_out)}.
+     *
+     * <p>The method is kept for scheduler compatibility and reports a null-op summary with
+     * a diagnostic note so ops sees the wallet was intentionally skipped and knows the
+     * current inflows for eyeball tracking.
+     */
+    /**
+     * Reconciles the platform revenue wallet against its BaaS provider balance.
+     *
+     * <p>Historically this method compared {@code wallet.balance == provider.balance} on the
+     * revenue wallet and flagged any drift. That check is intentionally disabled: the Rubies
+     * revenue account holds mixed inflows — real revenue (markup fees, withdrawal fees) AND
+     * VAS operating float (money collected from users' envelopes to pay airtime/data providers
+     * from Wisemonie's Rubies account). Since VAS provider payouts are not currently tracked
+     * internally, {@code provider.balance} will always exceed {@code wallet.balance} by the
+     * outstanding VAS float, and every daily run would produce a false mismatch that drowns
+     * out real issues in the reconciliation report.
+     *
+     * <p>Once VAS payouts are tracked (or VAS float is split into its own Rubies account),
+     * restore the comparison using
+     * {@code expected_baas = wallet.balance + (vas_collected − vas_paid_out)}.
+     *
+     * <p>The method is kept for scheduler compatibility and reports a null-op summary with
+     * a diagnostic note so ops sees the wallet was intentionally skipped.
+     */
     @Transactional
     public Map<String, Object> reconcileWalletBalances(Long runId) {
-        ReconciliationRun run = getRunOrThrow(runId);
-        int checked = 0;
-        int mismatches = 0;
+        getRunOrThrow(runId);
 
-        for (Wallet wallet : walletRepository.findAll()) {
-            if (!wallet.isRevenueWallet()) {
-                continue;
-            }
+        BigDecimal revenueWalletBalance = walletRepository.findByRevenueWalletTrue()
+                .map(w -> w.getBalance() != null ? w.getBalance() : BigDecimal.ZERO)
+                .orElse(BigDecimal.ZERO);
 
-            checked++;
-            PaymentGateway gateway = resolveGatewayForRun(wallet, run);
-
-            String providerReference = firstNonBlank(wallet.getProviderWalletRef(), wallet.getSubWalletRef());
-            if (providerReference == null) {
-                recordMismatch(
-                        run,
-                        ReconciliationItem.REFERENCE_TYPE_WALLET,
-                        wallet.getId().toString(),
-                        null,
-                        ReconciliationItem.MISMATCH_MISSING_PROVIDER,
-                        stringify(wallet.getBalance()),
-                        "NO_PROVIDER_WALLET_REF"
-                );
-                mismatches++;
-                continue;
-            }
-
-            Optional<BigDecimal> providerBalance = gateway.fetchWalletBalance(providerReference);
-            if (providerBalance.isEmpty()) {
-                recordMismatch(
-                        run,
-                        ReconciliationItem.REFERENCE_TYPE_WALLET,
-                        wallet.getId().toString(),
-                        providerReference,
-                        ReconciliationItem.MISMATCH_MISSING_PROVIDER,
-                        stringify(wallet.getBalance()),
-                        null
-                );
-                mismatches++;
-                continue;
-            }
-
-            if (wallet.getBalance().compareTo(providerBalance.get()) != 0) {
-                recordMismatch(
-                        run,
-                        ReconciliationItem.REFERENCE_TYPE_WALLET,
-                        wallet.getId().toString(),
-                        providerReference,
-                        ReconciliationItem.MISMATCH_BALANCE,
-                        stringify(wallet.getBalance()),
-                        stringify(providerBalance.get())
-                );
-                mismatches++;
-            }
-        }
+        logger.info("[Recon] Revenue-wallet comparison SKIPPED (mixed revenue + VAS float). " +
+                "internalRevenueBalance={}", revenueWalletBalance);
 
         Map<String, Object> summary = new LinkedHashMap<>();
         summary.put("scope", "walletBalances");
-        summary.put("checked", checked);
-        summary.put("mismatches", mismatches);
+        summary.put("checked", 0);
+        summary.put("mismatches", 0);
+        summary.put("note", "Revenue-wallet BaaS comparison intentionally disabled — account " +
+                "holds mixed revenue and VAS operating float. Track VAS payouts to restore.");
+        summary.put("internalRevenueBalance", revenueWalletBalance);
         return summary;
     }
 
@@ -335,7 +333,7 @@ public class ReconciliationService {
                 mismatches++;
 
                 if (difference.compareTo(BigDecimal.ZERO) > 0) {
-                    HealResult result = healMissedDeposits(item, wallet, gap, gateway);
+                    HealResult result = healMissedDeposits(item, wallet, gap, gateway, defaultLookbackDays);
                     if (result.autoResolved()) {
                         autoResolved++;
                     } else {
@@ -382,7 +380,8 @@ public class ReconciliationService {
     }
 
     @Transactional
-    private HealResult healMissedDeposits(ReconciliationItem item, Wallet wallet, BigDecimal gap, PaymentGateway gateway) {
+    private HealResult healMissedDeposits(ReconciliationItem item, Wallet wallet, BigDecimal gap,
+                                          PaymentGateway gateway, int lookbackDays) {
         if (gap == null || gap.compareTo(BigDecimal.ZERO) <= 0) {
             return markManualReview(item, "Auto-heal skipped: invalid gap amount " + gap + ".");
         }
@@ -393,33 +392,15 @@ public class ReconciliationService {
                     + " exceeds configured ceiling " + ceiling + ".");
         }
 
-        String searchItem = firstNonBlank(wallet.getAccountNumber(), wallet.getProviderWalletRef(), wallet.getSubWalletRef());
-        if (searchItem == null) {
-            return markManualReview(item, "Auto-heal skipped: wallet has no account number/provider reference to search.");
-        }
-
-        LocalDate end = LocalDate.now();
-        LocalDate start = end.minusDays(MISSED_DEPOSIT_LOOKBACK_DAYS);
-        Optional<List<Map<String, Object>>> providerTransactions = gateway.fetchAllWalletTransactions(
-                start.format(DateTimeFormatter.ISO_LOCAL_DATE),
-                end.format(DateTimeFormatter.ISO_LOCAL_DATE),
-                searchItem,
-                1,
-                RUBIES_TRANSACTION_PAGE_SIZE
-        );
-
-        if (providerTransactions.isEmpty()) {
+        int lookback = lookbackDays > 0 ? lookbackDays : defaultLookbackDays;
+        List<MissedCreditCandidate> candidates = fetchMissedCreditCandidates(wallet, gateway, lookback);
+        if (candidates == null) {
             return markManualReview(item, "Auto-heal skipped: provider transaction lookup returned no usable response.");
-        }
-
-        List<MissedCreditCandidate> candidates = new ArrayList<>();
-        for (Map<String, Object> transaction : providerTransactions.get()) {
-            extractMissedCreditCandidate(wallet, gateway, transaction).ifPresent(candidates::add);
         }
 
         if (candidates.isEmpty()) {
             return markManualReview(item, "No unprocessed Rubies credit in the last "
-                    + MISSED_DEPOSIT_LOOKBACK_DAYS + " days explains this gap.");
+                    + lookback + " days explains this gap.");
         }
 
         List<MissedCreditCandidate> selected = selectCreditsThatExplainGap(candidates, gap);
@@ -427,8 +408,11 @@ public class ReconciliationService {
             BigDecimal candidateTotal = candidates.stream()
                     .map(MissedCreditCandidate::amount)
                     .reduce(BigDecimal.ZERO, BigDecimal::add);
-            return markManualReview(item, "Unprocessed Rubies credits found, but their total "
-                    + candidateTotal + " does not explain the gap " + gap + ".");
+            return markManualReview(item, "Unprocessed Rubies credits found (total=" + candidateTotal
+                    + ") but no subset matches gap " + gap + ". Candidates: "
+                    + candidates.stream()
+                        .map(c -> c.paymentReference() + "=" + c.amount())
+                        .collect(Collectors.joining(", ")));
         }
 
         BigDecimal healedTotal = BigDecimal.ZERO;
@@ -453,6 +437,229 @@ public class ReconciliationService {
         logger.warn("[Recon] Auto-healed missed deposit(s) for user {} wallet {} refs={} total={}",
                 wallet.getUser().getId(), wallet.getId(), healedReferences, healedTotal);
         return new HealResult(true, healedTotal, item.getResolutionNote());
+    }
+
+    /**
+     * Fetches Rubies transactions for this wallet over {@code lookbackDays} and returns
+     * only credits (CR) whose paymentReference is NOT already recorded in transaction_logs.
+     *
+     * <p>Returns {@code null} if the provider call itself failed (distinct from an empty list,
+     * which means the provider had no matching credits).
+     */
+    private List<MissedCreditCandidate> fetchMissedCreditCandidates(
+            Wallet wallet, PaymentGateway gateway, int lookbackDays) {
+        String searchItem = firstNonBlank(wallet.getAccountNumber(), wallet.getProviderWalletRef(), wallet.getSubWalletRef());
+        LocalDate end = LocalDate.now();
+        LocalDate start = end.minusDays(Math.max(1, lookbackDays));
+
+        Optional<List<Map<String, Object>>> providerTransactions = gateway.fetchAllWalletTransactions(
+                start.format(DateTimeFormatter.ISO_LOCAL_DATE),
+                end.format(DateTimeFormatter.ISO_LOCAL_DATE),
+                searchItem,
+                1,
+                RUBIES_TRANSACTION_PAGE_SIZE
+        );
+        if (providerTransactions.isEmpty()) {
+            return null;
+        }
+
+        List<MissedCreditCandidate> candidates = new ArrayList<>();
+        for (Map<String, Object> transaction : providerTransactions.get()) {
+            extractMissedCreditCandidate(wallet, gateway, transaction).ifPresent(candidates::add);
+        }
+        return candidates;
+    }
+
+    /**
+     * Admin-triggered reconciliation + heal for a single user. Runs outside the scheduler
+     * so gaps can be resolved on demand, and accepts an override for the lookback window
+     * (useful when the gap is older than the default 30 days).
+     *
+     * <p>{@code dryRun=true} performs the fetch and diagnosis but does NOT credit the wallet
+     * or persist any heal — used to preview what would happen before pulling the trigger.
+     *
+     * @param userId              the user whose wallet to reconcile
+     * @param lookbackDaysOverride null → use configured default; otherwise override
+     * @param dryRun              true → diagnose without writing; false → apply credits
+     * @param providerName        provider to use when the wallet has none stored (e.g. "RUBIES")
+     * @return diagnostic report suitable for JSON serialization
+     */
+    @Transactional
+    public Map<String, Object> runOnDemandForUser(Long userId,
+                                                  Integer lookbackDaysOverride,
+                                                  boolean dryRun,
+                                                  String providerName) {
+        Map<String, Object> report = new LinkedHashMap<>();
+        report.put("userId", userId);
+        report.put("dryRun", dryRun);
+
+        Wallet wallet = walletRepository.findByUserId(userId).orElse(null);
+        if (wallet == null) {
+            report.put("status", "NO_WALLET");
+            report.put("message", "No wallet found for user " + userId);
+            return report;
+        }
+        if (wallet.isRevenueWallet()) {
+            report.put("status", "REVENUE_WALLET_SKIPPED");
+            report.put("message", "Refusing to reconcile the platform revenue wallet via user-heal endpoint.");
+            return report;
+        }
+
+        PaymentGateway gateway;
+        if (wallet.getProviderName() != null && !wallet.getProviderName().isBlank()) {
+            gateway = paymentGatewayResolver.resolveForWallet(wallet);
+        } else {
+            gateway = paymentGatewayResolver.resolveByProviderName(
+                    providerName != null && !providerName.isBlank() ? providerName : "RUBIES");
+        }
+
+        String providerReference = firstNonBlank(wallet.getProviderWalletRef(), wallet.getSubWalletRef());
+        report.put("accountNumber", wallet.getAccountNumber());
+        report.put("providerReference", providerReference);
+        report.put("providerName", gateway.getProviderName());
+
+        if (providerReference == null) {
+            report.put("status", "NO_PROVIDER_REF");
+            report.put("message", "Wallet has no provider reference — cannot query BaaS.");
+            return report;
+        }
+
+        Optional<BigDecimal> providerBalance = gateway.fetchWalletBalance(providerReference);
+        if (providerBalance.isEmpty()) {
+            report.put("status", "PROVIDER_UNREACHABLE");
+            report.put("message", "Could not fetch BaaS balance for " + providerReference);
+            return report;
+        }
+
+        BigDecimal walletBalance = wallet.getBalance() != null ? wallet.getBalance() : BigDecimal.ZERO;
+        BigDecimal envelopeTotal = envelopeRepository.sumTotalRemainingByUserIdAndBudgetStatus(userId, BudgetStatus.ACTIVE);
+        BigDecimal savingsTotal = savingsGoalRepository.sumBalanceByUserIdAndStatus(userId, SavingsStatus.ACTIVE);
+        BigDecimal internalTotal = walletBalance.add(envelopeTotal).add(savingsTotal);
+        BigDecimal difference = providerBalance.get().subtract(internalTotal);
+        BigDecimal gap = difference.abs();
+
+        report.put("walletBalance", walletBalance);
+        report.put("activeEnvelopes", envelopeTotal);
+        report.put("activeSavings", savingsTotal);
+        report.put("internalTotal", internalTotal);
+        report.put("providerBalance", providerBalance.get());
+        report.put("difference", difference);
+
+        if (gap.compareTo(HOLDINGS_TOLERANCE) <= 0) {
+            report.put("status", "OK");
+            report.put("message", "Within tolerance — no action needed.");
+            return report;
+        }
+
+        int lookback = lookbackDaysOverride != null && lookbackDaysOverride > 0
+                ? lookbackDaysOverride
+                : defaultLookbackDays;
+        report.put("lookbackDays", lookback);
+
+        if (difference.compareTo(BigDecimal.ZERO) < 0) {
+            report.put("status", "INTERNAL_EXCEEDS_PROVIDER");
+            report.put("message", "Internal total exceeds BaaS by " + gap
+                    + " — never auto-debit users; requires ops review.");
+            return report;
+        }
+
+        List<MissedCreditCandidate> candidates = fetchMissedCreditCandidates(wallet, gateway, lookback);
+        if (candidates == null) {
+            report.put("status", "PROVIDER_TXN_LOOKUP_FAILED");
+            report.put("message", "Could not read wallet transactions from BaaS.");
+            return report;
+        }
+
+        List<Map<String, Object>> candidateSummary = new ArrayList<>();
+        for (MissedCreditCandidate c : candidates) {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("paymentReference", c.paymentReference());
+            row.put("amount", c.amount());
+            row.put("occurredAt", c.occurredAt().toString());
+            row.put("narration", c.narration());
+            candidateSummary.add(row);
+        }
+        report.put("unprocessedCredits", candidateSummary);
+        report.put("unprocessedCreditTotal",
+                candidates.stream().map(MissedCreditCandidate::amount)
+                        .reduce(BigDecimal.ZERO, BigDecimal::add));
+
+        List<MissedCreditCandidate> selected = selectCreditsThatExplainGap(candidates, gap);
+        report.put("selectedForHeal", selected.stream()
+                .map(c -> Map.of(
+                        "paymentReference", c.paymentReference(),
+                        "amount", c.amount()))
+                .collect(Collectors.toList()));
+
+        if (selected.isEmpty()) {
+            report.put("status", "NO_SUBSET_MATCHES_GAP");
+            report.put("message", "Found " + candidates.size() + " unprocessed credit(s) but no subset explains gap " + gap
+                    + ". Ops must decide whether to credit a partial amount manually.");
+            return report;
+        }
+
+        if (dryRun) {
+            report.put("status", "DRY_RUN_WOULD_HEAL");
+            report.put("message", "Would credit " + selected.size()
+                    + " missed deposit(s) totalling "
+                    + selected.stream().map(MissedCreditCandidate::amount)
+                        .reduce(BigDecimal.ZERO, BigDecimal::add));
+            return report;
+        }
+
+        BigDecimal ceiling = autoHealMax != null ? autoHealMax : new BigDecimal("50000");
+        if (gap.compareTo(ceiling) > 0) {
+            report.put("status", "GAP_EXCEEDS_CEILING");
+            report.put("message", "Gap " + gap + " exceeds auto-heal ceiling " + ceiling
+                    + ". Raise moniewise.reconciliation.auto-heal-max or apply manually.");
+            return report;
+        }
+
+        BigDecimal healedTotal = BigDecimal.ZERO;
+        List<String> healedReferences = new ArrayList<>();
+        for (MissedCreditCandidate candidate : selected) {
+            if (creditMissedDeposit(wallet, candidate, gateway.getProviderName())) {
+                healedTotal = healedTotal.add(candidate.amount());
+                healedReferences.add(candidate.paymentReference());
+            }
+        }
+
+        report.put("healedReferences", healedReferences);
+        report.put("healedTotal", healedTotal);
+
+        ReconciliationRun run = startRun(gateway.getProviderName(), ReconciliationRun.RUN_TYPE_INCREMENTAL);
+        run.setCreatedBy(ReconciliationRun.CREATED_BY_ADMIN);
+        reconciliationRunRepository.save(run);
+
+        String breakdown = String.format("wallet=%s, envelopes=%s, savings=%s, total=%s",
+                walletBalance, envelopeTotal, savingsTotal, internalTotal);
+        ReconciliationItem item = recordMismatch(
+                run,
+                ReconciliationItem.REFERENCE_TYPE_HOLDINGS,
+                wallet.getId().toString(),
+                providerReference,
+                ReconciliationItem.MISMATCH_HOLDINGS,
+                breakdown,
+                stringify(providerBalance.get())
+        );
+        if (isWithinTolerance(healedTotal, gap)) {
+            item.setStatus(ReconciliationItem.STATUS_AUTO_RESOLVED);
+            item.setResolvedAt(LocalDateTime.now());
+            item.setResolutionNote("Admin-triggered heal: "
+                    + String.join(", ", healedReferences) + " total=" + healedTotal + ".");
+            report.put("status", "HEALED");
+        } else {
+            item.setStatus(ReconciliationItem.STATUS_MANUAL_REVIEW);
+            item.setResolutionNote("Admin-triggered heal incomplete: credited " + healedTotal
+                    + " but expected gap " + gap + ".");
+            report.put("status", "HEAL_INCOMPLETE");
+        }
+        reconciliationItemRepository.save(item);
+        completeRun(run.getId(), toSummaryJson(report));
+
+        report.put("reconciliationRunId", run.getId());
+        report.put("reconciliationItemId", item.getId());
+        return report;
     }
 
     private Optional<MissedCreditCandidate> extractMissedCreditCandidate(
