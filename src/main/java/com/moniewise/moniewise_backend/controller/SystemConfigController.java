@@ -21,6 +21,7 @@ import java.util.Map;
  *   <li>Update markup fee: {@code PUT /admin/config/transfer.markup.tier1.fee} body {@code {"value":"100"}}</li>
  *   <li>Change premium price: {@code PUT /admin/config/premium.monthly.price} body {@code {"value":"2500"}}</li>
  *   <li>Disable budget fee: {@code PUT /admin/config/budget.creation.fee} body {@code {"value":"0"}}</li>
+ *   <li>Change budget minimum: {@code PUT /admin/config/budget.min.amount} body {@code {"value":"1000"}}</li>
  * </ul>
  */
 @RestController

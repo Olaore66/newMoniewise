@@ -82,7 +82,7 @@ public class HowToUseWisemonieNudgeService {
         this.authSessionService = authSessionService;
     }
 
-    @Scheduled(cron = "${moniewise.engagement.how-to-use.cron:0 0 11 * * ?}", zone = "Africa/Lagos")
+    @Scheduled(cron = "${moniewise.engagement.how-to-use.cron:0 45 9 * * ?}", zone = "Africa/Lagos")
     public void processHowToUseNudges() {
         if (!enabled) {
             return;

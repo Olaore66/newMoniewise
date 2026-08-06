@@ -105,6 +105,9 @@ public class SystemConfigService {
     /** Budget creation fee per 30-day interval (NGN). Set to 0 to disable. */
     public static final String BUDGET_CREATION_FEE   = "budget.creation.fee";
 
+    /** Minimum amount a user can use to create a budget (NGN). */
+    public static final String BUDGET_MIN_AMOUNT     = "budget.min.amount";
+
     /**
      * Maximum budget duration in days.
      * Default: 730 (2 years) — covers goal budgets, project budgets, annual plans.
