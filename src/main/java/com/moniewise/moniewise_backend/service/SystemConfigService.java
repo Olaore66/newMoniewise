@@ -28,6 +28,7 @@ public class SystemConfigService {
     private static final Logger logger = LoggerFactory.getLogger(SystemConfigService.class);
     private static final String CACHE_PREFIX = "syscfg:";
     private static final Duration CACHE_TTL   = Duration.ofMinutes(5);
+    public static final BigDecimal DEFAULT_BUDGET_MIN_AMOUNT = new BigDecimal("5000");
 
     // ── Well-known config keys ─────────────────────────────────────────────────
     /** Active PSP: "PROVIDUS", "SECUREWAVE", or "RUBIES" */
@@ -228,6 +229,15 @@ public class SystemConfigService {
             logger.warn("[SystemConfig] Cannot parse '{}' as BigDecimal for key='{}' — using default", raw, key);
             return defaultValue;
         }
+    }
+
+    public BigDecimal getBudgetMinAmount() {
+        BigDecimal amount = getBigDecimal(BUDGET_MIN_AMOUNT, DEFAULT_BUDGET_MIN_AMOUNT);
+        if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {
+            logger.warn("[SystemConfig] Invalid budget minimum '{}' — using default", amount);
+            return DEFAULT_BUDGET_MIN_AMOUNT;
+        }
+        return amount;
     }
 
     public int getInt(String key, int defaultValue) {

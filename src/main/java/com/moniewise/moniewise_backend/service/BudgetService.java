@@ -67,7 +67,6 @@ public class BudgetService {
     /** Short-lived cache for read-heavy GET /budgets/{id}/envelopes calls. */
     private static final String ENVELOPES_CACHE_PREFIX = "envelopes:";
     private static final long ENVELOPES_CACHE_TTL_SECS = 30;
-    private static final BigDecimal DEFAULT_BUDGET_MIN_AMOUNT = new BigDecimal("5000");
 
     @Value("${moniewise.revenue.wallet.user-id}")
     private Long revenueWalletUserId;
@@ -519,9 +518,7 @@ public class BudgetService {
         }
 
         // Minimum budget amount is product-configurable via system_config.
-        BigDecimal minAmount = systemConfig.getBigDecimal(
-                SystemConfigService.BUDGET_MIN_AMOUNT,
-                DEFAULT_BUDGET_MIN_AMOUNT);
+        BigDecimal minAmount = systemConfig.getBudgetMinAmount();
         if (request.getTotalAmount().compareTo(minAmount) < 0) {
             throw new IllegalArgumentException(
                     String.format(Locale.US, "Minimum budget amount is ₦%,.2f", minAmount));
@@ -1480,4 +1477,3 @@ public class BudgetService {
     }
 
 }
-

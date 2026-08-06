@@ -86,7 +86,7 @@ public class SecurityConfig {
                 // with no login. The JSON /legal/** API for the in-app viewer stays
                 // authenticated below.
                 .antMatchers("/privacy-policy", "/terms-of-use", "/delete-account").permitAll()
-                .antMatchers("/app/version-check", "/app/update-status").permitAll()
+                .antMatchers("/app/version-check", "/app/update-status", "/app/config").permitAll()
                 .antMatchers("/admin/**").hasRole("ADMIN")   // URL-level guard (defence-in-depth alongside @PreAuthorize)
                 .antMatchers("/auth/logout", "/auth/refresh", "/auth/delete").authenticated()
                 .antMatchers("/users/**", "/notifications/**", "/disbursements/**", "/transactions/**", "/legal/**", "/ai/**", "/budgets/**", "/envelopes/**", "/wallets/**", "/transactions/pin/**", "/beneficiaries/**", "/savings/**").authenticated()
