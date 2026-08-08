@@ -41,6 +41,8 @@ public interface NotificationRepository extends JpaRepository<Notification, Long
 
     Optional<Notification> findByIdAndUserId(Long id, Long userId);
 
+    boolean existsByUserIdAndTypeAndIsReadTrue(Long userId, NotificationType type);
+
     List<Notification> findByUserIdAndPushSentFalseAndCreatedAtAfter(Long userId, LocalDateTime after);
 
     @Modifying

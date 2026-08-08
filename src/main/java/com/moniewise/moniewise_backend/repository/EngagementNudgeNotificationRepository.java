@@ -34,6 +34,16 @@ public interface EngagementNudgeNotificationRepository extends JpaRepository<Eng
             LocalDateTime sentAfter);
 
     @Query("""
+            SELECT COUNT(DISTINCT n.sentDate)
+            FROM EngagementNudgeNotification n
+            WHERE n.userId = :userId
+              AND n.campaign = :campaign
+            """)
+    long countDistinctSendDaysByUserIdAndCampaign(
+            @Param("userId") Long userId,
+            @Param("campaign") EngagementNudgeCampaign campaign);
+
+    @Query("""
             SELECT n.copyKey
             FROM EngagementNudgeNotification n
             WHERE n.userId = :userId

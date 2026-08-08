@@ -218,9 +218,8 @@ List<UserSummary> searchUsers(@Param("query") String query, Pageable pageable);
      * either their wallet balance is still zero OR they have no active budget.
      */
     @Query(value = """
-            SELECT DISTINCT u.*
+            SELECT u.*
             FROM users u
-            JOIN wallets w ON w.user_id = u.id
             WHERE u.is_deleted = false
               AND u.id > :afterUserId
               AND u.is_verified = true
@@ -229,18 +228,25 @@ List<UserSummary> searchUsers(@Param("query") String query, Pageable pageable);
               AND btrim(u.email) <> ''
               AND u.created_at >= :createdAfter
               AND u.created_at <= :createdBefore
-              AND w.status = 'ACTIVE'
-              AND coalesce(w.is_revenue_wallet, false) = false
-              AND w.account_number IS NOT NULL
-              AND btrim(w.account_number) <> ''
-              AND (
-                    coalesce(w.balance, 0) = 0
-                    OR NOT EXISTS (
-                        SELECT 1
-                        FROM budgets b_active
-                        WHERE b_active.user_id = u.id
-                          AND b_active.status = 'ACTIVE'
-                    )
+              AND NOT EXISTS (
+                    SELECT 1
+                    FROM wallets w_funded
+                    WHERE w_funded.user_id = u.id
+                      AND coalesce(w_funded.is_revenue_wallet, false) = false
+                      AND coalesce(w_funded.balance, 0) > 0
+              )
+              AND NOT EXISTS (
+                    SELECT 1
+                    FROM budgets b_active
+                    WHERE b_active.user_id = u.id
+                      AND b_active.status = 'ACTIVE'
+              )
+              AND NOT EXISTS (
+                    SELECT 1
+                    FROM notifications read_guide
+                    WHERE read_guide.user_id = u.id
+                      AND read_guide.type = 'HOW_TO_USE_WISEMONIE'
+                      AND read_guide.is_read = true
               )
               AND NOT EXISTS (
                     SELECT 1
@@ -249,6 +255,12 @@ List<UserSummary> searchUsers(@Param("query") String query, Pageable pageable);
                       AND n.campaign = 'HOW_TO_USE_WISEMONIE'
                       AND n.sent_at > :sentAfter
               )
+              AND (
+                    SELECT COUNT(DISTINCT all_n.sent_date)
+                    FROM engagement_nudge_notifications all_n
+                    WHERE all_n.user_id = u.id
+                      AND all_n.campaign = 'HOW_TO_USE_WISEMONIE'
+              ) < :maxSendDays
             ORDER BY u.id ASC
             LIMIT :limit
             """, nativeQuery = true)
@@ -257,6 +269,7 @@ List<UserSummary> searchUsers(@Param("query") String query, Pageable pageable);
             @Param("createdAfter") LocalDateTime createdAfter,
             @Param("createdBefore") LocalDateTime createdBefore,
             @Param("sentAfter") LocalDateTime sentAfter,
+            @Param("maxSendDays") int maxSendDays,
             @Param("limit") int limit);
 
     /**

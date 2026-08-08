@@ -245,7 +245,7 @@ public class NotificationService {
             // âŒ DO NOT SAVE TO INBOX (Transient, Nudges, or Bundled Noise)
             case PRE_DISBURSEMENT, DISBURSEMENT_REMINDER, POSITIVE_NUDGE, BUDGET_ENGAGEMENT_NUDGE,
                     SALARY_WEEK_NUDGE, POST_SALARY_NUDGE, MID_MONTH_NUDGE,
-                    SPECIAL_OCCASION_NUDGE, BIRTHDAY_NUDGE, HOW_TO_USE_WISEMONIE,
+                    SPECIAL_OCCASION_NUDGE, BIRTHDAY_NUDGE,
                     SIGNUP_RETURN_NUDGE, ONBOARDING_REMINDER, WELCOME,
                     BUDGET_CREATION_FEE, ENVELOPE_CREATED -> false; // <--- Added here!
 
@@ -257,7 +257,8 @@ public class NotificationService {
                     LIMIT_REACHED, BUDGET_LIMIT_WARNING, EMERGENCY_USED,
                     BUDGET_CREATION, BUDGET_COMPLETED,
                     ENVELOPE_UPDATED, ENVELOPE_LOCKED, ENVELOPE_UNLOCKED,
-                    BUDGET_END, BUDGET_END_SOON, BUDGET_ENDS_TODAY, SYSTEM -> true;
+                    BUDGET_END, BUDGET_END_SOON, BUDGET_ENDS_TODAY,
+                    HOW_TO_USE_WISEMONIE, SYSTEM -> true;
 
             default -> true;
         };
@@ -553,7 +554,7 @@ public class NotificationService {
             case DISBURSEMENT_SUCCESS, DISBURSEMENT_READY, DISBURSEMENT,
                  WALLET_FUNDED, WALLET_DEPOSIT, EXTERNAL_TRANSFER,
                  ENVELOPE_TRANSFER, REFUND_ISSUED, DISBURSEMENT_REFUNDED,
-                 BUDGET_UNALLOCATED_REFUNDED                              -> 259_200_000L; // 72 h
+                 BUDGET_UNALLOCATED_REFUNDED, HOW_TO_USE_WISEMONIE        -> 259_200_000L; // 72 h
             case LOW_BALANCE_WARNING, ENVELOPE_LOW_BALANCE               -> 21_600_000L;  //  6 h
             default                                                       -> 86_400_000L;  // 24 h
         };

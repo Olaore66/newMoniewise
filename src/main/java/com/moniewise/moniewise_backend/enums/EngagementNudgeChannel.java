@@ -2,5 +2,6 @@ package com.moniewise.moniewise_backend.enums;
 
 public enum EngagementNudgeChannel {
     PUSH,
-    EMAIL
+    EMAIL,
+    IN_APP
 }

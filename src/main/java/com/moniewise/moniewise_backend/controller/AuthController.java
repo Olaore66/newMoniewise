@@ -19,6 +19,7 @@ import com.moniewise.moniewise_backend.security.JwtUtil;
 import com.moniewise.moniewise_backend.service.AbuseProtectionService;
 import com.moniewise.moniewise_backend.service.AuthSessionService;
 import com.moniewise.moniewise_backend.service.EmailService;
+import com.moniewise.moniewise_backend.service.HowToUseWisemonieNudgeService;
 import com.moniewise.moniewise_backend.service.NotificationService;
 import com.moniewise.moniewise_backend.service.PasswordResetService;
 import com.moniewise.moniewise_backend.service.UserService;
@@ -60,6 +61,7 @@ public class AuthController {
     @Autowired private KycService kycService;
     @Autowired private TrustedDeviceRepository trustedDeviceRepository;
     @Autowired private AccountDeletionService accountDeletionService;
+    @Autowired private HowToUseWisemonieNudgeService howToUseWisemonieNudgeService;
 
     @Value("${spring.security.oauth2.client.registration.google.client-id:}")
     private String googleClientId;
@@ -155,6 +157,7 @@ public class AuthController {
             UserDetails userDetails = userService.loadUserByUsername(user.getEmail());
             String sessionId = authSessionService.createSession(user);
             String token = jwtUtil.generateToken(userDetails, sessionId);
+            howToUseWisemonieNudgeService.sendImmediateGuideAfterAuth(user);
 
             abuseProtectionService.recordSuccess(AbuseProtectionService.SIGNUP_VERIFY, throttleKey);
 
@@ -250,6 +253,7 @@ public class AuthController {
             UserDetails userDetails = userService.loadUserByUsername(user.getEmail());
             String newSessionId = authSessionService.createSession(user);
             String token = jwtUtil.generateToken(userDetails, newSessionId);
+            howToUseWisemonieNudgeService.sendImmediateGuideAfterAuth(user);
             abuseProtectionService.recordSuccess(AbuseProtectionService.LOGIN, throttleKey);
             boolean needsProfileUpdate = needsProfileUpdate(user);
             return ResponseEntity.ok(buildAuthPayload(token, needsProfileUpdate));
@@ -430,6 +434,7 @@ public class AuthController {
             UserDetails userDetails = userService.loadUserByUsername(user.getEmail());
             String newSessionId = authSessionService.createSession(user);
             String token = jwtUtil.generateToken(userDetails, newSessionId);
+            howToUseWisemonieNudgeService.sendImmediateGuideAfterAuth(user);
             boolean needsProfileUpdate = needsProfileUpdate(user);
             return ResponseEntity.ok(buildAuthPayload(token, needsProfileUpdate));
         } catch (Exception e) {

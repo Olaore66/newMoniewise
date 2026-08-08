@@ -2,20 +2,25 @@ package com.moniewise.moniewise_backend.service;
 
 import com.moniewise.moniewise_backend.entity.EngagementNudgeNotification;
 import com.moniewise.moniewise_backend.entity.User;
+import com.moniewise.moniewise_backend.enums.BudgetStatus;
 import com.moniewise.moniewise_backend.enums.EngagementNudgeCampaign;
 import com.moniewise.moniewise_backend.enums.EngagementNudgeChannel;
 import com.moniewise.moniewise_backend.enums.EngagementNudgeSegment;
 import com.moniewise.moniewise_backend.enums.NotificationType;
+import com.moniewise.moniewise_backend.repository.BudgetRepository;
 import com.moniewise.moniewise_backend.repository.BudgetEngagementNudgeRepository;
 import com.moniewise.moniewise_backend.repository.EngagementNudgeNotificationRepository;
+import com.moniewise.moniewise_backend.repository.NotificationRepository;
 import com.moniewise.moniewise_backend.repository.SalaryNudgeNotificationRepository;
 import com.moniewise.moniewise_backend.repository.UserRepository;
+import com.moniewise.moniewise_backend.repository.WalletRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
@@ -38,19 +43,21 @@ public class HowToUseWisemonieNudgeService {
     private static final Logger logger = LoggerFactory.getLogger(HowToUseWisemonieNudgeService.class);
     private static final ZoneId LAGOS_ZONE = ZoneId.of("Africa/Lagos");
     private static final String OCCASION_KEY = "HOW_TO_USE_WISEMONIE";
-    private static final String WHATSAPP_CHANNEL_URL = "https://whatsapp.com/channel/0029Vb6kU683bbUy3azQF047";
+    private static final String WHATSAPP_CHANNEL_URL = "https://whatsapp.com/channel/0029Vb6kU683bbUy3azQF047/234";
     private static final String GUIDE_VIDEO_TITLE = "HOW TO USE WISEMONIE";
     private static final String EMAIL_TAG = "Start here";
     private static final String EMAIL_CTA = "Watch the guide";
-    private static final long GUIDE_PUSH_TTL_SECONDS = 86_400L;
+    private static final String ACTION_OPEN_EXTERNAL_URL = "OPEN_EXTERNAL_URL";
     private static final int MAX_TRACKED_MESSAGES_PER_DAY = 2;
 
     private final UserRepository userRepository;
+    private final NotificationRepository notificationRepository;
+    private final WalletRepository walletRepository;
+    private final BudgetRepository budgetRepository;
     private final EngagementNudgeNotificationRepository nudgeRepository;
     private final SalaryNudgeNotificationRepository salaryNudgeRepository;
     private final BudgetEngagementNudgeRepository legacyBudgetNudgeRepository;
     private final NotificationService notificationService;
-    private final AuthSessionService authSessionService;
 
     @Autowired
     @Lazy
@@ -62,27 +69,34 @@ public class HowToUseWisemonieNudgeService {
     @Value("${moniewise.engagement.how-to-use.batch-size:250}")
     private int batchSize;
 
-    @Value("${moniewise.engagement.how-to-use.signup-lookback-days:15}")
+    @Value("${moniewise.engagement.how-to-use.signup-lookback-days:180}")
     private int signupLookbackDays;
 
-    @Value("${moniewise.engagement.how-to-use.repeat-interval-days:5}")
+    @Value("${moniewise.engagement.how-to-use.repeat-interval-days:3}")
     private int repeatIntervalDays;
 
+    @Value("${moniewise.engagement.how-to-use.max-send-days:9}")
+    private int maxSendDays;
+
     public HowToUseWisemonieNudgeService(UserRepository userRepository,
+                                         NotificationRepository notificationRepository,
+                                         WalletRepository walletRepository,
+                                         BudgetRepository budgetRepository,
                                          EngagementNudgeNotificationRepository nudgeRepository,
                                          SalaryNudgeNotificationRepository salaryNudgeRepository,
                                          BudgetEngagementNudgeRepository legacyBudgetNudgeRepository,
-                                         NotificationService notificationService,
-                                         AuthSessionService authSessionService) {
+                                         NotificationService notificationService) {
         this.userRepository = userRepository;
+        this.notificationRepository = notificationRepository;
+        this.walletRepository = walletRepository;
+        this.budgetRepository = budgetRepository;
         this.nudgeRepository = nudgeRepository;
         this.salaryNudgeRepository = salaryNudgeRepository;
         this.legacyBudgetNudgeRepository = legacyBudgetNudgeRepository;
         this.notificationService = notificationService;
-        this.authSessionService = authSessionService;
     }
 
-    @Scheduled(cron = "${moniewise.engagement.how-to-use.cron:0 45 9 * * ?}", zone = "Africa/Lagos")
+    @Scheduled(cron = "${moniewise.engagement.how-to-use.cron:0 30 14 * * SUN,WED}", zone = "Africa/Lagos")
     public void processHowToUseNudges() {
         if (!enabled) {
             return;
@@ -101,6 +115,7 @@ public class HowToUseWisemonieNudgeService {
                     createdAfter,
                     now,
                     sentAfter,
+                    effectiveMaxSendDays(),
                     pageSize);
             if (users.isEmpty()) {
                 break;
@@ -129,14 +144,36 @@ public class HowToUseWisemonieNudgeService {
         }
     }
 
+    @Async
+    public void sendImmediateGuideAfterAuth(User user) {
+        if (!enabled || user == null || user.getId() == null) {
+            return;
+        }
+
+        try {
+            LocalDateTime now = LocalDateTime.now(LAGOS_ZONE);
+            if (nudgeRepository.countDistinctSendDaysByUserIdAndCampaign(
+                    user.getId(), EngagementNudgeCampaign.HOW_TO_USE_WISEMONIE) > 0) {
+                return;
+            }
+            self.sendHowToUseNudgeIfAllowed(user, now);
+        } catch (DataIntegrityViolationException e) {
+            logger.info("[HOW-TO-USE] Immediate duplicate guide nudge skipped for user={}", user.getId());
+        } catch (Exception e) {
+            logger.error("[HOW-TO-USE] Immediate guide nudge failed for user={}", user.getId(), e);
+        }
+    }
+
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public boolean sendHowToUseNudgeIfAllowed(User user, LocalDateTime now) {
         if (user == null || user.getId() == null || user.isDeleted() || user.isTestAccount() || !hasEmail(user)) {
             return false;
         }
 
-        boolean pushAvailable = hasPushTarget(user.getId());
-        if (!hasDailyRoom(user.getId(), now, pushAvailable)) {
+        if (shouldStopGuideNudges(user)) {
+            return false;
+        }
+        if (!hasDailyRoom(user.getId(), now)) {
             return false;
         }
         if (wasSentRecently(user.getId(), now)) {
@@ -162,16 +199,15 @@ public class HowToUseWisemonieNudgeService {
                 EMAIL_CTA,
                 WHATSAPP_CHANNEL_URL);
 
-        if (pushAvailable) {
-            record(user.getId(), EngagementNudgeChannel.PUSH, copy.key(), now);
-            notificationService.enqueueExternalPushOnlyNotification(
-                    user.getId(),
-                    NotificationType.HOW_TO_USE_WISEMONIE,
-                    pushTitle(firstName, copy),
-                    copy.pushBody(),
-                    WHATSAPP_CHANNEL_URL,
-                    GUIDE_PUSH_TTL_SECONDS);
-        }
+        record(user.getId(), EngagementNudgeChannel.IN_APP, copy.key(), now);
+        notificationService.sendNotification(
+                user.getId().toString(),
+                guideNotificationMessage(firstName, copy),
+                NotificationType.HOW_TO_USE_WISEMONIE,
+                null,
+                null,
+                ACTION_OPEN_EXTERNAL_URL,
+                WHATSAPP_CHANNEL_URL);
 
         return true;
     }
@@ -183,9 +219,8 @@ public class HowToUseWisemonieNudgeService {
                 now.minusDays(Math.max(1, repeatIntervalDays))) > 0;
     }
 
-    private boolean hasDailyRoom(Long userId, LocalDateTime now, boolean pushAvailable) {
-        int plannedMessages = pushAvailable ? 2 : 1;
-        return totalTrackedMessagesToday(userId, now.toLocalDate()) + plannedMessages <= MAX_TRACKED_MESSAGES_PER_DAY;
+    private boolean hasDailyRoom(Long userId, LocalDateTime now) {
+        return totalTrackedMessagesToday(userId, now.toLocalDate()) + 2 <= MAX_TRACKED_MESSAGES_PER_DAY;
     }
 
     private int totalTrackedMessagesToday(Long userId, LocalDate today) {
@@ -199,22 +234,17 @@ public class HowToUseWisemonieNudgeService {
         return engagementCount + salaryCount + legacyBudgetCount;
     }
 
-    private boolean hasPushTarget(Long userId) {
-        try {
-            if (!authSessionService.getActiveFcmTokens(userId).isEmpty()) {
-                return true;
-            }
-        } catch (Exception e) {
-            logger.debug("[HOW-TO-USE] Could not read active FCM sessions for user={}: {}", userId, e.getMessage());
-        }
+    private boolean shouldStopGuideNudges(User user) {
+        Long userId = user.getId();
+        return notificationRepository.existsByUserIdAndTypeAndIsReadTrue(userId, NotificationType.HOW_TO_USE_WISEMONIE)
+                || walletRepository.existsFundedUserWallet(userId)
+                || budgetRepository.existsByUserIdAndStatus(userId, BudgetStatus.ACTIVE)
+                || nudgeRepository.countDistinctSendDaysByUserIdAndCampaign(
+                        userId, EngagementNudgeCampaign.HOW_TO_USE_WISEMONIE) >= effectiveMaxSendDays();
+    }
 
-        try {
-            String fallbackToken = userRepository.findFcmTokenById(userId);
-            return fallbackToken != null && !fallbackToken.isBlank();
-        } catch (Exception e) {
-            logger.debug("[HOW-TO-USE] Could not read fallback FCM token for user={}: {}", userId, e.getMessage());
-            return false;
-        }
+    private int effectiveMaxSendDays() {
+        return Math.max(1, maxSendDays);
     }
 
     private void record(Long userId,
@@ -244,68 +274,82 @@ public class HowToUseWisemonieNudgeService {
         return pool.get(new Random(Objects.hash(userId, now.toLocalDate())).nextInt(pool.size()));
     }
 
+    private String guideNotificationMessage(String firstName, GuideCopy copy) {
+        String greetingName = firstName == null || firstName.isBlank() ? "there" : firstName;
+        return "Hello " + greetingName + ", " + copy.notificationBody() + " " + WHATSAPP_CHANNEL_URL;
+    }
+
     private List<GuideCopy> guideCopies() {
         return List.of(
                 new GuideCopy(
                         "how-to-use-01",
                         "your Wisemonie account is ready \uD83E\uDDED",
-                        "You already did the brave part: opening the account. If the next step feels unclear, do not abandon it. Watch the video titled \""
+                        "Thank you for downloading Wisemonie. You probably came because you want money to feel less scattered and more intentional. The first step can feel unclear, so we made a short video guide for you. Watch \""
                                 + GUIDE_VIDEO_TITLE
-                                + "\" on our WhatsApp channel; it shows how to fund your wallet, create or refresh envelopes and spend from a plan without mental maths.",
-                        "Watch the guide \uD83C\uDFA5",
-                        "Your Wisemonie wallet is ready. Open our WhatsApp channel and watch \""
+                                + "\" to see how to fund your wallet, create a simple budget, use envelopes and spend from your plan without mental maths.",
+                        "welcome to Wisemonie. If getting started feels unclear, watch \""
                                 + GUIDE_VIDEO_TITLE
-                                + "\" to use it with confidence."),
+                                + "\" now:"),
                 new GuideCopy(
                         "how-to-use-02",
                         "start with one small plan \uD83C\uDF31",
-                        "Money pressure often starts when everything sits in one big, confusing balance. The \""
+                        "You do not need to figure everything out alone. A calm money habit can start with one small plan: food, transport, savings, family support or giving. The \""
                                 + GUIDE_VIDEO_TITLE
-                                + "\" video shows how to fund Wisemonie, split money into food, transport, savings and giving, then let the app help you keep discipline.",
-                        "Start with one plan \uD83C\uDF31",
-                        "Watch \""
+                                + "\" video shows the steps clearly, so you can use Wisemonie with confidence from your first budget.",
+                        "one small plan is enough to start. Watch \""
                                 + GUIDE_VIDEO_TITLE
-                                + "\" on the Wisemonie WhatsApp channel and set up a simple money plan."),
+                                + "\" and see the simple first step:"),
                 new GuideCopy(
                         "how-to-use-03",
                         "no pressure, just a clearer first step \uD83D\uDE0C",
-                        "Sometimes people sign up because they want better control, then pause because the first move is not obvious. We made a short guide for that. Open the WhatsApp channel and watch \""
+                        "Many people sign up because they want better control, then pause because the next action is not obvious. That is normal. We recorded \""
                                 + GUIDE_VIDEO_TITLE
-                                + "\" so your wallet and budget can work together as a real spending plan.",
-                        "Quick first-step guide \uD83D\uDE0C",
-                        "Not sure what to do next? Watch \""
+                                + "\" to show you how the wallet, budget and envelopes work together as one real spending plan.",
+                        "no pressure. If you are not sure what to do next, watch \""
                                 + GUIDE_VIDEO_TITLE
-                                + "\" on our WhatsApp channel and make your next money move clearer."),
+                                + "\" here:"),
                 new GuideCopy(
                         "how-to-use-04",
                         "turn the account into a plan \uD83C\uDFAF",
-                        "A Wisemonie account becomes powerful when you tell the money what to do before pressure arrives. The guide video walks you through funding, creating envelopes, setting disbursement rules and spending from the right plan.",
-                        "Turn it into a plan \uD83C\uDFAF",
-                        "Your account is open. Watch the Wisemonie guide on WhatsApp to fund, budget and spend from envelopes."),
+                        "A Wisemonie account becomes powerful when you tell your money what to do before pressure arrives. The guide video walks you through funding, creating envelopes, setting disbursement rules and spending from the right plan.",
+                        "your account becomes powerful when your money has a plan. Watch the quick guide here:"),
                 new GuideCopy(
                         "how-to-use-05",
                         "your money can feel easier this month \uD83D\uDC9A",
-                        "The app is not just a wallet; it is a way to remove the stress of calculating every spend in your head. Watch \""
+                        "Wisemonie is not just another wallet. It is a way to reduce the stress of calculating every spend in your head. Watch \""
                                 + GUIDE_VIDEO_TITLE
-                                + "\" on our WhatsApp channel and see how to plan food, transport, family support, giving and savings before the month gets loud.",
-                        "Make this month easier \uD83D\uDC9A",
-                        "Open our WhatsApp channel and watch \""
+                                + "\" and see how to plan food, transport, family support, giving, enjoyment and savings before the month gets loud.",
+                        "Wisemonie can help reduce money stress. Watch \""
                                 + GUIDE_VIDEO_TITLE
-                                + "\". It shows how Wisemonie helps reduce money stress."),
+                                + "\" and see how it works:"),
                 new GuideCopy(
                         "how-to-use-06",
                         "let Wisemonie show you the rhythm \uD83D\uDCDD",
-                        "If you opened Wisemonie because you are tired of impulse spending, you are in the right place. The guide video shows how to put money in, create a budget, choose when money should be available and spend directly from the plan.",
-                        "See how it works \uD83D\uDCDD",
-                        "The Wisemonie guide is waiting on our WhatsApp channel. Watch it and learn how to fund, plan and spend calmly.")
+                        "If you opened Wisemonie because impulse spending has been tiring, you are in the right place. The guide shows how to put money in, create a budget, choose when money should be available and spend directly from the plan.",
+                        "if impulse spending has been tiring, this guide will help you start with clarity:"),
+                new GuideCopy(
+                        "how-to-use-07",
+                        "your first budget can be simple \uD83C\uDF92",
+                        "You do not have to start with a big complicated budget. Start with something familiar: lunch at work, transport, offering, snacks, data, family support or savings. The guide shows how to set that up quickly on Wisemonie.",
+                        "your first budget can be simple: lunch, transport, family or savings. Watch the guide here:"),
+                new GuideCopy(
+                        "how-to-use-08",
+                        "less mental maths, more calm \uD83E\uDDE0",
+                        "One big balance can make spending feel confusing. Wisemonie helps you split money into clear envelopes so every naira has a job. Watch the guide and see how to move from guessing to planning.",
+                        "one big balance can be confusing. Watch how Wisemonie turns it into clear envelopes:"),
+                new GuideCopy(
+                        "how-to-use-09",
+                        "see how to spend from the plan \uD83D\uDCB3",
+                        "The best part is not only planning. Wisemonie helps you spend directly from the plan, so money meant for later does not quietly disappear. Watch the guide to see the full flow.",
+                        "you can plan and spend from the plan. Watch \""
+                                + GUIDE_VIDEO_TITLE
+                                + "\" here:"),
+                new GuideCopy(
+                        "how-to-use-10",
+                        "make Wisemonie useful today \uD83D\uDE0A",
+                        "Your account is ready. The next step is simply understanding the flow: fund wallet, create budget, split into envelopes, set when money is available, then spend with more peace. The video shows it clearly.",
+                        "your account is ready. Watch the quick video and make Wisemonie useful today:")
         );
-    }
-
-    private String pushTitle(String firstName, GuideCopy copy) {
-        if (firstName == null || firstName.isBlank() || "there".equalsIgnoreCase(firstName)) {
-            return copy.pushTitle();
-        }
-        return firstName + ", " + lowerFirstLetter(copy.pushTitle());
     }
 
     private String extractFirstName(User user) {
@@ -365,7 +409,6 @@ public class HowToUseWisemonieNudgeService {
     private record GuideCopy(String key,
                              String emailTitle,
                              String emailBody,
-                             String pushTitle,
-                             String pushBody) {
+                             String notificationBody) {
     }
 }

@@ -20,6 +20,15 @@ public interface WalletRepository extends JpaRepository<Wallet, Long> {
 
     boolean existsByUserId(Long userId);
 
+    @Query("""
+            SELECT CASE WHEN COUNT(w) > 0 THEN true ELSE false END
+            FROM Wallet w
+            WHERE w.user.id = :userId
+              AND w.revenueWallet = false
+              AND w.balance > 0
+            """)
+    boolean existsFundedUserWallet(@Param("userId") Long userId);
+
     Optional<Wallet> findByUser(User user);
 
     boolean existsByUser(User user); // Add this method

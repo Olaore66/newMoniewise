@@ -4,6 +4,7 @@ import com.moniewise.moniewise_backend.entity.User;
 import com.moniewise.moniewise_backend.security.JwtAuthenticationFilter;
 import com.moniewise.moniewise_backend.security.JwtUtil;
 import com.moniewise.moniewise_backend.service.AuthSessionService;
+import com.moniewise.moniewise_backend.service.HowToUseWisemonieNudgeService;
 import com.moniewise.moniewise_backend.service.UserService;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
@@ -43,6 +44,7 @@ public class SecurityConfig {
     private final UserDetailsService userDetailsService;
     private final UserService userService;
     private final AuthSessionService authSessionService;
+    private final HowToUseWisemonieNudgeService howToUseWisemonieNudgeService;
 
     @Value("${app.security.dev-mode:true}")
     private boolean devMode;
@@ -55,13 +57,15 @@ public class SecurityConfig {
             JwtUtil jwtUtil,
             UserDetailsService userDetailsService,
             UserService userService,
-            AuthSessionService authSessionService
+            AuthSessionService authSessionService,
+            HowToUseWisemonieNudgeService howToUseWisemonieNudgeService
     ) {
         this.jwtAuthenticationFilter = jwtAuthenticationFilter;
         this.jwtUtil = jwtUtil;
         this.userDetailsService = userDetailsService;
         this.userService = userService;
         this.authSessionService = authSessionService;
+        this.howToUseWisemonieNudgeService = howToUseWisemonieNudgeService;
     }
 
     @Bean
@@ -104,6 +108,7 @@ public class SecurityConfig {
                     UserDetails userDetails = userService.loadUserByUsername(email);
                     String sessionId = authSessionService.createSession(user);
                     String token = jwtUtil.generateToken(userDetails, sessionId);
+                    howToUseWisemonieNudgeService.sendImmediateGuideAfterAuth(user);
                     response.setContentType("application/json");
                     response.getWriter().write("{\"token\":\"" + token + "\"}");
                 })

@@ -12,6 +12,7 @@ import com.moniewise.moniewise_backend.repository.WalletRepository;
 import com.moniewise.moniewise_backend.security.JwtUtil;
 import com.moniewise.moniewise_backend.service.AbuseProtectionService;
 import com.moniewise.moniewise_backend.service.AuthSessionService;
+import com.moniewise.moniewise_backend.service.HowToUseWisemonieNudgeService;
 import com.moniewise.moniewise_backend.service.OtpService;
 import com.moniewise.moniewise_backend.service.UserService;
 import lombok.RequiredArgsConstructor;
@@ -46,6 +47,7 @@ public class UserController {
     private final AbuseProtectionService abuseProtectionService;
     private final com.moniewise.moniewise_backend.service.NotificationService notificationService;
     private final TrustedDeviceRepository trustedDeviceRepository;
+    private final HowToUseWisemonieNudgeService howToUseWisemonieNudgeService;
 
     @GetMapping("/me")
     public ResponseEntity<UserResponse> getCurrentUser() {
@@ -136,6 +138,7 @@ public class UserController {
         UserDetails userDetails = userService.loadUserByUsername(user.getEmail());
         String sessionId = authSessionService.createSession(user);
         String token = jwtUtil.generateToken(userDetails, sessionId);
+        howToUseWisemonieNudgeService.sendImmediateGuideAfterAuth(user);
 
         abuseProtectionService.recordSuccess(AbuseProtectionService.OTP_VERIFY, throttleKey);
 
