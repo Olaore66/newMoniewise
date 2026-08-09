@@ -826,8 +826,8 @@ public class NotificationService {
      * "Complete your profile" nudge email for users who signed up but never
      * finished KYC/profile (and therefore never got a wallet). Sent on a
      * cadence by {@code IncompleteSignupLifecycleManager}: ~24h after signup,
-     * then every 5 days, until either the profile is completed or the
-     * registration is purged at the 30-day mark.
+     * then on staggered user-specific days with rotating campaign copy, capped
+     * at the first 15 days after signup.
      *
      * @param email               recipient
      * @param firstName           best-effort first name (falls back to "there")
@@ -839,14 +839,29 @@ public class NotificationService {
      */
     @Async
     public void sendOnboardingReminderEmail(String email, String firstName,
-                                             int daysSinceSignup, int daysRemaining, boolean showUrgencyNotice) {
+                                             int daysSinceSignup, int daysRemaining,
+                                             boolean showUrgencyNotice, int reminderNumber) {
         if ("stub".equals(activeProfile) || mailSender == null) return;
         try {
+            OnboardingReminderCopy copy = onboardingReminderCopy(reminderNumber, showUrgencyNotice);
             Context context = new Context();
             context.setVariable("logoUrl", logoUrl());
             context.setVariable("firstName", firstName != null && !firstName.isBlank() ? firstName : "there");
             context.setVariable("daysRemaining", daysRemaining);
             context.setVariable("showUrgencyNotice", showUrgencyNotice);
+            context.setVariable("introParagraph", copy.introParagraph());
+            context.setVariable("supportParagraph", copy.supportParagraph());
+            context.setVariable("ctaSubtext", copy.ctaSubtext());
+            context.setVariable("firstPointIcon", copy.firstPointIcon());
+            context.setVariable("firstPointTitle", copy.firstPointTitle());
+            context.setVariable("firstPointBody", copy.firstPointBody());
+            context.setVariable("secondPointIcon", copy.secondPointIcon());
+            context.setVariable("secondPointTitle", copy.secondPointTitle());
+            context.setVariable("secondPointBody", copy.secondPointBody());
+            context.setVariable("thirdPointIcon", copy.thirdPointIcon());
+            context.setVariable("thirdPointTitle", copy.thirdPointTitle());
+            context.setVariable("thirdPointBody", copy.thirdPointBody());
+            context.setVariable("closingLine", copy.closingLine());
             addAppDownloadContext(context);
 
             String htmlContent = templateEngine.process("onboarding-reminder", context);
@@ -856,13 +871,13 @@ public class NotificationService {
 
             setWisemonieSender(helper);
             helper.setTo(email);
-            helper.setSubject(buildOnboardingReminderSubject(daysSinceSignup, showUrgencyNotice));
+            helper.setSubject(copy.subject());
             helper.setText(htmlContent, true);
             attachLogo(helper);
 
             mailSender.send(mimeMessage);
-            logger.info("Sent onboarding-reminder email (day {} since signup, urgent={}) to {}",
-                    daysSinceSignup, showUrgencyNotice, email);
+            logger.info("Sent onboarding-reminder email #{} (day {} since signup, urgent={}) to {}",
+                    reminderNumber, daysSinceSignup, showUrgencyNotice, email);
         } catch (MessagingException e) {
             logger.error("Failed to send onboarding-reminder email to {}", email, e);
         }
@@ -1120,6 +1135,146 @@ public class NotificationService {
         context.setVariable("hasIosAppStore", iosAppStoreUrl != null && !iosAppStoreUrl.isBlank());
     }
 
+    private OnboardingReminderCopy onboardingReminderCopy(int reminderNumber, boolean urgent) {
+        if (urgent) {
+            return new OnboardingReminderCopy(
+                    "Your Wisemonie setup is almost out of time",
+                    "Your Wisemonie account is still waiting, but incomplete profiles are cleared after a while for security and data hygiene. If you still want a calmer way to plan money, this is a good moment to finish the setup.",
+                    "It only takes a few minutes to complete your profile, unlock your wallet, and keep the account active before it is removed.",
+                    "Finish now so we can keep your account active.",
+                    "\u23F3",
+                    "Keep your account",
+                    "Complete the profile before the cleanup window closes.",
+                    "\uD83D\uDEE1\uFE0F",
+                    "Protect your setup",
+                    "We clear abandoned accounts so your details do not sit around unfinished.",
+                    "\uD83E\uDDED",
+                    "Start with direction",
+                    "Once setup is complete, Wisemonie can help you fund, budget and spend with more clarity.",
+                    "We would rather help you finish than lose the progress you already started."
+            );
+        }
+
+        List<OnboardingReminderCopy> copies = List.of(
+                new OnboardingReminderCopy(
+                        "You are one step away from making Wisemonie useful",
+                        "You already took the first step by creating your Wisemonie account. The next step is simply completing your profile so your wallet can be unlocked and your money can have a clearer structure.",
+                        "A lot of people download money apps because they want control, then pause because the setup feels like one more task. We kept this simple: finish the profile, unlock the wallet, then start with one small plan.",
+                        "Most of it is just confirming who you are.",
+                        "\uD83E\uDDED",
+                        "Find the first step",
+                        "Complete your profile so the app can move from sign-up to actual money planning.",
+                        "\uD83D\uDCB3",
+                        "Unlock your wallet",
+                        "Your Wisemonie wallet needs the final profile step before it can fully work for you.",
+                        "\uD83C\uDF31",
+                        "Start small",
+                        "You do not need a perfect budget. One transport, food or savings plan is enough to begin.",
+                        "No pressure. Just one small step that makes the account useful."
+                ),
+                new OnboardingReminderCopy(
+                        "Less mental maths starts with finishing setup",
+                        "Money pressure often starts when everything is left in your head: bills, transport, food, family requests, savings and small spends all competing at once.",
+                        "Wisemonie was built to reduce that mental load. Complete your profile so you can fund your wallet, split money into clear envelopes and know what is safe to spend before pressure arrives.",
+                        "Finish setup and give your money a place to breathe.",
+                        "\uD83E\uDDE0",
+                        "Reduce the guessing",
+                        "A complete account lets you turn one confusing balance into clearer spending lanes.",
+                        "\uD83D\uDCE6",
+                        "Use envelopes",
+                        "Plan for food, transport, family, giving, enjoyment and savings before the month gets loud.",
+                        "\uD83D\uDE0C",
+                        "Spend with less pressure",
+                        "When the money has a job, you do not have to calculate every decision from scratch.",
+                        "Your future spending can feel softer than the old pattern."
+                ),
+                new OnboardingReminderCopy(
+                        "Turn the account you opened into a money habit",
+                        "Opening an account shows intention. Completing it turns that intention into something Wisemonie can actually help you practise.",
+                        "The goal is not to become perfect with money overnight. The goal is to create one better habit: decide what the money is for before life starts pulling from it.",
+                        "Complete your profile and make the account ready for that first habit.",
+                        "\uD83C\uDFAF",
+                        "Give money a purpose",
+                        "Use Wisemonie to decide what each part of your money is meant to handle.",
+                        "\uD83D\uDD01",
+                        "Make discipline easier",
+                        "Rules and envelopes help you follow the plan when impulse spending shows up.",
+                        "\u2705",
+                        "Get one quick win",
+                        "Your first simple budget can be small and practical.",
+                        "A small money habit today can save plenty stress later."
+                ),
+                new OnboardingReminderCopy(
+                        "The old money pattern does not need another month",
+                        "If you signed up because money has been feeling scattered, that reason still matters. It is easy to close the app and return to the same pattern, but the same pattern usually brings the same pressure.",
+                        "Complete your setup so Wisemonie can help you plan ahead, protect important money and spend from the right envelope instead of doing mental maths every time.",
+                        "Come back while the intention is still fresh.",
+                        "\uD83D\uDD04",
+                        "Break the loop",
+                        "Do not let an unfinished setup send you back to old spending stress.",
+                        "\uD83D\uDEE1\uFE0F",
+                        "Protect important money",
+                        "Create envelopes for the things that should not be accidentally touched.",
+                        "\uD83D\uDC9A",
+                        "Keep room for life",
+                        "Plan essentials and enjoyment without guilt or confusion.",
+                        "You started because something needed to feel different. Finish the step that makes different possible."
+                ),
+                new OnboardingReminderCopy(
+                        "Your future self will like this small setup step",
+                        "Future-you does not need a perfect financial plan today. Future-you just needs present-you to make the next right step a little easier.",
+                        "Complete your profile now, then use Wisemonie to set up simple envelopes for the spending pressure you already know is coming: transport, food, bills, family, giving and savings.",
+                        "It is a few minutes today for more clarity later.",
+                        "\uD83D\uDD52",
+                        "Save time later",
+                        "A finished setup means you can plan quickly when money enters.",
+                        "\uD83E\uDDFE",
+                        "Name the real expenses",
+                        "Put familiar spending categories into envelopes before they surprise you.",
+                        "\uD83C\uDF24\uFE0F",
+                        "Make the month feel lighter",
+                        "Clarity does not remove every bill, but it makes decisions easier.",
+                        "This is not pressure. It is a small favour for the version of you managing the next money cycle."
+                ),
+                new OnboardingReminderCopy(
+                        "Your Wisemonie account can still become useful today",
+                        "Your account is still here, but the real value begins after setup. Until then, Wisemonie cannot fully help you fund a wallet, create a budget or spend from a plan.",
+                        "Finish the profile step, then start with one simple area: lunch at work, transport, family support, offering, savings or data. Small structure is still structure.",
+                        "Complete setup and try one simple plan.",
+                        "\uD83D\uDE80",
+                        "Move from signup to action",
+                        "The account becomes useful when setup is complete.",
+                        "\uD83C\uDF71",
+                        "Plan something familiar",
+                        "Lunch, transport, data or savings is enough for a first budget.",
+                        "\uD83E\uDDD8",
+                        "Keep it simple",
+                        "You do not need to plan the whole month before you start.",
+                        "Start with one part of life that already asks you for money."
+                )
+        );
+
+        int index = Math.floorMod(reminderNumber - 1, copies.size());
+        return copies.get(index);
+    }
+
+    private record OnboardingReminderCopy(
+            String subject,
+            String introParagraph,
+            String supportParagraph,
+            String ctaSubtext,
+            String firstPointIcon,
+            String firstPointTitle,
+            String firstPointBody,
+            String secondPointIcon,
+            String secondPointTitle,
+            String secondPointBody,
+            String thirdPointIcon,
+            String thirdPointTitle,
+            String thirdPointBody,
+            String closingLine
+    ) {}
+
     /** Sent once, about 7 days before a savings goal matures. */
     @Async
     public void sendSavingsMaturingSoonEmail(String email, String firstName, String goalName,
@@ -1214,7 +1369,7 @@ public class NotificationService {
         if (daysSinceSignup <= 1) {
             return "👋 You're one step away from a calmer relationship with money";
         }
-        return "Still thinking it over? Your Wisemonie account is right where you left it";
+        return "Your Wisemonie account can still become useful today";
     }
 
     @Async

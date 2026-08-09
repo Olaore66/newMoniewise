@@ -18,6 +18,7 @@ import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * Manages the lifecycle of "abandoned signups" — users who created an account
@@ -30,9 +31,8 @@ import java.util.Map;
  *
  * <ul>
  *   <li><b>Day 1</b>  — first "complete your profile" nudge (~24h after signup)</li>
- *   <li><b>Day 2–30</b> — daily email + push reminders
- *       (the last 5 are flagged "urgent" so the email shows a soft warning
- *       that the slot will be released soon)</li>
+ *   <li><b>Day 1–15</b> — a capped email campaign on user-specific staggered
+ *       days, with rotating psychological copy so it does not feel like spam</li>
  *   <li><b>Every 2 hours</b> — FCM-only push nudges between the daily emails</li>
  *   <li><b>Day 30</b> — if STILL incomplete, the registration is purged along
  *       with every dependent row, in the same leaf-to-root order as the
@@ -53,8 +53,15 @@ public class IncompleteSignupLifecycleManager {
     /** First nudge lands ~24h after signup. */
     private static final int FIRST_REMINDER_DAY = 1;
 
-    /** Every nudge after the first one is spaced this many days apart. */
-    private static final int REMINDER_INTERVAL_DAYS = 1;
+    /** Email reminders stop after this signup age, even though cleanup waits longer. */
+    private static final int REMINDER_CAMPAIGN_MAX_DAYS = 15;
+
+    /** Maximum number of email reminders inside the campaign window. */
+    private static final int MAX_REMINDER_EMAILS = 6;
+
+    /** User-specific reminder gaps vary between these two values. */
+    private static final int MIN_REMINDER_GAP_DAYS = 2;
+    private static final int MAX_REMINDER_GAP_DAYS = 4;
 
     /** Show the "your slot will be released soon" notice once we're this close to the purge. */
     private static final int URGENCY_THRESHOLD_DAYS = 5;
@@ -85,7 +92,7 @@ public class IncompleteSignupLifecycleManager {
      * lands in someone's morning inbox rather than at 1 AM.
      * CRON syntax: Seconds Minutes Hours DayOfMonth Month DayOfWeek
      */
-    @Scheduled(cron = "0 0 9 * * ?")
+    @Scheduled(cron = "0 0 9 * * ?", zone = "Africa/Lagos")
     @Transactional
     public void processIncompleteSignups() {
         List<User> incomplete = userRepository.findIncompleteSignups();
@@ -119,11 +126,16 @@ public class IncompleteSignupLifecycleManager {
     // ───────────────────────────── REMINDERS ─────────────────────────────
 
     private boolean isReminderDue(User user, long daysSinceSignup) {
-        int sentSoFar = user.getOnboardingReminderCount();
+        if (daysSinceSignup > REMINDER_CAMPAIGN_MAX_DAYS) {
+            return false;
+        }
 
-        long nextDueOnDay = (sentSoFar == 0)
-                ? FIRST_REMINDER_DAY
-                : FIRST_REMINDER_DAY + (long) sentSoFar * REMINDER_INTERVAL_DAYS;
+        int sentSoFar = user.getOnboardingReminderCount();
+        if (sentSoFar >= MAX_REMINDER_EMAILS) {
+            return false;
+        }
+
+        long nextDueOnDay = nextReminderDay(user.getId(), sentSoFar);
 
         if (daysSinceSignup < nextDueOnDay) {
             return false;
@@ -139,17 +151,33 @@ public class IncompleteSignupLifecycleManager {
         return true;
     }
 
+    private long nextReminderDay(Long userId, int sentSoFar) {
+        long day = FIRST_REMINDER_DAY;
+        for (int i = 0; i < sentSoFar; i++) {
+            day += randomGapDays(userId, i);
+        }
+        return day;
+    }
+
+    private int randomGapDays(Long userId, int reminderIndex) {
+        int spread = MAX_REMINDER_GAP_DAYS - MIN_REMINDER_GAP_DAYS + 1;
+        int offset = Math.floorMod(Objects.hash(userId, reminderIndex), spread);
+        return MIN_REMINDER_GAP_DAYS + offset;
+    }
+
     private void sendReminder(User user, long daysSinceSignup) {
         String firstName = extractFirstName(user);
         long daysRemaining = Math.max(0, PURGE_AFTER_DAYS - daysSinceSignup);
         boolean urgent = daysRemaining <= URGENCY_THRESHOLD_DAYS;
+        int reminderNumber = user.getOnboardingReminderCount() + 1;
 
         notificationService.sendOnboardingReminderEmail(
                 user.getEmail(),
                 firstName,
                 (int) daysSinceSignup,
                 (int) daysRemaining,
-                urgent
+                urgent,
+                reminderNumber
         );
 
         sendPushIfReachable(user, urgent);

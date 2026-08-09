@@ -3,6 +3,7 @@ package com.moniewise.moniewise_backend.service;
 import com.moniewise.moniewise_backend.entity.AuthSession;
 import com.moniewise.moniewise_backend.entity.User;
 import com.moniewise.moniewise_backend.repository.AuthSessionRepository;
+import com.moniewise.moniewise_backend.repository.UserRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -15,23 +16,29 @@ import java.util.UUID;
 public class AuthSessionService {
 
     private final AuthSessionRepository authSessionRepository;
+    private final UserRepository userRepository;
 
-    public AuthSessionService(AuthSessionRepository authSessionRepository) {
+    public AuthSessionService(AuthSessionRepository authSessionRepository,
+                              UserRepository userRepository) {
         this.authSessionRepository = authSessionRepository;
+        this.userRepository = userRepository;
     }
 
     @Transactional
     public String createSession(User user) {
-        // revokeAllSessionsForUser is an atomic @Modifying UPDATE — no row-level
-        // lock is needed here. The previous SELECT FOR UPDATE was redundant and
-        // caused unnecessary lock contention on the users table during login.
-        authSessionRepository.revokeAllSessionsForUser(user.getId(), LocalDateTime.now());
+        // Serialize session rotation per user so duplicate/retried login requests
+        // queue instead of inserting two active rows.
+        User lockedUser = userRepository.findByIdForUpdate(user.getId())
+                .orElseThrow(() -> new IllegalStateException("User not found while creating session"));
+
+        LocalDateTime now = LocalDateTime.now();
+        authSessionRepository.revokeAllSessionsForUser(lockedUser.getId(), now);
 
         AuthSession session = new AuthSession();
-        session.setUser(user);
+        session.setUser(lockedUser);
         session.setSessionId(UUID.randomUUID().toString());
-        session.setCreatedAt(LocalDateTime.now());
-        session.setLastSeenAt(LocalDateTime.now());
+        session.setCreatedAt(now);
+        session.setLastSeenAt(now);
         session.setRevoked(false);
         authSessionRepository.save(session);
         return session.getSessionId();

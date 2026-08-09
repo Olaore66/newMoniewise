@@ -168,14 +168,14 @@
 
       <p class="greeting">Hi <span th:text="${firstName}">there</span>,</p>
 
-      <p class="body-text">
+      <p class="body-text" th:text="${introParagraph}">
         Be honest: when last did you check your account balance and felt
         completely calm about it? For most people, the answer is "it's been a while."
         Money has a way of disappearing quietly: a transfer here, a "small" purchase there,
         and suddenly it's the third week of the month and you're wondering where it all went.
       </p>
 
-      <p class="body-text">
+      <p class="body-text" th:text="${supportParagraph}">
         That feeling, that quiet, low-grade anxiety about money, is exactly what
         <strong>Wisemonie</strong> was built to take off your shoulders. You started creating
         your account, which tells us something important: <strong>you're already looking for
@@ -203,32 +203,29 @@
           </tr>
         </table>
       </div>
-      <p class="btn-subtext">It takes less than 3 minutes. Most of it is just confirming who you are.</p>
+      <p class="btn-subtext" th:text="${ctaSubtext}">It takes less than 3 minutes. Most of it is just confirming who you are.</p>
 
       <hr class="divider">
 
       <div class="info-row">
-        <div class="info-icon">🧭</div>
+        <div class="info-icon" th:text="${firstPointIcon}">🧭</div>
         <div class="info-text">
-          <strong>See exactly where your money goes</strong><br>
-          No more guessing. Every naira gets a name and a purpose, so month-end never
-          catches you off guard again.
+          <strong th:text="${firstPointTitle}">See exactly where your money goes</strong><br>
+          <span th:text="${firstPointBody}">No more guessing. Every naira gets a name and a purpose, so month-end never catches you off guard again.</span>
         </div>
       </div>
       <div class="info-row">
-        <div class="info-icon">🛡️</div>
+        <div class="info-icon" th:text="${secondPointIcon}">🛡️</div>
         <div class="info-text">
-          <strong>Build a cushion for the unexpected</strong><br>
-          Life happens: rent, family emergencies, "soft life" temptations. A little structure
-          now means you're not caught flat-footed later.
+          <strong th:text="${secondPointTitle}">Build a cushion for the unexpected</strong><br>
+          <span th:text="${secondPointBody}">Life happens: rent, family emergencies, soft life temptations. A little structure now means you're not caught flat-footed later.</span>
         </div>
       </div>
       <div class="info-row">
-        <div class="info-icon">🌱</div>
+        <div class="info-icon" th:text="${thirdPointIcon}">🌱</div>
         <div class="info-text">
-          <strong>Turn good intentions into actual habits</strong><br>
-          Wanting to save is easy. Wisemonie makes it automatic, so discipline isn't
-          something you have to white-knuckle every day.
+          <strong th:text="${thirdPointTitle}">Turn good intentions into actual habits</strong><br>
+          <span th:text="${thirdPointBody}">Wanting to save is easy. Wisemonie makes it automatic, so discipline isn't something you have to white-knuckle every day.</span>
         </div>
       </div>
 
@@ -241,7 +238,7 @@
       </div>
 
       <p class="body-text" style="margin-top: 4px; margin-bottom: 0;">
-        Whenever you're ready, we'll be here.<br><br>The Wisemonie Team
+        <span th:text="${closingLine}">Whenever you're ready, we'll be here.</span><br><br>The Wisemonie Team
       </p>
 
     </div>
