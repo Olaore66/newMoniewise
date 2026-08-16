@@ -1608,6 +1608,8 @@ public class EnvelopeService {
 
                 envelope.getHeldAmount() != null ? envelope.getHeldAmount() : BigDecimal.ZERO,
 
+                Boolean.TRUE.equals(envelope.getIsAutomated()),
+
                 envelope.getConditions(),
                 envelope.getCreatedAt(),
                 envelope.getLastDisbursedAt(),

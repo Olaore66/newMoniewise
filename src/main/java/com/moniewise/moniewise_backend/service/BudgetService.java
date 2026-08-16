@@ -1281,6 +1281,8 @@ public class BudgetService {
 
                 envelope.getHeldAmount() != null ? envelope.getHeldAmount() : BigDecimal.ZERO,
 
+                Boolean.TRUE.equals(envelope.getIsAutomated()),
+
                 envelope.getConditions(),
                 envelope.getCreatedAt(),
                 envelope.getLastDisbursedAt(),
@@ -1468,6 +1470,8 @@ public class BudgetService {
                 usedThisPeriod,
 
                 heldAmt,
+
+                Boolean.TRUE.equals(envelope.getIsAutomated()),
 
                 envelope.getConditions(),
                 envelope.getCreatedAt(),

@@ -6,6 +6,7 @@ import com.moniewise.moniewise_backend.enums.NotificationType;
 import com.moniewise.moniewise_backend.enums.TransactionStatus;
 import com.moniewise.moniewise_backend.enums.TransactionType;
 import com.moniewise.moniewise_backend.repository.*;
+import com.moniewise.moniewise_backend.service.EnvelopeAutoTransferService;
 import com.moniewise.moniewise_backend.service.EnvelopeService;
 import com.moniewise.moniewise_backend.service.MonnieCacheInvalidationService;
 import com.moniewise.moniewise_backend.service.NotificationService;
@@ -52,6 +53,7 @@ public class BudgetLifeCycleManager {
     private final PendingDisbursementRepository pendingDisbursementRepository;
     private final EnvelopeService envelopeService;
     private final MonnieCacheInvalidationService monnieCacheInvalidationService;
+    private final EnvelopeAutoTransferService envelopeAutoTransferService;
 
     private final OutboxEventRepository outboxEventRepository;
 
@@ -72,7 +74,8 @@ public class BudgetLifeCycleManager {
             PendingDisbursementRepository pendingDisbursementRepository,
             @Lazy EnvelopeService envelopeService,
             MonnieCacheInvalidationService monnieCacheInvalidationService,
-            OutboxEventRepository outboxEventRepository, ApplicationEventPublisher eventPublisher) {
+            OutboxEventRepository outboxEventRepository, ApplicationEventPublisher eventPublisher,
+            @Lazy EnvelopeAutoTransferService envelopeAutoTransferService) {
         this.budgetRepository = budgetRepository;
         this.envelopeRepository = envelopeRepository;
         this.scheduledTaskRepository = scheduledTaskRepository;
@@ -86,6 +89,7 @@ public class BudgetLifeCycleManager {
         this.monnieCacheInvalidationService = monnieCacheInvalidationService;
         this.outboxEventRepository = outboxEventRepository;
         this.eventPublisher = eventPublisher;
+        this.envelopeAutoTransferService = envelopeAutoTransferService;
     }
 
     @PostConstruct
@@ -446,6 +450,41 @@ public class BudgetLifeCycleManager {
                 // 🛑 THE FIX: Update the frontend UI date so it doesn't get stuck in the past!
                 envelope.setNextDisbursementAt(calculateNextDisbursementTime(envelope));
                 envelopesToUpdate.add(envelope);
+
+                if (Boolean.TRUE.equals(envelope.getIsAutomated())) {
+                    ScheduledTask autoTask = new ScheduledTask();
+                    autoTask.setEnvelopeId(envelope.getId());
+                    autoTask.setTaskType("AUTO_TRANSFER");
+                    autoTask.setTriggerTime(now);
+                    autoTask.setCreatedAt(now);
+                    autoTask.setStatus("PENDING");
+                    autoTask.setRetryCount(0);
+                    scheduledTaskRepository.save(autoTask);
+                    logger.info("Scheduled auto-transfer for envelope {} after disbursement", envelope.getId());
+                }
+                break;
+            case "AUTO_TRANSFER":
+                try {
+                    envelopeAutoTransferService.executeAutoTransfer(envelope.getId());
+                } catch (Exception e) {
+                    logger.error("Auto-transfer failed for envelope {}: {}", envelope.getId(), e.getMessage());
+                    if (task.getRetryCount() < 2) {
+                        ScheduledTask retry = new ScheduledTask();
+                        retry.setEnvelopeId(envelope.getId());
+                        retry.setTaskType("AUTO_TRANSFER");
+                        retry.setTriggerTime(now.plusMinutes(30));
+                        retry.setStatus("PENDING");
+                        retry.setRetryCount(task.getRetryCount() + 1);
+                        retry.setCreatedAt(now);
+                        scheduledTaskRepository.save(retry);
+                        logger.info("Scheduled auto-transfer retry #{} for envelope {} at {}",
+                                task.getRetryCount() + 1, envelope.getId(), now.plusMinutes(30));
+                    } else {
+                        envelopeAutoTransferService.notifyAutoTransferExhausted(envelope);
+                        logger.error("Auto-transfer exhausted all retries for envelope {}", envelope.getId());
+                    }
+                }
+                taskIdsToComplete.add(task.getId());
                 break;
             default:
                 logger.warn("Unknown task type {} for envelope {}", task.getTaskType(), envelope.getId());
@@ -1343,6 +1382,10 @@ public class BudgetLifeCycleManager {
 
             // Low-balance alerts — still useful within a few hours
             case LOW_BALANCE_WARNING, ENVELOPE_LOW_BALANCE -> 21_600L; // 6 h
+
+            // Auto-transfer results — financial; hold for 72 h
+            case AUTO_TRANSFER_SUCCESS -> 259_200L; // 72 h
+            case AUTO_TRANSFER_FAILED, AUTO_TRANSFER_INSUFFICIENT_FUNDS -> 86_400L; // 24 h
 
             default -> 86_400L; // 24 h safe fallback
         };

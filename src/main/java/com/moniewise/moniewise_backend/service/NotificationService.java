@@ -258,6 +258,7 @@ public class NotificationService {
                     BUDGET_CREATION, BUDGET_COMPLETED,
                     ENVELOPE_UPDATED, ENVELOPE_LOCKED, ENVELOPE_UNLOCKED,
                     BUDGET_END, BUDGET_END_SOON, BUDGET_ENDS_TODAY,
+                    AUTO_TRANSFER_SUCCESS, AUTO_TRANSFER_FAILED, AUTO_TRANSFER_INSUFFICIENT_FUNDS,
                     HOW_TO_USE_WISEMONIE, SYSTEM -> true;
 
             default -> true;
@@ -352,6 +353,23 @@ public class NotificationService {
                 case ENVELOPE_LOW_BALANCE -> {
                     String name = safeText(params.get("envelopeName"), "selected");
                     yield "Your '" + name + "' envelope did not have enough money for its scheduled release.";
+                }
+                case AUTO_TRANSFER_SUCCESS -> {
+                    String amount = formatAmount(params.getOrDefault("amount", "0"));
+                    String recipient = safeText(params.get("recipient"), "the recipient");
+                    String name = safeText(params.get("envelopeName"), "selected");
+                    yield "₦" + amount + " from your '" + name + "' envelope has been auto-transferred to " + recipient + ".";
+                }
+                case AUTO_TRANSFER_FAILED -> {
+                    String name = safeText(params.get("envelopeName"), "selected");
+                    String reason = safeText(params.get("reason"), "Please check your envelope and try a manual transfer.");
+                    yield "Auto-transfer failed for your '" + name + "' envelope. " + reason;
+                }
+                case AUTO_TRANSFER_INSUFFICIENT_FUNDS -> {
+                    String amount = formatAmount(params.getOrDefault("amount", "0"));
+                    String fee = formatAmount(params.getOrDefault("fee", "0"));
+                    String name = safeText(params.get("envelopeName"), "selected");
+                    yield "Auto-transfer of ₦" + amount + " from your '" + name + "' envelope was skipped — insufficient funds to cover ₦" + fee + " in transfer charges.";
                 }
                 case LOW_BALANCE_WARNING -> "Your wallet balance is getting low. Please top up if you still have important payments planned.";
                 case BUDGET_END_SOON, BUDGET_ENDING_SOON -> {
@@ -713,6 +731,9 @@ public class NotificationService {
             case HOW_TO_USE_WISEMONIE -> "Watch the Wisemonie guide \uD83C\uDFA5";
             case SIGNUP_RETURN_NUDGE -> "Come back to Wisemonie \uD83E\uDDED";
             case ONBOARDING_REMINDER -> "Complete your profile \uD83D\uDCDD";
+            case AUTO_TRANSFER_SUCCESS -> "Auto-Transfer Sent 🚀";
+            case AUTO_TRANSFER_FAILED -> "Auto-Transfer Failed ❌";
+            case AUTO_TRANSFER_INSUFFICIENT_FUNDS -> "Auto-Transfer Skipped ⚠️";
             case ADMIN_RECONCILIATION_ALERT -> "Reconciliation Alert";
             case SYSTEM -> "System Update 📢";
             case POSITIVE_NUDGE -> "Keep it up! 💪";
@@ -751,6 +772,7 @@ public class NotificationService {
                     // "Your money is ready" is the single most important savings push —
                     // it was missing here, falling to default LOW = push never sent.
                     SAVINGS_MATURED,
+                    AUTO_TRANSFER_SUCCESS, AUTO_TRANSFER_FAILED, AUTO_TRANSFER_INSUFFICIENT_FUNDS,
                     ADMIN_PAYEELORD_LOW_BALANCE,
                     ADMIN_RECONCILIATION_ALERT -> NotificationPriority.HIGH;
 

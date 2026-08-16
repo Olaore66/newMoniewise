@@ -340,7 +340,7 @@ public class WalletService {
 
     @Transactional
     public void deductBalance(Long userId, BigDecimal amount) {
-        Wallet wallet = walletRepository.findByUserId(userId)
+        Wallet wallet = walletRepository.findByUserIdForUpdate(userId)
                 .orElseThrow(() -> new IllegalArgumentException("Wallet not found for user ID: " + userId));
 
         if (wallet.getBalance().compareTo(amount) < 0) {
@@ -392,7 +392,7 @@ public class WalletService {
     @Transactional
     public void deductTransferFee(Long userId, BigDecimal totalFee,
                                    BigDecimal bankCharge, BigDecimal markupFee) {
-        Wallet wallet = walletRepository.findByUserId(userId)
+        Wallet wallet = walletRepository.findByUserIdForUpdate(userId)
                 .orElseThrow(() -> new IllegalArgumentException("Wallet not found for user " + userId));
         BigDecimal balance = wallet.getBalance() != null ? wallet.getBalance() : BigDecimal.ZERO;
         if (balance.compareTo(totalFee) < 0) {

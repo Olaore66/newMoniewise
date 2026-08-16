@@ -65,6 +65,11 @@ public enum NotificationType {
     // ── Onboarding recovery ────────────────────────────────────────────────
     ONBOARDING_REMINDER,
 
+    // ── Envelope auto-transfer ────────────────────────────────────────────
+    AUTO_TRANSFER_SUCCESS,
+    AUTO_TRANSFER_FAILED,
+    AUTO_TRANSFER_INSUFFICIENT_FUNDS,
+
     // ── Admin / ops alerts ──────────────────────────────────────────────────
     ADMIN_PAYEELORD_LOW_BALANCE,
     ADMIN_RECONCILIATION_ALERT
