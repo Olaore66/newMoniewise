@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Wisemonie money plan reminder</title>
+  <title th:text="${subject}">Wisemonie</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -21,12 +21,6 @@
       overflow: hidden;
     }
     .card-body { padding: 40px 40px 36px; }
-    .greeting {
-      font-size: 16px;
-      color: #101828;
-      font-weight: 600;
-      margin-bottom: 12px;
-    }
     .tag-line {
       display: inline-block;
       background-color: #F0FAF5;
@@ -38,34 +32,70 @@
       border-radius: 100px;
       margin-bottom: 16px;
     }
+    .headline {
+      font-size: 24px;
+      font-weight: 700;
+      color: #101828;
+      line-height: 1.25;
+      margin-bottom: 20px;
+    }
     .body-text {
       font-size: 15px;
       color: #475467;
       line-height: 1.7;
-      margin-bottom: 20px;
+      margin-bottom: 16px;
     }
-    .balance-card {
+    .body-text strong { color: #101828; }
+    .detail-box {
       background: #F9FAFB;
       border: 1px solid #E4E7EC;
       border-radius: 10px;
       padding: 18px 20px;
-      margin: 24px 0;
-      text-align: center;
+      margin: 22px 0;
     }
-    .balance-label {
+    .detail-row {
+      padding: 7px 0;
+      border-bottom: 1px solid #EAECF0;
+    }
+    .detail-row:last-child { border-bottom: none; }
+    .detail-label {
+      display: block;
+      color: #667085;
       font-size: 11px;
       font-weight: 700;
-      color: #98A2B3;
-      letter-spacing: 1px;
+      letter-spacing: 0.7px;
       text-transform: uppercase;
-      margin-bottom: 6px;
+      margin-bottom: 3px;
     }
-    .balance-value {
-      color: #0F4C4C;
-      font-size: 26px;
-      font-weight: 800;
+    .detail-value {
+      display: block;
+      color: #101828;
+      font-size: 16px;
+      font-weight: 700;
+      word-break: break-word;
     }
-    .btn-container { text-align: center; margin: 28px 0; }
+    .steps {
+      margin: 22px 0;
+      padding-left: 20px;
+    }
+    .steps li {
+      color: #475467;
+      font-size: 14px;
+      line-height: 1.65;
+      margin-bottom: 8px;
+      padding-left: 4px;
+    }
+    .trust-box {
+      background: #FFFAEB;
+      border: 1px solid #FEC84B;
+      border-radius: 8px;
+      color: #92400E;
+      font-size: 13px;
+      line-height: 1.6;
+      padding: 14px 16px;
+      margin: 24px 0;
+    }
+    .btn-container { text-align: center; margin: 28px 0 10px; }
     .store-options {
       width: 100%;
       border-collapse: collapse;
@@ -105,50 +135,16 @@
       font-size: 14px;
       font-weight: 700;
     }
-    .divider { border: none; border-top: 1px solid #F2F4F7; margin: 26px 0; }
-    .info-row {
-      display: flex;
-      align-items: flex-start;
-      gap: 12px;
-      margin-bottom: 16px;
-    }
-    .info-marker {
-      width: 28px;
-      height: 28px;
-      border-radius: 8px;
-      background: #F0FAF5;
-      color: #0F4C4C;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 13px;
-      font-weight: 800;
-      flex-shrink: 0;
-      line-height: 28px;
+    .btn-subtext {
       text-align: center;
+      font-size: 12px;
+      color: #98A2B3;
+      margin-top: 10px;
     }
-    .info-text { font-size: 14px; color: #475467; line-height: 1.6; }
-    .info-text strong { color: #101828; font-weight: 700; }
-    .note {
-      background: #F0FAF5;
-      border: 1px solid #D3F8DF;
-      border-radius: 8px;
-      color: #0F4C4C;
-      font-size: 13px;
-      line-height: 1.6;
-      padding: 14px 16px;
-      margin-top: 24px;
-    }
+    .divider { border: none; border-top: 1px solid #F2F4F7; margin: 0; }
     .card-footer {
-      border-top: 1px solid #F2F4F7;
       padding: 24px 40px;
       text-align: center;
-    }
-    .footer-brand {
-      font-size: 13px;
-      font-weight: 700;
-      color: #0F4C4C;
-      margin-bottom: 8px;
     }
     .footer-text {
       font-size: 12px;
@@ -157,16 +153,6 @@
       margin-bottom: 16px;
     }
     .footer-text a { color: #1F9E89; text-decoration: none; }
-    .social-row { text-align: center; margin-bottom: 4px; }
-    .social-row a {
-      display: inline-block;
-      margin: 0 8px;
-      font-size: 12px;
-      color: #667085;
-      text-decoration: none;
-      font-weight: 500;
-    }
-    .social-row a:hover { color: #0F4C4C; }
     .outer-footer {
       text-align: center;
       margin-top: 24px;
@@ -177,9 +163,9 @@
       body { padding: 20px 12px; }
       .card-body   { padding: 28px 24px 24px; }
       .card-footer { padding: 20px 24px; }
+      .headline    { font-size: 20px; }
       .store-option { display: block; width: 100%; padding: 0 0 14px; }
       .btn-store, .coming-soon { display: block; text-align: center; }
-      .balance-value { font-size: 23px; }
     }
   </style>
 </head>
@@ -193,18 +179,44 @@
   <div class="card">
     <div class="card-body">
 
-      <div class="tag-line" th:text="${tag}">Wallet ready</div>
+      <div class="tag-line" th:text="${tag}">Still here</div>
+      <h1 class="headline" th:text="${headline}">Your next step is smaller than it looks</h1>
 
-      <p class="greeting">Hi <span th:text="${firstName}">there</span>,</p>
-
-      <p class="body-text" th:each="paragraph : ${paragraphs}" th:text="${paragraph}">
-        We know making more money is already challenging enough.
+      <p class="body-text">
+        Hi <span th:text="${firstName}">there</span>,
+      </p>
+      <p class="body-text" th:text="${introParagraph}">
+        You started something useful and paused before the part that makes it work.
+      </p>
+      <p class="body-text" th:text="${insightParagraph}">
+        The next step is practical. It is not about building a perfect money system today.
       </p>
 
-      <div class="balance-card" th:if="${hasBalance}">
-        <div class="balance-label">Current wallet balance</div>
-        <div class="balance-value">NGN <span th:text="${walletBalance}">0.00</span></div>
+      <div class="detail-box" th:if="${hasFundingDetails}">
+        <div class="detail-row">
+          <span class="detail-label">Bank to search</span>
+          <span class="detail-value" th:text="${bankName}">Rubies Microfinance Bank / Rubies MFB</span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-label">Account number</span>
+          <span class="detail-value" th:text="${accountNumber}">0000000000</span>
+        </div>
       </div>
+
+      <p class="body-text" style="margin-bottom: 8px;">
+        <strong th:text="${actionTitle}">Do this next</strong>
+      </p>
+      <ol class="steps">
+        <li th:each="item : ${actionItems}" th:text="${item}">Open Wisemonie on your phone.</li>
+      </ol>
+
+      <div class="trust-box" th:if="${trustNote != null and !#strings.isEmpty(trustNote)}" th:text="${trustNote}">
+        This note explains the step that usually causes confusion.
+      </div>
+
+      <p class="body-text" th:text="${footerNote}">
+        You do not need to set up everything. One clear next step is enough.
+      </p>
 
       <div class="btn-container">
         <table class="store-options" role="presentation" cellpadding="0" cellspacing="0">
@@ -226,35 +238,17 @@
           </tr>
         </table>
       </div>
-
-      <hr class="divider">
-
-      <div class="info-row" th:each="item, stat : ${adviceItems}">
-        <div class="info-marker" th:text="${stat.count}">1</div>
-        <div class="info-text">
-          <strong th:text="${item['title']}">Split your money into envelopes</strong><br>
-          <span th:text="${item['description']}">Give every part of your money a purpose.</span>
-        </div>
-      </div>
-
-      <div class="note" th:text="${footerNote}">
-        Start small if you need to. The calm comes from giving your money a direction.
-      </div>
+      <p class="btn-subtext">If Wisemonie is already installed, open it on your phone and continue from there.</p>
 
     </div>
 
+    <div class="divider"></div>
+
     <div class="card-footer">
-      <div class="footer-brand">Wisemonie</div>
       <p class="footer-text">
-        You are receiving this because your Wisemonie wallet is active.<br>
+        You are receiving this because you started using Wisemonie and went quiet before setup became useful.<br>
         Questions? <a href="mailto:wisemoniehelpdesk@gmail.com">wisemoniehelpdesk@gmail.com</a>
       </p>
-      <div class="social-row">
-        <a href="https://instagram.com/wisemonie_app">Instagram</a>
-        <a href="https://x.com/wisemonie_app">X</a>
-        <a href="https://tiktok.com/@wisemonie_app">TikTok</a>
-        <a href="https://whatsapp.com/channel/0029Vb6kU683bbUy3azQF047">WhatsApp</a>
-      </div>
     </div>
 
   </div>

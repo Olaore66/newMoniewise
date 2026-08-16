@@ -19,5 +19,8 @@ public class AutoTransferResponse {
     private String accountNumber;
     private String accountName;
     private boolean isAutomated;
+    private boolean processing;
+    private String processStatus;
+    private String processMessage;
     private LocalDateTime createdAt;
 }

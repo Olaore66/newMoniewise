@@ -24,6 +24,7 @@ import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -74,7 +75,7 @@ public class EnvelopeAutoTransferService {
             throw new IllegalArgumentException("Invalid transaction PIN");
         }
 
-        Envelope envelope = envelopeRepository.findByIdAndBudget_UserEmail(envelopeId, email)
+        Envelope envelope = envelopeRepository.findByIdAndBudgetUserEmailForUpdate(envelopeId, email)
                 .orElseThrow(() -> new EntityNotFoundException("Envelope not found"));
 
         String resolvedName = walletService.resolveBankAccount(
@@ -108,7 +109,7 @@ public class EnvelopeAutoTransferService {
     @Transactional
     public void disableAutoTransfer(Long envelopeId, String email) {
         User user = userService.findByEmail(email);
-        Envelope envelope = envelopeRepository.findByIdAndBudget_UserEmail(envelopeId, email)
+        Envelope envelope = envelopeRepository.findByIdAndBudgetUserEmailForUpdate(envelopeId, email)
                 .orElseThrow(() -> new EntityNotFoundException("Envelope not found"));
 
         autoTransferRepository.deleteByEnvelopeId(envelopeId);
@@ -129,13 +130,13 @@ public class EnvelopeAutoTransferService {
         EnvelopeAutoTransfer config = autoTransferRepository.findByEnvelopeIdAndUserId(envelopeId, user.getId())
                 .orElse(null);
 
-        if (config == null) return null;
+        if (config == null && !isAutoTransferProcessStarted(envelopeId)) return null;
         return buildResponse(config, envelope);
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void executeAutoTransfer(Long envelopeId) {
-        Envelope envelope = envelopeRepository.findById(envelopeId).orElse(null);
+        Envelope envelope = envelopeRepository.findByIdForUpdate(envelopeId).orElse(null);
         if (envelope == null) {
             logger.warn("Auto-transfer: envelope {} not found", envelopeId);
             return;
@@ -287,11 +288,6 @@ public class EnvelopeAutoTransferService {
 
         monnieCacheInvalidationService.evictUserAfterCommit(userId);
 
-        saveNotification(NotificationType.AUTO_TRANSFER_SUCCESS, envelope,
-                Map.of("envelopeName", safeName(envelope),
-                        "amount", String.format("%,.2f", amount),
-                        "recipient", config.getAccountName(),
-                        "bankName", config.getBankName()));
 
         logger.info("Auto-transfer initiated: envelope={}, amount=₦{}, ref={}, recipient={}",
                 envelopeId, amount, reference, config.getAccountName());
@@ -322,15 +318,31 @@ public class EnvelopeAutoTransferService {
 
     private AutoTransferResponse buildResponse(EnvelopeAutoTransfer config, Envelope envelope) {
         AutoTransferResponse response = new AutoTransferResponse();
-        response.setId(config.getId());
+        boolean processing = isAutoTransferProcessStarted(envelope.getId());
+        response.setId(config != null ? config.getId() : null);
         response.setEnvelopeId(envelope.getId());
-        response.setBankCode(config.getBankCode());
-        response.setBankName(config.getBankName());
-        response.setAccountNumber(config.getAccountNumber());
-        response.setAccountName(config.getAccountName());
+        response.setBankCode(config != null ? config.getBankCode() : null);
+        response.setBankName(config != null ? config.getBankName() : null);
+        response.setAccountNumber(config != null ? config.getAccountNumber() : null);
+        response.setAccountName(config != null ? config.getAccountName() : null);
         response.setAutomated(Boolean.TRUE.equals(envelope.getIsAutomated()));
-        response.setCreatedAt(config.getCreatedAt());
+        response.setProcessing(processing);
+        response.setProcessStatus(processing
+                ? "PROCESSING"
+                : (Boolean.TRUE.equals(envelope.getIsAutomated()) ? "ACTIVE" : "DISABLED"));
+        response.setProcessMessage(processing
+                ? "Auto-transfer has started and is awaiting final confirmation."
+                : null);
+        response.setCreatedAt(config != null ? config.getCreatedAt() : null);
         return response;
+    }
+
+    private boolean isAutoTransferProcessStarted(Long envelopeId) {
+        return transactionLogRepository.existsBySourceEnvelopeIdAndTransactionTypeAndStatusInAndReferenceStartingWith(
+                envelopeId,
+                TransactionType.ENVELOPE_TO_EXTERNAL,
+                List.of(TransactionStatus.PENDING, TransactionStatus.PROCESSING),
+                "AUTO-EXT-");
     }
 
     private BigDecimal safeAmount(BigDecimal value) {

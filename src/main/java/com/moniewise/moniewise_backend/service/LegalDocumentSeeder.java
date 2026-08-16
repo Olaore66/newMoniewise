@@ -27,7 +27,7 @@ public class LegalDocumentSeeder implements ApplicationRunner {
     private static final Logger logger = LoggerFactory.getLogger(LegalDocumentSeeder.class);
 
     private static final String PRIVACY_VERSION = "2026.06";
-    private static final String TERMS_VERSION = "2026.06";
+    private static final String TERMS_VERSION = "2026.08";
 
     private final LegalDocumentService legalDocumentService;
 

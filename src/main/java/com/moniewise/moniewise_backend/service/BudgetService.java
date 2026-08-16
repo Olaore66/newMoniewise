@@ -67,6 +67,7 @@ public class BudgetService {
     /** Short-lived cache for read-heavy GET /budgets/{id}/envelopes calls. */
     private static final String ENVELOPES_CACHE_PREFIX = "envelopes:";
     private static final long ENVELOPES_CACHE_TTL_SECS = 30;
+    private static final int MAX_BUDGET_START_YEARS = 2;
 
     @Value("${moniewise.revenue.wallet.user-id}")
     private Long revenueWalletUserId;
@@ -113,6 +114,28 @@ public class BudgetService {
 
     private LocalDateTime fetchCurrentDateTimeFromDatabase() {
         return ZonedDateTime.now(ZoneId.of("Africa/Lagos")).toLocalDateTime();
+    }
+
+    private void normalizeAndValidateBudgetDates(BudgetRequest request, LocalDate today) {
+        if (request.getStartDate() == null) {
+            request.setStartDate(today);
+        }
+        if (request.getEndDate() == null) {
+            throw new IllegalArgumentException("End date is required");
+        }
+
+        LocalDate startDate = request.getStartDate();
+        LocalDate endDate = request.getEndDate();
+
+        if (startDate.isBefore(today)) {
+            throw new IllegalArgumentException("Budget start date cannot be in the past");
+        }
+        if (startDate.isAfter(today.plusYears(MAX_BUDGET_START_YEARS))) {
+            throw new IllegalArgumentException("Budget start date cannot be more than 2 years from today");
+        }
+        if (startDate.isAfter(endDate)) {
+            throw new IllegalArgumentException("Budget start date cannot be after end date");
+        }
     }
 
     // In BudgetService.java, replace lines 118–170 with:
@@ -512,10 +535,7 @@ public class BudgetService {
 
         LocalDateTime now = fetchCurrentDateTimeFromDatabase();
 
-        // Validate dates
-        if (request.getStartDate().isAfter(request.getEndDate())) {
-            throw new IllegalArgumentException("Start date must be before end date");
-        }
+        normalizeAndValidateBudgetDates(request, now.toLocalDate());
 
         // Minimum budget amount is product-configurable via system_config.
         BigDecimal minAmount = systemConfig.getBudgetMinAmount();

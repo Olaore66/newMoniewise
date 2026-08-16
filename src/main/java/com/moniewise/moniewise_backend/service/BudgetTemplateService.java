@@ -19,7 +19,9 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -148,9 +150,12 @@ public class BudgetTemplateService {
         if (request.getTotalAmount() == null || request.getTotalAmount().compareTo(BigDecimal.ZERO) <= 0) {
             throw new IllegalArgumentException("Budget amount must be positive");
         }
-        if (request.getStartDate() == null || request.getEndDate() == null) {
-            throw new IllegalArgumentException("Start date and end date are required");
+        if (request.getEndDate() == null) {
+            throw new IllegalArgumentException("End date is required");
         }
+        LocalDate startDate = request.getStartDate() != null
+                ? request.getStartDate()
+                : LocalDate.now(ZoneId.of("Africa/Lagos"));
 
         List<EnvelopeRequest> envelopeRequests = new ArrayList<>();
         for (Map<String, Object> def : template.getEnvelopeDefinitions()) {
@@ -180,7 +185,7 @@ public class BudgetTemplateService {
             // Reset time-bound fields so they're recalculated from the new budget's dates
             String type = fresh.get("type") != null ? fresh.get("type").toString() : "";
             if ("safe_lock".equals(type) || "strict_lock".equals(type)) {
-                fresh.put("lockStartDate", request.getStartDate().toString());
+                fresh.put("lockStartDate", startDate.toString());
             }
 
             env.setConditions(fresh);
@@ -190,7 +195,7 @@ public class BudgetTemplateService {
         BudgetRequest budgetRequest = new BudgetRequest();
         budgetRequest.setName(request.getName().trim());
         budgetRequest.setTotalAmount(request.getTotalAmount());
-        budgetRequest.setStartDate(request.getStartDate());
+        budgetRequest.setStartDate(startDate);
         budgetRequest.setEndDate(request.getEndDate());
         budgetRequest.setDurationDays(request.getDurationDays());
         budgetRequest.setStatus(BudgetStatus.ACTIVE);

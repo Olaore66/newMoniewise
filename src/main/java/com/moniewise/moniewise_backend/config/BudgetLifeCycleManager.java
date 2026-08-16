@@ -1263,6 +1263,12 @@ public class BudgetLifeCycleManager {
                 while (!targetTime1.isAfter(now)) {
                     targetTime1 = targetTime1.plusWeeks(1);
                 }
+                if (budgetStart != null && targetTime1.toLocalDate().isBefore(budgetStart)) {
+                    targetTime1 = budgetStart.with(TemporalAdjusters.nextOrSame(DayOfWeek.MONDAY)).atStartOfDay();
+                    while (!targetTime1.isAfter(now)) {
+                        targetTime1 = targetTime1.plusWeeks(1);
+                    }
+                }
 
                 if (targetTime1.isAfter(budgetEnd.atTime(23, 59, 59))) {
                     return null;
@@ -1282,7 +1288,11 @@ public class BudgetLifeCycleManager {
                             .map(String::toUpperCase)
                             .toList();
 
-                    LocalDateTime candidate = now.toLocalDate().atTime(targetTime);
+                    LocalDate searchDate = now.toLocalDate();
+                    if (budgetStart != null && searchDate.isBefore(budgetStart)) {
+                        searchDate = budgetStart;
+                    }
+                    LocalDateTime candidate = searchDate.atTime(targetTime);
 
                     // ✅ CHANGED TO !candidate.isAfter(now)
                     if (!candidate.isAfter(now)) {

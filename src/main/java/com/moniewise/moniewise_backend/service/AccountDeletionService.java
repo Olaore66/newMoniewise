@@ -3,6 +3,8 @@ package com.moniewise.moniewise_backend.service;
 import com.moniewise.moniewise_backend.entity.Budget;
 import com.moniewise.moniewise_backend.entity.SavingsGoal;
 import com.moniewise.moniewise_backend.entity.User;
+import com.moniewise.moniewise_backend.entity.Wallet;
+import com.moniewise.moniewise_backend.enums.AccountClosureEmailScenario;
 import com.moniewise.moniewise_backend.enums.BudgetStatus;
 import com.moniewise.moniewise_backend.enums.SavingsStatus;
 import com.moniewise.moniewise_backend.enums.WithdrawalStatus;
@@ -11,6 +13,7 @@ import com.moniewise.moniewise_backend.repository.OutboxEventRepository;
 import com.moniewise.moniewise_backend.repository.PendingDisbursementRepository;
 import com.moniewise.moniewise_backend.repository.SavingsGoalRepository;
 import com.moniewise.moniewise_backend.repository.UserRepository;
+import com.moniewise.moniewise_backend.repository.WalletRepository;
 import com.moniewise.moniewise_backend.repository.WithdrawalRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -57,6 +60,7 @@ public class AccountDeletionService {
     private final BudgetService budgetService;
     private final SavingsService savingsService;
     private final WalletService walletService;
+    private final WalletRepository walletRepository;
     private final BudgetRepository budgetRepository;
     private final SavingsGoalRepository savingsGoalRepository;
     private final WithdrawalRepository withdrawalRepository;
@@ -66,7 +70,8 @@ public class AccountDeletionService {
     public AccountDeletionService(NotificationService notificationService,
                                   UserService userService, UserRepository userRepository,
                                   BudgetService budgetService, SavingsService savingsService,
-                                  WalletService walletService, BudgetRepository budgetRepository,
+                                  WalletService walletService, WalletRepository walletRepository,
+                                  BudgetRepository budgetRepository,
                                   SavingsGoalRepository savingsGoalRepository,
                                   WithdrawalRepository withdrawalRepository,
                                   PendingDisbursementRepository pendingDisbursementRepository,
@@ -77,6 +82,7 @@ public class AccountDeletionService {
         this.budgetService = budgetService;
         this.savingsService = savingsService;
         this.walletService = walletService;
+        this.walletRepository = walletRepository;
         this.budgetRepository = budgetRepository;
         this.savingsGoalRepository = savingsGoalRepository;
         this.withdrawalRepository = withdrawalRepository;
@@ -124,6 +130,9 @@ public class AccountDeletionService {
                     "A withdrawal is still processing. Please try again once it completes.");
         }
 
+        AccountClosureEmailScenario closureScenario = determineClosureScenario(userId);
+        storeClosureFeedbackContext(user, reason, closureScenario);
+
         // Break ACTIVE (still-maturing) savings on the way out: principal returns
         // to the wallet, any accrued bonus is forfeited. Account closure is the one
         // place the maturity lock is lifted, so a departing user can always recover
@@ -146,16 +155,6 @@ public class AccountDeletionService {
         // Rake matured (unwithdrawn) savings → wallet.
         for (SavingsGoal goal : savingsGoalRepository.findByUserIdAndStatus(userId, SavingsStatus.MATURED)) {
             savingsService.withdrawSavings(userId, goal.getId(), null);
-        }
-
-        // Capture the reason for analytics/compliance in the profile blob (no
-        // schema change). Kept whether we close now or after a withdrawal.
-        if (reason != null && !reason.isBlank()) {
-            Map<String, Object> profile = user.getProfileData() != null
-                    ? user.getProfileData() : new HashMap<>();
-            profile.put("deletionReason", reason.trim());
-            user.setProfileData(profile);
-            userRepository.save(user);
         }
 
         // Everything is now consolidated in the wallet. A withdrawable balance
@@ -200,7 +199,10 @@ public class AccountDeletionService {
         // Async + best-effort: a mail failure must never undo a closure.
         try {
             notificationService.sendAccountClosedEmail(
-                    user.getEmail(), firstNameOf(user), resolveReason(user, reason));
+                    user.getEmail(),
+                    firstNameOf(user),
+                    resolveReason(user, reason),
+                    resolveClosureScenario(user));
         } catch (Exception e) {
             logger.error("Farewell email failed for {}", user.getEmail(), e);
         }
@@ -258,6 +260,50 @@ public class AccountDeletionService {
             return profile.get("deletionReason").toString();
         }
         return null;
+    }
+
+    private AccountClosureEmailScenario determineClosureScenario(Long userId) {
+        Wallet wallet = walletRepository.findFirstByUserIdOrderByUpdatedAtDesc(userId).orElse(null);
+        if (wallet == null) {
+            return AccountClosureEmailScenario.NO_WALLET;
+        }
+
+        boolean hasPlans = !budgetRepository.findByUserId(userId).isEmpty()
+                || !savingsGoalRepository.findByUserIdOrderByCreatedAtDesc(userId).isEmpty();
+        if (hasPlans) {
+            return AccountClosureEmailScenario.USED_WISEMONIE;
+        }
+
+        BigDecimal balance = wallet.getBalance() != null ? wallet.getBalance() : BigDecimal.ZERO;
+        if (balance.compareTo(BigDecimal.ZERO) > 0) {
+            return AccountClosureEmailScenario.FUNDED_NO_PLAN;
+        }
+
+        return AccountClosureEmailScenario.WALLET_NOT_FUNDED;
+    }
+
+    private void storeClosureFeedbackContext(User user, String reason, AccountClosureEmailScenario scenario) {
+        Map<String, Object> profile = user.getProfileData() != null
+                ? new HashMap<>(user.getProfileData())
+                : new HashMap<>();
+        if (reason != null && !reason.isBlank()) {
+            profile.put("deletionReason", reason.trim());
+        }
+        profile.put("deletionScenario", scenario.name());
+        user.setProfileData(profile);
+        userRepository.save(user);
+    }
+
+    private AccountClosureEmailScenario resolveClosureScenario(User user) {
+        Map<String, Object> profile = user.getProfileData();
+        if (profile == null || profile.get("deletionScenario") == null) {
+            return AccountClosureEmailScenario.GENERAL;
+        }
+        try {
+            return AccountClosureEmailScenario.valueOf(profile.get("deletionScenario").toString());
+        } catch (IllegalArgumentException e) {
+            return AccountClosureEmailScenario.GENERAL;
+        }
     }
 
     private BigDecimal safeBalance(Long userId) {

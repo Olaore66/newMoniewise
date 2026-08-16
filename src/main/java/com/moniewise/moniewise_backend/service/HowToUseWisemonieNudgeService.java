@@ -183,9 +183,9 @@ public class HowToUseWisemonieNudgeService {
         GuideCopy copy = selectCopy(user.getId(), now);
         String firstName = extractFirstName(user);
         String emailTitle = firstName + ", " + lowerFirstLetter(copy.emailTitle());
-        String emailFooter = "Open the Wisemonie WhatsApp channel and watch the pinned video: \""
+        String emailFooter = "The flow is simple: fund your wallet, create one plan, split money into envelopes, choose when money should be available, then spend from the right envelope. You can also watch the pinned video on the Wisemonie WhatsApp channel: \""
                 + GUIDE_VIDEO_TITLE
-                + "\". It shows wallet funding, budget creation, envelopes, disbursement and spending from the plan.";
+                + "\".";
 
         record(user.getId(), EngagementNudgeChannel.EMAIL, copy.key(), now);
         notificationService.sendEngagementNudgeEmail(

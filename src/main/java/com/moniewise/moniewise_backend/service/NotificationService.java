@@ -5,7 +5,9 @@ import com.moniewise.moniewise_backend.config.GenericNotificationEvent;
 import com.moniewise.moniewise_backend.dto.response.NotificationBulkReadResponse;
 import com.moniewise.moniewise_backend.entity.Notification;
 import com.moniewise.moniewise_backend.entity.User;
+import com.moniewise.moniewise_backend.enums.AccountClosureEmailScenario;
 import com.moniewise.moniewise_backend.enums.BudgetEngagementNudgeType;
+import com.moniewise.moniewise_backend.enums.LifecycleRecoveryType;
 import com.moniewise.moniewise_backend.enums.NotificationPriority;
 import com.moniewise.moniewise_backend.enums.NotificationType;
 import com.moniewise.moniewise_backend.repository.NotificationRepository;
@@ -369,7 +371,7 @@ public class NotificationService {
                     String amount = formatAmount(params.getOrDefault("amount", "0"));
                     String fee = formatAmount(params.getOrDefault("fee", "0"));
                     String name = safeText(params.get("envelopeName"), "selected");
-                    yield "Auto-transfer of ₦" + amount + " from your '" + name + "' envelope was skipped — insufficient funds to cover ₦" + fee + " in transfer charges.";
+                    yield "Auto-transfer of ₦" + amount + " from your '" + name + "' envelope was skipped. Insufficient funds to cover ₦" + fee + " in transfer charges.";
                 }
                 case LOW_BALANCE_WARNING -> "Your wallet balance is getting low. Please top up if you still have important payments planned.";
                 case BUDGET_END_SOON, BUDGET_ENDING_SOON -> {
@@ -803,6 +805,18 @@ public class NotificationService {
         return appBaseUrl + "/images/main_logo.png";
     }
 
+    private String normalizeFundingBankName(String bankName) {
+        if (bankName == null || bankName.isBlank()) {
+            return "Rubies Microfinance Bank / Rubies MFB";
+        }
+        String normalized = bankName.trim();
+        String lower = normalized.toLowerCase();
+        if (lower.contains("rubies") && !lower.contains("microfinance")) {
+            return "Rubies Microfinance Bank / Rubies MFB";
+        }
+        return normalized;
+    }
+
     /** No-op kept for backward compatibility — CID approach replaced by hosted URL. */
     private void attachLogo(MimeMessageHelper helper) {
         // intentionally empty — logo is now served via public URL (logoUrl())
@@ -824,7 +838,7 @@ public class NotificationService {
             context.setVariable("logoUrl", logoUrl());
             context.setVariable("firstName", firstName != null && !firstName.isBlank() ? firstName : "there");
             context.setVariable("accountNumber", accountNumber);
-            context.setVariable("bankName", bankName != null ? bankName : "Rubies MFB");
+            context.setVariable("bankName", normalizeFundingBankName(bankName));
 
             String htmlContent = templateEngine.process("welcome-email", context);
 
@@ -833,7 +847,7 @@ public class NotificationService {
 
             setWisemonieSender(helper);
             helper.setTo(email);
-            helper.setSubject("🎊 Welcome to Wisemonie! Your Account is Ready");
+            helper.setSubject("Your Wisemonie wallet is ready. Search Rubies MFB to fund it");
             helper.setText(htmlContent, true);
             attachLogo(helper);
 
@@ -873,6 +887,8 @@ public class NotificationService {
             context.setVariable("showUrgencyNotice", showUrgencyNotice);
             context.setVariable("introParagraph", copy.introParagraph());
             context.setVariable("supportParagraph", copy.supportParagraph());
+            context.setVariable("bvnTrustLine",
+                    "BVN is used so our licensed banking partner can verify your identity, open your wallet account and give you an account number for funding. It is not requested without a purpose.");
             context.setVariable("ctaSubtext", copy.ctaSubtext());
             context.setVariable("firstPointIcon", copy.firstPointIcon());
             context.setVariable("firstPointTitle", copy.firstPointTitle());
@@ -1040,10 +1056,160 @@ public class NotificationService {
         }
     }
 
+    @Async
+    public void sendLifecycleRecoveryEmail(String email,
+                                           String firstName,
+                                           LifecycleRecoveryType type,
+                                           String accountNumber,
+                                           String bankName) {
+        if ("stub".equals(activeProfile) || mailSender == null) {
+            logger.info("[STUB] Sending lifecycle recovery {} to {}", type, email);
+            return;
+        }
+
+        LifecycleRecoveryType safeType = type != null ? type : LifecycleRecoveryType.NO_WALLET;
+        try {
+            Context context = new Context();
+            context.setVariable("logoUrl", logoUrl());
+            context.setVariable("firstName", firstName != null && !firstName.isBlank() ? firstName : "there");
+            context.setVariable("subject", lifecycleRecoverySubject(safeType));
+            context.setVariable("tag", lifecycleRecoveryTag(safeType));
+            context.setVariable("headline", lifecycleRecoveryHeadline(safeType));
+            context.setVariable("introParagraph", lifecycleRecoveryIntro(safeType));
+            context.setVariable("insightParagraph", lifecycleRecoveryInsight(safeType));
+            context.setVariable("actionTitle", lifecycleRecoveryActionTitle(safeType));
+            context.setVariable("actionItems", lifecycleRecoveryActionItems(safeType));
+            context.setVariable("trustNote", lifecycleRecoveryTrustNote(safeType));
+            context.setVariable("footerNote", lifecycleRecoveryFooterNote(safeType));
+            context.setVariable("hasFundingDetails",
+                    safeType != LifecycleRecoveryType.NO_WALLET
+                            && accountNumber != null
+                            && !accountNumber.isBlank());
+            context.setVariable("accountNumber", accountNumber);
+            context.setVariable("bankName", normalizeFundingBankName(bankName));
+            addAppDownloadContext(context);
+
+            String htmlContent = templateEngine.process("lifecycle-recovery", context);
+
+            MimeMessage mimeMessage = mailSender.createMimeMessage();
+            MimeMessageHelper helper = new MimeMessageHelper(mimeMessage, true);
+
+            setWisemonieSender(helper);
+            helper.setTo(email);
+            helper.setSubject(lifecycleRecoverySubject(safeType));
+            helper.setText(htmlContent, true);
+            attachLogo(helper);
+
+            mailSender.send(mimeMessage);
+            logger.info("Sent lifecycle recovery {} email to {}", safeType, email);
+        } catch (Exception e) {
+            logger.error("Failed to send lifecycle recovery {} email to {}", safeType, email, e);
+        }
+    }
+
+    private String lifecycleRecoverySubject(LifecycleRecoveryType type) {
+        return switch (type) {
+            case NO_WALLET -> "Your Wisemonie wallet was not created yet";
+            case WALLET_READY_NOT_FUNDED -> "Still trying to fund your Wisemonie wallet?";
+            case FUNDED_NO_PLAN -> "Your money is inside Wisemonie. Give it instructions";
+        };
+    }
+
+    private String lifecycleRecoveryTag(LifecycleRecoveryType type) {
+        return switch (type) {
+            case NO_WALLET -> "Setup paused";
+            case WALLET_READY_NOT_FUNDED -> "Funding help";
+            case FUNDED_NO_PLAN -> "Next small step";
+        };
+    }
+
+    private String lifecycleRecoveryHeadline(LifecycleRecoveryType type) {
+        return switch (type) {
+            case NO_WALLET -> "Your wallet stopped before it was created";
+            case WALLET_READY_NOT_FUNDED -> "The bank name to search is Rubies MFB";
+            case FUNDED_NO_PLAN -> "One big balance still leaves too much in your head";
+        };
+    }
+
+    private String lifecycleRecoveryIntro(LifecycleRecoveryType type) {
+        return switch (type) {
+            case NO_WALLET ->
+                    "You started setting up Wisemonie, but the wallet account was not created yet.";
+            case WALLET_READY_NOT_FUNDED ->
+                    "Your wallet account is ready, but it looks like funding may have been the part that got unclear.";
+            case FUNDED_NO_PLAN ->
+                    "You already put money inside Wisemonie. That means the intention was real.";
+        };
+    }
+
+    private String lifecycleRecoveryInsight(LifecycleRecoveryType type) {
+        return switch (type) {
+            case NO_WALLET ->
+                    "Most people pause here because BVN feels sensitive, or because something interrupts the setup. The reason is simple: our licensed banking partner needs it to verify you and create your wallet account number.";
+            case WALLET_READY_NOT_FUNDED ->
+                    "One common mistake is searching for Wisemonie as the bank name. Your wallet account is provided through Rubies Microfinance Bank, so that is the name your banking app needs.";
+            case FUNDED_NO_PLAN ->
+                    "When money stays as one big balance, every spend becomes a fresh decision. That is where pressure, impulse and mental maths enter.";
+        };
+    }
+
+    private String lifecycleRecoveryActionTitle(LifecycleRecoveryType type) {
+        return switch (type) {
+            case NO_WALLET -> "Finish the wallet step";
+            case WALLET_READY_NOT_FUNDED -> "Fund with the right bank name";
+            case FUNDED_NO_PLAN -> "Start with one instruction";
+        };
+    }
+
+    private List<String> lifecycleRecoveryActionItems(LifecycleRecoveryType type) {
+        return switch (type) {
+            case NO_WALLET -> List.of(
+                    "Open Wisemonie on your phone.",
+                    "Continue identity verification.",
+                    "Complete the BVN step if requested.",
+                    "Once verified, your wallet account number can be created."
+            );
+            case WALLET_READY_NOT_FUNDED -> List.of(
+                    "Open your banking app.",
+                    "Choose transfer to another bank.",
+                    "Search for Rubies MFB, Rubies Microfinance Bank or Rubies.",
+                    "Paste your Wisemonie account number.",
+                    "Confirm the account name, then send."
+            );
+            case FUNDED_NO_PLAN -> List.of(
+                    "Open Wisemonie on your phone.",
+                    "Create one simple money plan.",
+                    "Start with food, transport, bills, savings, family or enjoyment.",
+                    "Put only what you can plan today. You can improve the rest later."
+            );
+        };
+    }
+
+    private String lifecycleRecoveryTrustNote(LifecycleRecoveryType type) {
+        return switch (type) {
+            case NO_WALLET ->
+                    "BVN is used so our licensed banking partner can verify your identity, open your wallet account and give you an account number for funding. It is not requested without a purpose.";
+            case WALLET_READY_NOT_FUNDED ->
+                    "Do not search for Wisemonie as the bank name. Search for Rubies MFB or Rubies Microfinance Bank.";
+            case FUNDED_NO_PLAN -> null;
+        };
+    }
+
+    private String lifecycleRecoveryFooterNote(LifecycleRecoveryType type) {
+        return switch (type) {
+            case NO_WALLET ->
+                    "You do not need to set up everything today. Finish the wallet step first.";
+            case WALLET_READY_NOT_FUNDED ->
+                    "If your bank app still does not show Rubies, reply to this email and tell us the bank app you used.";
+            case FUNDED_NO_PLAN ->
+                    "This is not about a perfect plan. It is about deciding before pressure shows up.";
+        };
+    }
+
     private String budgetNudgeSubject(BudgetEngagementNudgeType type) {
         return switch (type) {
             case FUNDED_WALLET_NO_BUDGET -> "Your Wisemonie balance needs a simple plan";
-            case POST_BUDGET_COMPLETION -> "Ready for your next Wisemonie budget?";
+            case POST_BUDGET_COMPLETION -> "Ready for your next money plan?";
             case WALLET_READY_NO_BUDGET -> "Your Wisemonie wallet is ready for a plan";
         };
     }
@@ -1051,7 +1217,7 @@ public class NotificationService {
     private String budgetNudgePushTitle(BudgetEngagementNudgeType type) {
         return switch (type) {
             case FUNDED_WALLET_NO_BUDGET -> "Give your money a job";
-            case POST_BUDGET_COMPLETION -> "Ready for your next budget?";
+            case POST_BUDGET_COMPLETION -> "Ready for your next plan?";
             case WALLET_READY_NO_BUDGET -> "Your wallet is ready";
         };
     }
@@ -1064,16 +1230,16 @@ public class NotificationService {
                 String balance = walletBalance != null && walletBalance.compareTo(BigDecimal.ZERO) > 0
                         ? "Your NGN " + formatAmount(walletBalance) + " balance"
                         : "Your Wisemonie balance";
-                yield balance + " is ready for structure. Create a budget and give the money a clear plan.";
+                yield balance + " is ready for structure. Create a simple plan and give the money a clear job.";
             }
             case POST_BUDGET_COMPLETION -> {
                 String budgetName = lastBudgetName != null && !lastBudgetName.isBlank()
                         ? "'" + lastBudgetName + "'"
-                        : "your last budget";
+                        : "your last plan";
                 yield budgetName + " has ended. Start the next money cycle with a fresh Wisemonie plan.";
             }
             case WALLET_READY_NO_BUDGET ->
-                    "Your Wisemonie wallet is ready. Fund it and create a simple budget so every naira has a purpose.";
+                    "Your Wisemonie wallet is ready. Fund it and create a simple plan so every naira has a purpose.";
         };
     }
 
@@ -1096,7 +1262,7 @@ public class NotificationService {
     private String budgetNudgeSubheadline(BudgetEngagementNudgeType type) {
         return switch (type) {
             case FUNDED_WALLET_NO_BUDGET -> "Your money is already inside Wisemonie. Now give it direction.";
-            case POST_BUDGET_COMPLETION -> "You have budgeted before. This is the easy restart.";
+            case POST_BUDGET_COMPLETION -> "You have planned with Wisemonie before. This is the easy restart.";
             case WALLET_READY_NO_BUDGET -> "A wallet is useful. A wallet with a plan is calmer.";
         };
     }
@@ -1106,21 +1272,21 @@ public class NotificationService {
             case FUNDED_WALLET_NO_BUDGET -> List.of(
                     "We know making more money is already challenging enough. Being intentional about how that money is spent should not become another challenge.",
                     "You already have money in your Wisemonie wallet. That is a strong start, but money without a plan can disappear through small unplanned decisions before you even notice.",
-                    "Create a budget, split the balance into envelopes, apply sending rules, and let Wisemonie quietly hold the structure for you. The goal is simple: less pressure, fewer surprises, and more confidence before you spend."
+                    "Create a simple plan, split the balance into envelopes, apply sending rules, and let Wisemonie quietly hold the structure for you. The goal is simple: less pressure, fewer surprises, and more confidence before you spend."
             );
             case POST_BUDGET_COMPLETION -> {
                 String budgetName = lastBudgetName != null && !lastBudgetName.isBlank()
                         ? "'" + lastBudgetName + "'"
                         : "your last";
                 yield List.of(
-                        "You have done this before. " + budgetName + " budget has ended, and the next money cycle deserves structure too.",
+                        "You have done this before. " + budgetName + " plan has ended, and the next money cycle deserves structure too.",
                         "We know making more money is already challenging enough. Being intentional about how that money is spent should not become another challenge.",
-                        "A fresh Wisemonie budget helps you decide what is for spending, what should be protected, and what can go into savings. Then you can spend directly from each envelope and know what is safe to spend."
+                        "A fresh Wisemonie plan helps you decide what is for spending, what should be protected, and what can go into savings. Then you can spend directly from each envelope and know what is safe to spend."
                 );
             }
             case WALLET_READY_NO_BUDGET -> List.of(
                     "We know making more money is already challenging enough. Being intentional about how that money is spent should not become another challenge.",
-                    "Your Wisemonie wallet is ready. Fund it, create a simple budget, and split the money into envelopes for the parts of life that usually pull on your balance: bills, food, transport, giving, enjoyment, and savings.",
+                    "Your Wisemonie wallet is ready. Fund it, create a simple plan, and split the money into envelopes for the parts of life that usually pull on your balance: bills, food, transport, giving, enjoyment, and savings.",
                     "Once every envelope has a purpose, you do not have to keep calculating in your head. Wisemonie helps you see what is safe to spend, reduces financial pressure, and still leaves room to save."
             );
         };
@@ -1145,7 +1311,7 @@ public class NotificationService {
     private String budgetNudgeFooterNote(BudgetEngagementNudgeType type) {
         return switch (type) {
             case FUNDED_WALLET_NO_BUDGET -> "This is not pressure. It is a simple way to protect the money already sitting in your wallet.";
-            case POST_BUDGET_COMPLETION -> "A completed budget is proof you can do this. The next one can be even easier.";
+            case POST_BUDGET_COMPLETION -> "A completed plan is proof you can do this. The next one can be even easier.";
             case WALLET_READY_NO_BUDGET -> "Start small if you need to. The calm comes from giving your money a direction.";
         };
     }
@@ -1172,7 +1338,7 @@ public class NotificationService {
                     "We clear abandoned accounts so your details do not sit around unfinished.",
                     "\uD83E\uDDED",
                     "Start with direction",
-                    "Once setup is complete, Wisemonie can help you fund, budget and spend with more clarity.",
+                    "Once setup is complete, Wisemonie can help you fund, plan and spend with more clarity.",
                     "We would rather help you finish than lose the progress you already started."
             );
         }
@@ -1191,7 +1357,7 @@ public class NotificationService {
                         "Your Wisemonie wallet needs the final profile step before it can fully work for you.",
                         "\uD83C\uDF31",
                         "Start small",
-                        "You do not need a perfect budget. One transport, food or savings plan is enough to begin.",
+                        "You do not need a perfect plan. One transport, food or savings instruction is enough to begin.",
                         "No pressure. Just one small step that makes the account useful."
                 ),
                 new OnboardingReminderCopy(
@@ -1223,7 +1389,7 @@ public class NotificationService {
                         "Rules and envelopes help you follow the plan when impulse spending shows up.",
                         "\u2705",
                         "Get one quick win",
-                        "Your first simple budget can be small and practical.",
+                        "Your first simple plan can be small and practical.",
                         "A small money habit today can save plenty stress later."
                 ),
                 new OnboardingReminderCopy(
@@ -1260,7 +1426,7 @@ public class NotificationService {
                 ),
                 new OnboardingReminderCopy(
                         "Your Wisemonie account can still become useful today",
-                        "Your account is still here, but the real value begins after setup. Until then, Wisemonie cannot fully help you fund a wallet, create a budget or spend from a plan.",
+                        "Your account is still here, but the real value begins after setup. Until then, Wisemonie cannot fully help you fund a wallet, create a plan or spend from the right envelope.",
                         "Finish the profile step, then start with one simple area: lunch at work, transport, family support, offering, savings or data. Small structure is still structure.",
                         "Complete setup and try one simple plan.",
                         "\uD83D\uDE80",
@@ -1268,7 +1434,7 @@ public class NotificationService {
                         "The account becomes useful when setup is complete.",
                         "\uD83C\uDF71",
                         "Plan something familiar",
-                        "Lunch, transport, data or savings is enough for a first budget.",
+                        "Lunch, transport, data or savings is enough for a first plan.",
                         "\uD83E\uDDD8",
                         "Keep it simple",
                         "You do not need to plan the whole month before you start.",
@@ -1386,7 +1552,7 @@ public class NotificationService {
 
     private String buildOnboardingReminderSubject(int daysSinceSignup, boolean urgent) {
         if (urgent) {
-            return "⏳ Your Wisemonie account is waiting — don't lose your spot";
+            return "Your Wisemonie account is waiting. Do not lose your spot";
         }
         if (daysSinceSignup <= 1) {
             return "👋 You're one step away from a calmer relationship with money";
@@ -1531,15 +1697,31 @@ public class NotificationService {
      */
     @Async
     public void sendAccountClosedEmail(String to, String userName, String reason) {
+        sendAccountClosedEmail(to, userName, reason, AccountClosureEmailScenario.GENERAL);
+    }
+
+    @Async
+    public void sendAccountClosedEmail(String to,
+                                       String userName,
+                                       String reason,
+                                       AccountClosureEmailScenario scenario) {
         if ("stub".equals(activeProfile) || mailSender == null) {
-            logger.info("[STUB] Sending account closed email to {}", to);
+            logger.info("[STUB] Sending account closed email {} to {}", scenario, to);
             return;
         }
+        AccountClosureEmailScenario safeScenario = scenario != null
+                ? scenario
+                : AccountClosureEmailScenario.GENERAL;
         try {
             Context context = new Context();
             context.setVariable("logoUrl", logoUrl());
-            context.setVariable("userName", userName);
-            context.setVariable("reason", reason);
+            context.setVariable("userName", userName != null && !userName.isBlank() ? userName : "there");
+            context.setVariable("reason", reason != null ? reason.trim() : "");
+            context.setVariable("scenarioTitle", accountClosureTitle(safeScenario));
+            context.setVariable("scenarioBody", accountClosureBody(safeScenario));
+            context.setVariable("feedbackPrompt", accountClosureFeedbackPrompt(safeScenario));
+            context.setVariable("reasonOptions", accountClosureReasonOptions(safeScenario));
+            context.setVariable("closingNote", accountClosureClosingNote(safeScenario));
 
             String htmlContent = templateEngine.process("account-closed", context);
 
@@ -1548,15 +1730,115 @@ public class NotificationService {
 
             setWisemonieSender(helper);
             helper.setTo(to);
-            helper.setSubject("You are valued — a note from Wisemonie 💚");
+            helper.setSubject(accountClosureSubject(safeScenario));
             helper.setText(htmlContent, true);
             attachLogo(helper);
 
             mailSender.send(mimeMessage);
-            logger.info("Sent account closed email to {}", to);
+            logger.info("Sent account closed email {} to {}", safeScenario, to);
         } catch (Exception e) {
             logger.error("Failed to send account closed email to {}", to, e);
         }
+    }
+
+    private String accountClosureSubject(AccountClosureEmailScenario scenario) {
+        return switch (scenario) {
+            case NO_WALLET -> "Was the wallet step unclear?";
+            case WALLET_NOT_FUNDED -> "Did funding your Wisemonie wallet get confusing?";
+            case FUNDED_NO_PLAN -> "What stopped Wisemonie from becoming useful?";
+            case USED_WISEMONIE -> "What made you leave Wisemonie?";
+            case GENERAL -> "Before you go, can you tell us what got in the way?";
+        };
+    }
+
+    private String accountClosureTitle(AccountClosureEmailScenario scenario) {
+        return switch (scenario) {
+            case NO_WALLET -> "It looks like setup stopped at the wallet step";
+            case WALLET_NOT_FUNDED -> "It looks like funding may have been the blocker";
+            case FUNDED_NO_PLAN -> "You funded Wisemonie, but the next step did not stick";
+            case USED_WISEMONIE -> "You gave Wisemonie a real try";
+            case GENERAL -> "Thank you for trying Wisemonie";
+        };
+    }
+
+    private String accountClosureBody(AccountClosureEmailScenario scenario) {
+        return switch (scenario) {
+            case NO_WALLET ->
+                    "If BVN or wallet creation felt unclear, that is useful for us to know. BVN may be requested so our licensed banking partner can verify you, open your wallet account and provide your account number for funding.";
+            case WALLET_NOT_FUNDED ->
+                    "Many users get stuck because they search for Wisemonie in their bank app. The bank name is Rubies MFB, Rubies Microfinance Bank or Rubies. If this was the confusing part, please tell us the bank app you used.";
+            case FUNDED_NO_PLAN ->
+                    "Funding the wallet means the intent was there. If Wisemonie did not quickly show you how to give that money instructions, we need to understand where the experience fell short.";
+            case USED_WISEMONIE ->
+                    "Because you actually used Wisemonie, your feedback carries extra weight. We want to understand whether the issue was trust, charges, delays, product fit, too much friction or something we did not see.";
+            case GENERAL ->
+                    "We are not going to send a long sales pitch. We only want to understand what got in the way so the product can become more useful for real people with real money pressure.";
+        };
+    }
+
+    private String accountClosureFeedbackPrompt(AccountClosureEmailScenario scenario) {
+        return switch (scenario) {
+            case NO_WALLET ->
+                    "Reply with one line if you can: did you stop because of BVN, trust, a failed step, too much information, or something else?";
+            case WALLET_NOT_FUNDED ->
+                    "Reply with one line if you can: did your bank app fail to show Rubies, did the account number not resolve, or did the funding step feel risky?";
+            case FUNDED_NO_PLAN ->
+                    "Reply with one line if you can: did you not understand the next step, did envelopes feel like too much, or did you not see a reason to continue?";
+            case USED_WISEMONIE ->
+                    "Reply with one line if you can: what was the moment that made you decide Wisemonie was not worth keeping?";
+            case GENERAL ->
+                    "Reply with one line if you can. A human reads it, and it helps us fix the part that made people leave.";
+        };
+    }
+
+    private List<String> accountClosureReasonOptions(AccountClosureEmailScenario scenario) {
+        return switch (scenario) {
+            case NO_WALLET -> List.of(
+                    "BVN request did not feel clear",
+                    "Wallet creation failed or took too long",
+                    "I did not trust the setup yet",
+                    "I got interrupted and did not see a reason to return"
+            );
+            case WALLET_NOT_FUNDED -> List.of(
+                    "I could not find Rubies MFB in my bank app",
+                    "The account number did not resolve",
+                    "I was not sure the transfer would be safe",
+                    "I wanted to fund later and forgot"
+            );
+            case FUNDED_NO_PLAN -> List.of(
+                    "I did not know what to do after funding",
+                    "Creating a plan felt like too much work",
+                    "I wanted more guidance before locking money into envelopes",
+                    "I funded the wallet, but the benefit was not obvious yet"
+            );
+            case USED_WISEMONIE -> List.of(
+                    "The app had too much friction",
+                    "A fee or transfer delay reduced my trust",
+                    "I needed a feature Wisemonie does not have yet",
+                    "The product did not match how I manage money"
+            );
+            case GENERAL -> List.of(
+                    "Something felt unclear",
+                    "I did not trust it enough yet",
+                    "I did not see the value quickly",
+                    "I had a bad app or payment experience"
+            );
+        };
+    }
+
+    private String accountClosureClosingNote(AccountClosureEmailScenario scenario) {
+        return switch (scenario) {
+            case NO_WALLET ->
+                    "If you ever come back, we should make the wallet step feel clearer than it did the first time.";
+            case WALLET_NOT_FUNDED ->
+                    "If you ever come back, search Rubies MFB or Rubies Microfinance Bank when funding your wallet.";
+            case FUNDED_NO_PLAN ->
+                    "If you ever come back, start with one practical instruction for your money. Food, transport, bills or savings is enough.";
+            case USED_WISEMONIE ->
+                    "If you ever come back, your account can be reactivated by signing in with your registered email.";
+            case GENERAL ->
+                    "If you ever come back, your account can be reactivated by signing in with your registered email.";
+        };
     }
 
     @Async

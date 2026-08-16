@@ -6,6 +6,7 @@ import com.moniewise.moniewise_backend.entity.User;
 import com.moniewise.moniewise_backend.entity.Wallet;
 import com.moniewise.moniewise_backend.enums.BudgetEngagementNudgeType;
 import com.moniewise.moniewise_backend.enums.BudgetStatus;
+import com.moniewise.moniewise_backend.enums.EngagementNudgeChannel;
 import com.moniewise.moniewise_backend.repository.BudgetEngagementNudgeRepository;
 import com.moniewise.moniewise_backend.repository.BudgetRepository;
 import com.moniewise.moniewise_backend.repository.EngagementNudgeNotificationRepository;
@@ -157,6 +158,13 @@ public class BudgetEngagementNudgeService {
     }
 
     private boolean wasContactedRecently(Long userId, LocalDateTime now) {
+        if (engagementNudgeRepository.countByUserIdAndChannelAndSentAtBetween(
+                userId,
+                EngagementNudgeChannel.EMAIL,
+                now.minusDays(REPEAT_INTERVAL_DAYS),
+                now) > 0) {
+            return true;
+        }
         return nudgeRepository.findFirstByUserIdOrderByLastSentAtDesc(userId)
                 .map(nudge -> nudge.getLastSentAt() != null
                         && nudge.getLastSentAt().isAfter(now.minusDays(REPEAT_INTERVAL_DAYS)))

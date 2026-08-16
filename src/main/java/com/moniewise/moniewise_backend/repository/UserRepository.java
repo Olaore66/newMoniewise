@@ -13,6 +13,7 @@ import org.springframework.stereotype.Repository;
 
 import javax.transaction.Transactional;
 import javax.persistence.LockModeType;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -479,6 +480,129 @@ List<UserSummary> searchUsers(@Param("query") String query, Pageable pageable);
             @Param("createdAfter") LocalDateTime createdAfter,
             @Param("eligibleBefore") LocalDateTime eligibleBefore,
             @Param("returnGraceMinutes") int returnGraceMinutes,
+            @Param("limit") int limit);
+
+    @Query(value = """
+            SELECT u.*
+            FROM users u
+            LEFT JOIN wallets w ON w.user_id = u.id
+            WHERE w.id IS NULL
+              AND u.is_deleted = false
+              AND coalesce(u.test_account, false) = false
+              AND u.email IS NOT NULL
+              AND btrim(u.email) <> ''
+              AND u.created_at <= :inactiveBefore
+              AND (u.last_login IS NULL OR u.last_login <= :inactiveBeforeInstant)
+              AND coalesce((
+                    SELECT max(coalesce(s.last_seen_at, s.created_at))
+                    FROM auth_sessions s
+                    WHERE s.user_id = u.id
+              ), u.created_at) <= :inactiveBefore
+              AND (
+                    u.last_onboarding_reminder_at IS NULL
+                    OR u.last_onboarding_reminder_at <= :recentOnboardingBefore
+              )
+              AND NOT EXISTS (
+                    SELECT 1
+                    FROM engagement_nudge_notifications n
+                    WHERE n.user_id = u.id
+                      AND n.campaign = 'SETUP_RECOVERY_15D'
+              )
+            ORDER BY u.created_at ASC, u.id ASC
+            LIMIT :limit
+            """, nativeQuery = true)
+    List<User> findDormantUsersWithoutWalletForRecovery(
+            @Param("inactiveBefore") LocalDateTime inactiveBefore,
+            @Param("inactiveBeforeInstant") Instant inactiveBeforeInstant,
+            @Param("recentOnboardingBefore") LocalDateTime recentOnboardingBefore,
+            @Param("limit") int limit);
+
+    @Query(value = """
+            SELECT u.*
+            FROM users u
+            JOIN wallets w ON w.user_id = u.id
+            WHERE u.is_deleted = false
+              AND coalesce(u.test_account, false) = false
+              AND u.email IS NOT NULL
+              AND btrim(u.email) <> ''
+              AND w.status = 'ACTIVE'
+              AND coalesce(w.is_revenue_wallet, false) = false
+              AND w.account_number IS NOT NULL
+              AND btrim(w.account_number) <> ''
+              AND coalesce(w.balance, 0) <= 0
+              AND u.created_at <= :inactiveBefore
+              AND (u.last_login IS NULL OR u.last_login <= :inactiveBeforeInstant)
+              AND coalesce((
+                    SELECT max(coalesce(s.last_seen_at, s.created_at))
+                    FROM auth_sessions s
+                    WHERE s.user_id = u.id
+              ), u.created_at) <= :inactiveBefore
+              AND NOT EXISTS (
+                    SELECT 1
+                    FROM budgets b
+                    WHERE b.user_id = u.id
+              )
+              AND NOT EXISTS (
+                    SELECT 1
+                    FROM savings_goals sg
+                    WHERE sg.user_id = u.id
+              )
+              AND NOT EXISTS (
+                    SELECT 1
+                    FROM engagement_nudge_notifications n
+                    WHERE n.user_id = u.id
+                      AND n.campaign = 'SETUP_RECOVERY_15D'
+              )
+            ORDER BY coalesce(w.updated_at, u.created_at) ASC, u.id ASC
+            LIMIT :limit
+            """, nativeQuery = true)
+    List<User> findDormantWalletUsersNotFundedForRecovery(
+            @Param("inactiveBefore") LocalDateTime inactiveBefore,
+            @Param("inactiveBeforeInstant") Instant inactiveBeforeInstant,
+            @Param("limit") int limit);
+
+    @Query(value = """
+            SELECT u.*
+            FROM users u
+            JOIN wallets w ON w.user_id = u.id
+            WHERE u.is_deleted = false
+              AND coalesce(u.test_account, false) = false
+              AND u.email IS NOT NULL
+              AND btrim(u.email) <> ''
+              AND w.status = 'ACTIVE'
+              AND coalesce(w.is_revenue_wallet, false) = false
+              AND w.account_number IS NOT NULL
+              AND btrim(w.account_number) <> ''
+              AND coalesce(w.balance, 0) > 0
+              AND u.created_at <= :inactiveBefore
+              AND (u.last_login IS NULL OR u.last_login <= :inactiveBeforeInstant)
+              AND coalesce((
+                    SELECT max(coalesce(s.last_seen_at, s.created_at))
+                    FROM auth_sessions s
+                    WHERE s.user_id = u.id
+              ), u.created_at) <= :inactiveBefore
+              AND NOT EXISTS (
+                    SELECT 1
+                    FROM budgets b
+                    WHERE b.user_id = u.id
+              )
+              AND NOT EXISTS (
+                    SELECT 1
+                    FROM savings_goals sg
+                    WHERE sg.user_id = u.id
+              )
+              AND NOT EXISTS (
+                    SELECT 1
+                    FROM engagement_nudge_notifications n
+                    WHERE n.user_id = u.id
+                      AND n.campaign = 'SETUP_RECOVERY_15D'
+              )
+            ORDER BY coalesce(w.updated_at, u.created_at) ASC, u.id ASC
+            LIMIT :limit
+            """, nativeQuery = true)
+    List<User> findDormantFundedWalletUsersWithoutPlanForRecovery(
+            @Param("inactiveBefore") LocalDateTime inactiveBefore,
+            @Param("inactiveBeforeInstant") Instant inactiveBeforeInstant,
             @Param("limit") int limit);
 
     Optional<User> findByEmail(String email);
