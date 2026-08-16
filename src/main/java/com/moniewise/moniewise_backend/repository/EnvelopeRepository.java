@@ -12,6 +12,7 @@ import org.springframework.stereotype.Repository;
 import javax.persistence.LockModeType;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.stream.Stream;
@@ -24,6 +25,12 @@ public interface EnvelopeRepository extends JpaRepository<Envelope, Long> {
     BigDecimal sumTotalRemainingByUserIdAndBudgetStatus(
             @Param("userId") Long userId,
             @Param("status") BudgetStatus status);
+
+    @Query("SELECT COALESCE(SUM(e.totalRemainingAmount), 0) FROM Envelope e " +
+           "WHERE e.budget.user.id = :userId AND e.budget.status IN :statuses AND e.deletedAt IS NULL")
+    BigDecimal sumTotalRemainingByUserIdAndBudgetStatuses(
+            @Param("userId") Long userId,
+            @Param("statuses") Collection<BudgetStatus> statuses);
     @Query("SELECT e FROM Envelope e WHERE e.budget.id = :budgetId")
     List<Envelope> findByBudgetId(Long budgetId);
     Optional<Envelope> findById(Long id);

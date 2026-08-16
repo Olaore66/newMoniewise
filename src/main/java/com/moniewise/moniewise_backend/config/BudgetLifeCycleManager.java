@@ -3,6 +3,7 @@ package com.moniewise.moniewise_backend.config;
 import com.moniewise.moniewise_backend.entity.*;
 import com.moniewise.moniewise_backend.enums.BudgetStatus;
 import com.moniewise.moniewise_backend.enums.NotificationType;
+import com.moniewise.moniewise_backend.enums.SavingsStatus;
 import com.moniewise.moniewise_backend.enums.TransactionStatus;
 import com.moniewise.moniewise_backend.enums.TransactionType;
 import com.moniewise.moniewise_backend.repository.*;
@@ -10,6 +11,7 @@ import com.moniewise.moniewise_backend.service.EnvelopeAutoTransferService;
 import com.moniewise.moniewise_backend.service.EnvelopeService;
 import com.moniewise.moniewise_backend.service.MonnieCacheInvalidationService;
 import com.moniewise.moniewise_backend.service.NotificationService;
+import com.moniewise.moniewise_backend.service.SavingsService;
 import com.moniewise.moniewise_backend.service.WalletService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -54,6 +56,8 @@ public class BudgetLifeCycleManager {
     private final EnvelopeService envelopeService;
     private final MonnieCacheInvalidationService monnieCacheInvalidationService;
     private final EnvelopeAutoTransferService envelopeAutoTransferService;
+    private final SavingsGoalRepository savingsGoalRepository;
+    private final SavingsService savingsService;
 
     private final OutboxEventRepository outboxEventRepository;
 
@@ -75,7 +79,9 @@ public class BudgetLifeCycleManager {
             @Lazy EnvelopeService envelopeService,
             MonnieCacheInvalidationService monnieCacheInvalidationService,
             OutboxEventRepository outboxEventRepository, ApplicationEventPublisher eventPublisher,
-            @Lazy EnvelopeAutoTransferService envelopeAutoTransferService) {
+            @Lazy EnvelopeAutoTransferService envelopeAutoTransferService,
+            SavingsGoalRepository savingsGoalRepository,
+            SavingsService savingsService) {
         this.budgetRepository = budgetRepository;
         this.envelopeRepository = envelopeRepository;
         this.scheduledTaskRepository = scheduledTaskRepository;
@@ -90,6 +96,8 @@ public class BudgetLifeCycleManager {
         this.outboxEventRepository = outboxEventRepository;
         this.eventPublisher = eventPublisher;
         this.envelopeAutoTransferService = envelopeAutoTransferService;
+        this.savingsGoalRepository = savingsGoalRepository;
+        this.savingsService = savingsService;
     }
 
     @PostConstruct
@@ -176,6 +184,354 @@ public class BudgetLifeCycleManager {
         scheduledTaskRepository.save(mainTask);
         logger.info("Scheduled next disbursement for envelope {} at {}", envelope.getId(), triggerTime);
     }
+
+    @Scheduled(cron = "${moniewise.scheduler.scheduled-budget-activation.cron:0 */10 * * * ?}", zone = "Africa/Lagos")
+    public void activateDueScheduledBudgets() {
+        LocalDate today = fetchCurrentDateTimeFromDatabase().toLocalDate();
+
+        int batchSize = 100;
+        int currentLoop = 0;
+        int maxLoops = 50;
+        boolean hasMore = true;
+
+        while (hasMore && currentLoop < maxLoops) {
+            currentLoop++;
+
+            Pageable pageable = PageRequest.of(0, batchSize);
+            Page<Budget> page = budgetRepository.findByStatusAndStartDateLessThanEqual(
+                    BudgetStatus.SCHEDULED,
+                    today,
+                    pageable
+            );
+
+            if (page.isEmpty()) {
+                hasMore = false;
+                continue;
+            }
+
+            for (Budget budget : page.getContent()) {
+                try {
+                    transactionTemplate.execute(status -> {
+                        activateScheduledBudget(budget.getId());
+                        return null;
+                    });
+                } catch (Exception e) {
+                    logger.error("Failed to activate scheduled budget {}", budget.getId(), e);
+                }
+            }
+
+            hasMore = page.getNumberOfElements() == batchSize;
+        }
+    }
+
+    @Transactional
+    public Budget activateScheduledBudget(Long budgetId) {
+        Budget budget = budgetRepository.findByIdForUpdate(budgetId)
+                .orElseThrow(() -> new IllegalArgumentException("Budget not found with ID: " + budgetId));
+
+        if (budget.getStatus() == BudgetStatus.ACTIVE
+                || budget.getStatus() == BudgetStatus.COMPLETED
+                || budget.getStatus() == BudgetStatus.CANCELLED) {
+            return budget;
+        }
+        if (budget.getStatus() != BudgetStatus.SCHEDULED) {
+            throw new IllegalStateException("Budget " + budgetId + " is not scheduled");
+        }
+
+        LocalDateTime now = fetchCurrentDateTimeFromDatabase();
+        LocalDate today = now.toLocalDate();
+        if (budget.getStartDate() != null && budget.getStartDate().isAfter(today)) {
+            throw new IllegalStateException("Budget " + budgetId + " starts on " + budget.getStartDate());
+        }
+
+        budget.setStatus(BudgetStatus.ACTIVE);
+
+        if (isBudgetPastEndDate(budget, now)) {
+            List<Budget> budgetsToUpdate = new ArrayList<>();
+            List<Envelope> envelopesToUpdate = new ArrayList<>();
+            List<TransactionLog> logsToSave = new ArrayList<>();
+            processBudgetExpiry(budget, budgetsToUpdate, envelopesToUpdate, logsToSave);
+            budgetRepository.saveAll(budgetsToUpdate);
+            envelopeRepository.saveAll(envelopesToUpdate);
+            transactionLogRepository.saveAll(logsToSave);
+            monnieCacheInvalidationService.evictUserAfterCommit(budget.getUser().getId());
+            return budget;
+        }
+
+        budgetRepository.save(budget);
+
+        List<Envelope> envelopes = envelopeRepository.findByBudgetId(budget.getId());
+        List<Envelope> envelopesToSave = new ArrayList<>();
+        List<ScheduledTask> tasksToSave = new ArrayList<>();
+        List<OutboxEvent> outboxEventsToSave = new ArrayList<>();
+
+        for (Envelope envelope : envelopes) {
+            scheduledTaskRepository.deleteByEnvelopeId(envelope.getId());
+            activateScheduledEnvelope(budget, envelope, now, tasksToSave, outboxEventsToSave);
+            envelopesToSave.add(envelope);
+        }
+
+        BigDecimal remainingInBudget = envelopesToSave.stream()
+                .map(envelope -> safeAmount(envelope.getTotalRemainingAmount()))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        budget.setRemainingAmount(remainingInBudget);
+        budgetRepository.save(budget);
+
+        if (!envelopesToSave.isEmpty()) {
+            envelopeRepository.saveAll(envelopesToSave);
+        }
+        if (!tasksToSave.isEmpty()) {
+            scheduledTaskRepository.saveAll(tasksToSave);
+        }
+
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("budgetName", budget.getName() != null ? budget.getName() : "your");
+        payload.put("startDate", budget.getStartDate() != null ? budget.getStartDate().toString() : today.toString());
+        outboxEventsToSave.add(buildOutboxEvent(
+                NotificationType.BUDGET_ACTIVATED,
+                budget.getUser().getId(),
+                budget.getId(),
+                null,
+                payload
+        ));
+
+        if (!outboxEventsToSave.isEmpty()) {
+            outboxEventRepository.saveAll(outboxEventsToSave);
+        }
+
+        monnieCacheInvalidationService.evictUserAfterCommit(budget.getUser().getId());
+        logger.info("Activated scheduled budget {} for user {}", budget.getId(), budget.getUser().getId());
+        return budget;
+    }
+
+    private void activateScheduledEnvelope(
+            Budget budget,
+            Envelope envelope,
+            LocalDateTime now,
+            List<ScheduledTask> tasksToSave,
+            List<OutboxEvent> outboxEventsToSave
+    ) {
+        Map<String, Object> conditions = mutableConditions(envelope);
+        String type = conditions.getOrDefault("type", "").toString().toLowerCase();
+
+        if ("savings_sweep".equals(type)) {
+            activateScheduledSavingsSweep(budget, envelope, conditions, now, outboxEventsToSave);
+            return;
+        }
+
+        if ("emergency".equals(type)) {
+            envelope.setRemainingAmount(availableVaultBalance(envelope));
+            envelope.setNextDisbursementAt(null);
+            envelope.setHasMatured(false);
+            return;
+        }
+
+        if ("safe_lock".equals(type) || "strict_lock".equals(type)) {
+            LocalDateTime nextDisbursement = calculateNextDisbursementTime(envelope);
+            if (nextDisbursement == null) {
+                envelope.setRemainingAmount(availableVaultBalance(envelope));
+                envelope.setHasMatured(true);
+            } else {
+                envelope.setRemainingAmount(BigDecimal.ZERO);
+                tasksToSave.add(new ScheduledTask(envelope.getId(), "DISBURSEMENT", nextDisbursement));
+            }
+            envelope.setNextDisbursementAt(nextDisbursement);
+            return;
+        }
+
+        if (isTimeReleasedEnvelope(type)) {
+            try {
+                envelopeService.triggerRecalculation(envelope);
+            } catch (Exception e) {
+                logger.error("Failed to recalculate scheduled envelope {} on activation", envelope.getId(), e);
+            }
+
+            LocalDateTime nextDisbursement = calculateNextDisbursementTime(envelope);
+            boolean disbursesLaterToday = nextDisbursement != null
+                    && nextDisbursement.toLocalDate().isEqual(now.toLocalDate());
+
+            if (disbursesLaterToday) {
+                envelope.setRemainingAmount(BigDecimal.ZERO);
+            } else {
+                BigDecimal startingPocket = getPeriodLimit(envelope).min(availableVaultBalance(envelope));
+                envelope.setRemainingAmount(startingPocket);
+                if (startingPocket.compareTo(BigDecimal.ZERO) > 0) {
+                    envelope.setLastDisbursedAt(now);
+                    nextDisbursement = calculateNextDisbursementTime(envelope);
+                }
+            }
+
+            envelope.setNextDisbursementAt(nextDisbursement);
+            if (nextDisbursement != null) {
+                tasksToSave.add(new ScheduledTask(envelope.getId(), "DISBURSEMENT", nextDisbursement));
+            }
+            return;
+        }
+
+        BigDecimal startingPocket = getPeriodLimit(envelope).min(availableVaultBalance(envelope));
+        envelope.setRemainingAmount(startingPocket);
+        envelope.setNextDisbursementAt(null);
+    }
+
+    private void activateScheduledSavingsSweep(
+            Budget budget,
+            Envelope envelope,
+            Map<String, Object> conditions,
+            LocalDateTime now,
+            List<OutboxEvent> outboxEventsToSave
+    ) {
+        BigDecimal amount = availableVaultBalance(envelope);
+        if (amount.compareTo(BigDecimal.ZERO) <= 0) {
+            conditions.put("savingsSweepStatus", "COMPLETED");
+            envelope.setConditions(conditions);
+            envelope.setRemainingAmount(BigDecimal.ZERO);
+            envelope.setNextDisbursementAt(null);
+            envelope.setHasMatured(true);
+            return;
+        }
+
+        Long targetSavingsGoalId = parseLong(conditions.get("targetSavingsGoalId"));
+        String skipReason = savingsSweepSkipReason(targetSavingsGoalId, budget.getUser().getId(), now.toLocalDate());
+        if (skipReason != null) {
+            markScheduledSavingsSweepSkipped(budget, envelope, conditions, amount, skipReason, outboxEventsToSave);
+            return;
+        }
+
+        try {
+            savingsService.sweepEnvelopeToSavings(
+                    budget.getUser().getId(),
+                    targetSavingsGoalId,
+                    amount,
+                    envelope.getName(),
+                    budget.getId(),
+                    envelope.getId()
+            );
+
+            conditions.put("savingsSweepStatus", "COMPLETED");
+            conditions.remove("savingsSweepFailureReason");
+            envelope.setConditions(conditions);
+            envelope.setRemainingAmount(BigDecimal.ZERO);
+            envelope.setTotalRemainingAmount(BigDecimal.ZERO);
+            envelope.setHeldAmount(BigDecimal.ZERO);
+            envelope.setNextDisbursementAt(null);
+            envelope.setHasMatured(true);
+        } catch (Exception e) {
+            logger.error("Failed to sweep scheduled envelope {} to savings goal {}", envelope.getId(), targetSavingsGoalId, e);
+            markScheduledSavingsSweepSkipped(
+                    budget,
+                    envelope,
+                    conditions,
+                    amount,
+                    "we could not move it to the selected savings pot",
+                    outboxEventsToSave
+            );
+        }
+    }
+
+    private void markScheduledSavingsSweepSkipped(
+            Budget budget,
+            Envelope envelope,
+            Map<String, Object> conditions,
+            BigDecimal amount,
+            String reason,
+            List<OutboxEvent> outboxEventsToSave
+    ) {
+        conditions.put("savingsSweepStatus", "SKIPPED");
+        conditions.put("savingsSweepFailureReason", reason);
+        conditions.put("limit", amount);
+        envelope.setConditions(conditions);
+        envelope.setRemainingAmount(amount);
+        envelope.setNextDisbursementAt(null);
+        envelope.setHasMatured(false);
+
+        Map<String, Object> payload = new HashMap<>();
+        String envelopeName = envelope.getName() != null ? envelope.getName() : "Savings";
+        String budgetName = budget.getName() != null ? budget.getName() : "your";
+        payload.put("budgetName", budgetName);
+        payload.put("envelopeName", envelopeName);
+        payload.put("amount", String.format("%,.2f", amount));
+        payload.put("reason", reason);
+        payload.put("__message", "Your '" + budgetName + "' budget is active, but '" + envelopeName
+                + "' was not moved to savings because " + reason
+                + ". The money is still protected in that envelope.");
+
+        outboxEventsToSave.add(buildOutboxEvent(
+                NotificationType.BUDGET_UPDATED,
+                budget.getUser().getId(),
+                budget.getId(),
+                envelope.getId(),
+                payload
+        ));
+    }
+
+    private String savingsSweepSkipReason(Long savingsGoalId, Long userId, LocalDate today) {
+        if (savingsGoalId == null) {
+            return "no savings pot was selected";
+        }
+
+        Optional<SavingsGoal> goalOpt = savingsGoalRepository.findByIdForUpdate(savingsGoalId);
+        if (goalOpt.isEmpty()) {
+            return "the selected savings pot could not be found";
+        }
+
+        SavingsGoal goal = goalOpt.get();
+        if (goal.getUser() == null || goal.getUser().getId() == null || !goal.getUser().getId().equals(userId)) {
+            return "the selected savings pot no longer belongs to this account";
+        }
+        if (goal.getStatus() != SavingsStatus.ACTIVE) {
+            return "the selected savings pot is no longer active";
+        }
+        if (goal.getMaturityDate() == null || !today.isBefore(goal.getMaturityDate())) {
+            return "the selected savings pot has already matured";
+        }
+
+        return null;
+    }
+
+    private Map<String, Object> mutableConditions(Envelope envelope) {
+        Map<String, Object> copy = new LinkedHashMap<>();
+        if (envelope.getConditions() != null) {
+            copy.putAll(envelope.getConditions());
+        }
+        envelope.setConditions(copy);
+        return copy;
+    }
+
+    private boolean isTimeReleasedEnvelope(String type) {
+        return "daily".equals(type) || "weekly".equals(type) || "dynamic".equals(type);
+    }
+
+    private BigDecimal getPeriodLimit(Envelope envelope) {
+        Map<String, Object> conditions = envelope.getConditions();
+        if (conditions == null || !conditions.containsKey("limit")) {
+            return BigDecimal.ZERO;
+        }
+        try {
+            return new BigDecimal(conditions.get("limit").toString());
+        } catch (Exception e) {
+            return BigDecimal.ZERO;
+        }
+    }
+
+    private BigDecimal availableVaultBalance(Envelope envelope) {
+        return safeAmount(envelope.getTotalRemainingAmount()).subtract(safeAmount(envelope.getHeldAmount())).max(BigDecimal.ZERO);
+    }
+
+    private BigDecimal safeAmount(BigDecimal amount) {
+        return amount != null ? amount : BigDecimal.ZERO;
+    }
+
+    private Long parseLong(Object value) {
+        if (value == null) {
+            return null;
+        }
+        try {
+            return Long.valueOf(value.toString());
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
     @Transactional(timeout = 120)
     @Scheduled(cron = "0 */15 * * * ?", zone = "Africa/Lagos")
     public void processBudgets() {
@@ -778,6 +1134,10 @@ public class BudgetLifeCycleManager {
                 // 3. PROCEED TO DISBURSE
                 disburseEnvelope(envelope, now, envelopesToUpdate, logsToSave, outboxEventsToSave);
                 break;
+            case "safe_lock":
+            case "strict_lock":
+                releaseLockedEnvelope(envelope, now, envelopesToUpdate, logsToSave, outboxEventsToSave);
+                break;
             case "emergency":
                 // No automatic disbursement; handled by user action
                 break;
@@ -791,6 +1151,44 @@ public class BudgetLifeCycleManager {
         // are now created as outbox events inside disburseEnvelope() and processed
         // reliably by NotificationOutboxWorker. The `message` variable above is always
         // null in every active code path — this block was dead code and has been removed.
+    }
+
+    private void releaseLockedEnvelope(Envelope envelope, LocalDateTime now, List<Envelope> envelopesToUpdate,
+                                       List<TransactionLog> logsToSave, List<OutboxEvent> outboxEventsToSave) {
+        BigDecimal amountToRelease = availableVaultBalance(envelope);
+        envelope.setRemainingAmount(amountToRelease);
+        envelope.setLastDisbursedAt(now);
+        envelope.setNextDisbursementAt(null);
+        envelope.setHasMatured(true);
+        envelopesToUpdate.add(envelope);
+
+        if (amountToRelease.compareTo(BigDecimal.ZERO) <= 0) {
+            return;
+        }
+
+        TransactionLog log = new TransactionLog();
+        log.setUserId(envelope.getBudget().getUser().getId());
+        log.setBudgetId(envelope.getBudget().getId());
+        log.setSourceEnvelopeId(envelope.getId());
+        log.setAmount(amountToRelease);
+        log.setTransactionType(TransactionType.ENVELOPE_DISBURSEMENT);
+        log.setDescription("Locked envelope released");
+        log.setStatus(TransactionStatus.COMPLETED);
+        log.setReference("LOCK-REL-" + envelope.getId() + "-" + System.currentTimeMillis());
+        log.setCreatedAt(now);
+        logsToSave.add(log);
+
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("amount", String.format("%,.2f", amountToRelease));
+        payload.put("envelopeName", envelope.getName() != null ? envelope.getName() : "Envelope");
+
+        outboxEventsToSave.add(buildOutboxEvent(
+                NotificationType.DISBURSEMENT_SUCCESS,
+                envelope.getBudget().getUser().getId(),
+                envelope.getBudget().getId(),
+                envelope.getId(),
+                payload
+        ));
     }
 
     private void disburseEnvelope(Envelope envelope, LocalDateTime now, List<Envelope> envelopesToUpdate,
@@ -1383,7 +1781,8 @@ public class BudgetLifeCycleManager {
             case DISBURSEMENT_SUCCESS, DISBURSEMENT_READY, DISBURSEMENT,
                  WALLET_FUNDED, WALLET_DEPOSIT, EXTERNAL_TRANSFER,
                  ENVELOPE_TRANSFER, REFUND_ISSUED, DISBURSEMENT_REFUNDED,
-                 BUDGET_UNALLOCATED_REFUNDED -> 259_200L; // 72 h
+                 BUDGET_UNALLOCATED_REFUNDED, BUDGET_SCHEDULED,
+                 BUDGET_ACTIVATED -> 259_200L; // 72 h
 
             // Important but not financial — 24 h
             case EXPIRED_DISBURSEMENT, DISBURSEMENT_FAILED,

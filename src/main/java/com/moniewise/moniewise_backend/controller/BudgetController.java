@@ -152,6 +152,27 @@ public class BudgetController {
         }
     }
 
+    @PostMapping("/{budgetId}/cancel-scheduled")
+    public ResponseEntity<?> cancelScheduledBudget(@PathVariable Long budgetId, Authentication authentication) {
+        try {
+            String email = authentication.getName();
+            BudgetResponse budget = budgetService.cancelScheduledBudget(budgetId, email);
+            return ResponseEntity.ok(Map.of(
+                    "message", "Scheduled budget cancelled successfully",
+                    "budget", budget
+            ));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("error", e.getMessage()));
+        } catch (SecurityException e) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of("error", e.getMessage()));
+        } catch (IllegalStateException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", "Error cancelling scheduled budget: " + e.getMessage()));
+        }
+    }
+
     // New: DELETE /budgets/{budgetId}
     // Admin/support only — there is deliberately NO user-facing way to dissolve
     // a budget outside the account-closure flow: free deletion would gut the
@@ -447,6 +468,5 @@ public class BudgetController {
     }
 
 }
-
 
 

@@ -1179,8 +1179,11 @@ public class UserService implements UserDetailsService {
 
         int activeBudgets = budgetRepository
                 .findByUserIdAndStatus(user.getId(), BudgetStatus.ACTIVE).size();
-        if (activeBudgets > 0) {
-            blockers.add(activeBudgets + " active budget" + (activeBudgets > 1 ? "s" : ""));
+        int scheduledBudgets = budgetRepository
+                .findByUserIdAndStatus(user.getId(), BudgetStatus.SCHEDULED).size();
+        int fundedBudgets = activeBudgets + scheduledBudgets;
+        if (fundedBudgets > 0) {
+            blockers.add(fundedBudgets + " active or scheduled budget" + (fundedBudgets > 1 ? "s" : ""));
         }
 
         int heldSavings = savingsGoalRepository
@@ -1239,6 +1242,8 @@ public class UserService implements UserDetailsService {
         // 1. Fetch Most Recent Active
         Optional<Budget> activeOpt = budgetRepository
                 .findTopByUserIdAndStatusOrderByCreatedAtDesc(user.getId(), BudgetStatus.ACTIVE);
+        Optional<Budget> scheduledOpt = budgetRepository
+                .findTopByUserIdAndStatusOrderByCreatedAtDesc(user.getId(), BudgetStatus.SCHEDULED);
 
         // 2. Fetch Most Recent Completed
         Optional<Budget> completedOpt = budgetRepository
@@ -1249,6 +1254,7 @@ public class UserService implements UserDetailsService {
 
         // We map manually or use a helper to avoid Infinite Recursion (User -> Budget -> User)
         response.put("active", activeOpt.map(this::mapBudgetToSummary).orElse(null));
+        response.put("scheduled", scheduledOpt.map(this::mapBudgetToSummary).orElse(null));
         response.put("completed", completedOpt.map(this::mapBudgetToSummary).orElse(null));
 
         return response;
@@ -1272,5 +1278,3 @@ public class UserService implements UserDetailsService {
 
 
 }
-
-

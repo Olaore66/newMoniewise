@@ -239,6 +239,7 @@ public class HowToUseWisemonieNudgeService {
         return notificationRepository.existsByUserIdAndTypeAndIsReadTrue(userId, NotificationType.HOW_TO_USE_WISEMONIE)
                 || walletRepository.existsFundedUserWallet(userId)
                 || budgetRepository.existsByUserIdAndStatus(userId, BudgetStatus.ACTIVE)
+                || budgetRepository.existsByUserIdAndStatus(userId, BudgetStatus.SCHEDULED)
                 || nudgeRepository.countDistinctSendDaysByUserIdAndCampaign(
                         userId, EngagementNudgeCampaign.HOW_TO_USE_WISEMONIE) >= effectiveMaxSendDays();
     }

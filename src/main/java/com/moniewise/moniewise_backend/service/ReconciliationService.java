@@ -306,7 +306,8 @@ public class ReconciliationService {
             }
 
             BigDecimal walletBalance = wallet.getBalance() != null ? wallet.getBalance() : BigDecimal.ZERO;
-            BigDecimal envelopeTotal = envelopeRepository.sumTotalRemainingByUserIdAndBudgetStatus(userId, BudgetStatus.ACTIVE);
+            BigDecimal envelopeTotal = envelopeRepository.sumTotalRemainingByUserIdAndBudgetStatuses(
+                    userId, List.of(BudgetStatus.ACTIVE, BudgetStatus.SCHEDULED));
             BigDecimal savingsTotal = savingsGoalRepository.sumBalanceByUserIdAndStatus(userId, SavingsStatus.ACTIVE);
             BigDecimal internalTotal = walletBalance.add(envelopeTotal).add(savingsTotal);
 
@@ -532,7 +533,8 @@ public class ReconciliationService {
         }
 
         BigDecimal walletBalance = wallet.getBalance() != null ? wallet.getBalance() : BigDecimal.ZERO;
-        BigDecimal envelopeTotal = envelopeRepository.sumTotalRemainingByUserIdAndBudgetStatus(userId, BudgetStatus.ACTIVE);
+            BigDecimal envelopeTotal = envelopeRepository.sumTotalRemainingByUserIdAndBudgetStatuses(
+                    userId, List.of(BudgetStatus.ACTIVE, BudgetStatus.SCHEDULED));
         BigDecimal savingsTotal = savingsGoalRepository.sumBalanceByUserIdAndStatus(userId, SavingsStatus.ACTIVE);
         BigDecimal internalTotal = walletBalance.add(envelopeTotal).add(savingsTotal);
         BigDecimal difference = providerBalance.get().subtract(internalTotal);

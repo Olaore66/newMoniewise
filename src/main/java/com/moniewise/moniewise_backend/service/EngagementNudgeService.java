@@ -631,7 +631,8 @@ public class EngagementNudgeService {
         if (user == null || user.getId() == null) {
             return false;
         }
-        return budgetRepository.existsByUserIdAndStatus(user.getId(), BudgetStatus.ACTIVE);
+        return budgetRepository.existsByUserIdAndStatus(user.getId(), BudgetStatus.ACTIVE)
+                || budgetRepository.existsByUserIdAndStatus(user.getId(), BudgetStatus.SCHEDULED);
     }
 
     private boolean isBirthdayToday(User user, LocalDate today) {

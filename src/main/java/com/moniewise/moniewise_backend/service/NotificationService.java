@@ -257,7 +257,7 @@ public class NotificationService {
                     DISBURSEMENT_SUCCESS, EXPIRED_DISBURSEMENT, DISBURSEMENT_FAILED,
                     INSUFFICIENT_BALANCE, LOW_BALANCE_WARNING, ENVELOPE_LOW_BALANCE,
                     LIMIT_REACHED, BUDGET_LIMIT_WARNING, EMERGENCY_USED,
-                    BUDGET_CREATION, BUDGET_COMPLETED,
+                    BUDGET_CREATION, BUDGET_SCHEDULED, BUDGET_ACTIVATED, BUDGET_COMPLETED,
                     ENVELOPE_UPDATED, ENVELOPE_LOCKED, ENVELOPE_UNLOCKED,
                     BUDGET_END, BUDGET_END_SOON, BUDGET_ENDS_TODAY,
                     AUTO_TRANSFER_SUCCESS, AUTO_TRANSFER_FAILED, AUTO_TRANSFER_INSUFFICIENT_FUNDS,
@@ -312,6 +312,26 @@ public class NotificationService {
                     String envCount = safeText(params.get("envelopeCount"), "your");
                     yield "And we're live! Your '" + name + "' budget is set up with \u20A6" + amount
                             + " across " + envCount + " envelopes. (Includes \u20A6" + fee + " setup fee).";
+                }
+                case BUDGET_SCHEDULED -> {
+                    String amount = formatAmount(params.getOrDefault("allocated", "0"));
+                    String name = safeText(params.get("budgetName"), "your");
+                    String startDate = safeText(params.get("startDate"), "your start date");
+                    String envCount = safeText(params.get("envelopeCount"), "your");
+                    yield "Your '" + name + "' budget is funded and scheduled for " + startDate
+                            + ". \u20A6" + amount + " is protected across " + envCount + " envelopes until it starts.";
+                }
+                case BUDGET_ACTIVATED -> {
+                    String name = safeText(params.get("budgetName"), "your");
+                    yield "Your scheduled budget '" + name + "' is now active. Your envelopes are ready based on their release rules.";
+                }
+                case BUDGET_UPDATED -> {
+                    String custom = safeText(params.get("__message"), null);
+                    if (custom != null) {
+                        yield custom;
+                    }
+                    String name = safeText(params.get("budgetName"), "your");
+                    yield "Your '" + name + "' budget has been updated.";
                 }
                 case BUDGET_CREATION_FEE -> {
                     String amount = formatAmount(params.getOrDefault("amount", "0"));
@@ -574,7 +594,8 @@ public class NotificationService {
             case DISBURSEMENT_SUCCESS, DISBURSEMENT_READY, DISBURSEMENT,
                  WALLET_FUNDED, WALLET_DEPOSIT, EXTERNAL_TRANSFER,
                  ENVELOPE_TRANSFER, REFUND_ISSUED, DISBURSEMENT_REFUNDED,
-                 BUDGET_UNALLOCATED_REFUNDED, HOW_TO_USE_WISEMONIE        -> 259_200_000L; // 72 h
+                 BUDGET_UNALLOCATED_REFUNDED, BUDGET_SCHEDULED,
+                 BUDGET_ACTIVATED, HOW_TO_USE_WISEMONIE                   -> 259_200_000L; // 72 h
             case LOW_BALANCE_WARNING, ENVELOPE_LOW_BALANCE               -> 21_600_000L;  //  6 h
             default                                                       -> 86_400_000L;  // 24 h
         };
@@ -703,6 +724,8 @@ public class NotificationService {
 
     private String getNotificationTitle(NotificationType type) {
         if (type == null) return "Wisemonie";
+        if (type == NotificationType.BUDGET_SCHEDULED) return "Budget Scheduled";
+        if (type == NotificationType.BUDGET_ACTIVATED) return "Budget Active";
 
         return switch (type) {
             case WALLET_FUNDED, WALLET_DEPOSIT, REFUND_ISSUED, DISBURSEMENT_REFUNDED, BUDGET_UNALLOCATED_REFUNDED -> "Credit Alert 🚀";
@@ -770,6 +793,7 @@ public class NotificationService {
         return switch (type) {
             case WALLET_DEPOSIT, WALLET_FUNDED, ENVELOPE_TRANSFER, EXTERNAL_TRANSFER,
                     LOW_BALANCE_WARNING, INSUFFICIENT_BALANCE, DISBURSEMENT, DISBURSEMENT_SUCCESS, DISBURSEMENT_READY, BUDGET_COMPLETED,
+                    BUDGET_SCHEDULED, BUDGET_ACTIVATED,
                     SAVINGS_GOAL_CREATED, SAVINGS_DEPOSIT, GOAL_ACHIEVED,
                     // "Your money is ready" is the single most important savings push —
                     // it was missing here, falling to default LOW = push never sent.

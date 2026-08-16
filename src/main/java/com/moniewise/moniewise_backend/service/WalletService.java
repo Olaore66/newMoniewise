@@ -228,8 +228,8 @@ public class WalletService {
                 .map(w -> w.getBalance() != null ? w.getBalance() : BigDecimal.ZERO)
                 .orElse(BigDecimal.ZERO);
 
-        BigDecimal envelopeTotal = envelopeRepository.sumTotalRemainingByUserIdAndBudgetStatus(
-                userId, BudgetStatus.ACTIVE);
+        BigDecimal envelopeTotal = envelopeRepository.sumTotalRemainingByUserIdAndBudgetStatuses(
+                userId, List.of(BudgetStatus.ACTIVE, BudgetStatus.SCHEDULED));
         BigDecimal savingsTotal = savingsGoalRepository.sumBalanceByUserIdAndStatus(
                 userId, SavingsStatus.ACTIVE);
 

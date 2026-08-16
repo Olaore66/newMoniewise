@@ -564,15 +564,20 @@ public class EnvelopeService {
 
     BigDecimal getRemainingLimit(Envelope envelope, String email) {
         LocalDateTime now = fetchCurrentDateTimeFromDatabase();
+        Budget budget = envelope.getBudget();
 
-        Map<String, Object> conditions = envelope.getConditions();
-        if (budgetStartsInFuture(envelope.getBudget(), now)) {
+        if (budget == null || budget.getStatus() != BudgetStatus.ACTIVE || budgetStartsInFuture(budget, now)) {
             BigDecimal previousRemaining = safeAmount(envelope.getRemainingAmount());
             if (previousRemaining.compareTo(BigDecimal.ZERO) != 0) {
                 envelope.setRemainingAmount(BigDecimal.ZERO);
                 envelopeRepository.save(envelope);
                 monnieCacheInvalidationService.evictUserIdentifierAfterCommit(email);
             }
+            return BigDecimal.ZERO;
+        }
+
+        Map<String, Object> conditions = envelope.getConditions();
+        if (conditions == null) {
             return BigDecimal.ZERO;
         }
 
@@ -658,6 +663,7 @@ public class EnvelopeService {
             case "safe_lock":
             case "strict_lock":
             case "emergency":
+            case "savings_sweep":
                 periodStart = now.minusYears(1);
 //                periodEnd = now.plusYears(1);
                 return envelope.getRemainingAmount();
@@ -823,6 +829,9 @@ public class EnvelopeService {
     // -------------------------------------------------------------------------
 
     private void validateTransferRules(Envelope source, Budget budget, LocalDateTime now) {
+        if (budget == null || budget.getStatus() != BudgetStatus.ACTIVE) {
+            throw new IllegalStateException("This budget is not active yet");
+        }
         if (budgetStartsInFuture(budget, now)) {
             throw new IllegalStateException("This budget starts on " + budget.getStartDate());
         }
@@ -1355,7 +1364,7 @@ public class EnvelopeService {
         if (!budget.getUser().getEmail().equals(email)) {
             throw new SecurityException("Unauthorized access to budget");
         }
-        if (budget.getStatus() == BudgetStatus.DRAFT) {
+        if (budget.getStatus() != BudgetStatus.ACTIVE) {
             throw new IllegalArgumentException("Can only add envelopes to active budgets");
         }
 
@@ -1411,6 +1420,11 @@ public class EnvelopeService {
         }
 
         LocalDateTime now = fetchCurrentDateTimeFromDatabase();
+        if (budgetStartsInFuture(budget, now)
+                && ("safe_lock".equalsIgnoreCase(type) || "strict_lock".equalsIgnoreCase(type))
+                && budget.getStartDate() != null) {
+            conditions.put("lockStartDate", budget.getStartDate().toString());
+        }
 
         Envelope envelope = new Envelope(budget, request.getName(), amount, conditions);
         envelope.setCreatedAt(now);
@@ -1551,8 +1565,9 @@ public class EnvelopeService {
     public void deleteEnvelope(Long envelopeId, String email) {
         Envelope envelope = envelopeRepository.findByIdAndBudget_UserEmail(envelopeId, email)
                 .orElseThrow(() -> new EntityNotFoundException("Envelope not found or not accessible"));
-        if (envelope.getBudget().getStatus() == BudgetStatus.ACTIVE) {
-            throw new IllegalStateException("Cannot delete envelope from an active budget");
+        if (envelope.getBudget().getStatus() == BudgetStatus.ACTIVE
+                || envelope.getBudget().getStatus() == BudgetStatus.SCHEDULED) {
+            throw new IllegalStateException("Cannot delete envelope from a funded budget");
         }
         envelopeRepository.delete(envelope);
 
@@ -1948,11 +1963,15 @@ public class EnvelopeService {
     // Ã°Å¸â€˜â€¡ NEW HELPER METHOD FOR STRICT VISIBILITY
     private BigDecimal getSpendableBalance(Envelope envelope) {
         LocalDateTime now = fetchCurrentDateTimeFromDatabase();
-        if (budgetStartsInFuture(envelope.getBudget(), now)) {
+        Budget budget = envelope.getBudget();
+        if (budget == null || budget.getStatus() != BudgetStatus.ACTIVE || budgetStartsInFuture(budget, now)) {
             return BigDecimal.ZERO;
         }
 
         Map<String, Object> conditions = envelope.getConditions();
+        if (conditions == null) {
+            return BigDecimal.ZERO;
+        }
         String type = (String) conditions.getOrDefault("type", "");
 
         // Graceful Start: Always show money on creation day
@@ -2055,6 +2074,9 @@ public class EnvelopeService {
 
         if (!source.getBudget().getUser().getId().equals(user.getId())) {
             throw new SecurityException("You are not allowed to transfer from this envelope");
+        }
+        if (source.getBudget() == null || source.getBudget().getStatus() != BudgetStatus.ACTIVE) {
+            throw new IllegalStateException("This budget is not active yet");
         }
 
         BigDecimal availableLimit = getRemainingLimit(envelopeId, email);

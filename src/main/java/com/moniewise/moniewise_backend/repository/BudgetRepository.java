@@ -5,10 +5,12 @@ import com.moniewise.moniewise_backend.enums.BudgetStatus;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import javax.persistence.LockModeType;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -21,6 +23,10 @@ public interface BudgetRepository extends JpaRepository<Budget, Long> {
     List<Budget> findByUserIdAndStatus(Long userId, BudgetStatus status);
 
     boolean existsByUserIdAndStatus(Long userId, BudgetStatus status);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT b FROM Budget b WHERE b.id = :id")
+    Optional<Budget> findByIdForUpdate(@Param("id") Long id);
 
     @Query(value = "SELECT CURRENT_TIMESTAMP AT TIME ZONE 'Africa/Lagos'", nativeQuery = true)
     LocalDateTime getCurrentLagosTime();
@@ -45,6 +51,8 @@ public interface BudgetRepository extends JpaRepository<Budget, Long> {
 
     // ✅ NEW: Batch Processing for Expired Budgets
     Page<Budget> findByStatusAndEndDateLessThanEqual(BudgetStatus status, LocalDate endDate, Pageable pageable);
+
+    Page<Budget> findByStatusAndStartDateLessThanEqual(BudgetStatus status, LocalDate startDate, Pageable pageable);
 
     // ... existing imports
 

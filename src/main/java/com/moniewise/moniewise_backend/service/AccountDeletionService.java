@@ -145,6 +145,9 @@ public class AccountDeletionService {
         for (Budget budget : budgetRepository.findByUserIdAndStatus(userId, BudgetStatus.ACTIVE)) {
             budgetService.deleteBudget(budget.getId(), email);
         }
+        for (Budget budget : budgetRepository.findByUserIdAndStatus(userId, BudgetStatus.SCHEDULED)) {
+            budgetService.deleteBudget(budget.getId(), email);
+        }
 
         // Prevent ghost notifications: delete any pending disbursement records and
         // cancel undelivered outbox events so the departing user never receives

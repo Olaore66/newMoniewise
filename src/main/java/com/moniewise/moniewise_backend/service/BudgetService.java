@@ -10,6 +10,7 @@ import com.moniewise.moniewise_backend.dto.response.EnvelopeResponse;
 import com.moniewise.moniewise_backend.entity.*;
 import com.moniewise.moniewise_backend.enums.BudgetStatus;
 import com.moniewise.moniewise_backend.enums.NotificationType;
+import com.moniewise.moniewise_backend.enums.SavingsStatus;
 import com.moniewise.moniewise_backend.enums.TransactionStatus;
 import com.moniewise.moniewise_backend.exception.InsufficientFundsException;
 import com.moniewise.moniewise_backend.repository.*;
@@ -59,6 +60,7 @@ public class BudgetService {
     private final ApplicationEventPublisher eventPublisher;
 
     private final SavingsService savingsService;
+    private final SavingsGoalRepository savingsGoalRepository;
 
     private final SystemConfigService systemConfig;
     private final MonnieCacheInvalidationService monnieCacheInvalidationService;
@@ -82,6 +84,7 @@ public class BudgetService {
             WalletService walletService, ScheduledTaskRepository scheduledTaskRepository,
             @Lazy EnvelopeService envelopeService, BudgetLifeCycleManager budgetLifeCycleManager,
             ApplicationEventPublisher eventPublisher, SavingsService savingsService,
+            SavingsGoalRepository savingsGoalRepository,
             SystemConfigService systemConfig,
             MonnieCacheInvalidationService monnieCacheInvalidationService,
             RedisTemplate<String, String> redisTemplate) {
@@ -98,6 +101,7 @@ public class BudgetService {
         this.budgetLifeCycleManager = budgetLifeCycleManager;
         this.eventPublisher = eventPublisher;
         this.savingsService = savingsService;
+        this.savingsGoalRepository = savingsGoalRepository;
         this.systemConfig = systemConfig;
         this.monnieCacheInvalidationService = monnieCacheInvalidationService;
         this.redisTemplate = redisTemplate;
@@ -135,6 +139,69 @@ public class BudgetService {
         }
         if (startDate.isAfter(endDate)) {
             throw new IllegalArgumentException("Budget start date cannot be after end date");
+        }
+    }
+
+    private BudgetStatus resolveInitialBudgetStatus(BudgetRequest request, LocalDate today) {
+        if (request.getStartDate().isAfter(today)) {
+            return BudgetStatus.SCHEDULED;
+        }
+
+        BudgetStatus requestedStatus = request.getStatus();
+        if (requestedStatus == null || requestedStatus == BudgetStatus.SCHEDULED || requestedStatus == BudgetStatus.ACTIVE) {
+            return BudgetStatus.ACTIVE;
+        }
+
+        throw new IllegalArgumentException("Budget status must be ACTIVE for creation");
+    }
+
+    private boolean isFundedBudgetStatus(BudgetStatus status) {
+        return status == BudgetStatus.ACTIVE || status == BudgetStatus.SCHEDULED;
+    }
+
+    private void validateSavingsSweepTargets(BudgetRequest request, User user) {
+        if (request.getEnvelopes() == null) {
+            return;
+        }
+
+        for (EnvelopeRequest envelopeRequest : request.getEnvelopes()) {
+            Map<String, Object> conditions = envelopeRequest.getConditions();
+            if (conditions == null || !"savings_sweep".equalsIgnoreCase(String.valueOf(conditions.get("type")))) {
+                continue;
+            }
+
+            Long targetSavingsGoalId = parseLong(conditions.get("targetSavingsGoalId"));
+            if (targetSavingsGoalId == null) {
+                throw new IllegalArgumentException("'" + envelopeRequest.getName() + "' must select a valid savings pot.");
+            }
+
+            SavingsGoal goal = savingsGoalRepository.findById(targetSavingsGoalId)
+                    .orElseThrow(() -> new IllegalArgumentException(
+                            "'" + envelopeRequest.getName() + "' points to a savings pot that no longer exists."));
+
+            if (goal.getUser() == null || goal.getUser().getId() == null || !goal.getUser().getId().equals(user.getId())) {
+                throw new SecurityException("'" + envelopeRequest.getName() + "' points to a savings pot outside your account.");
+            }
+            if (goal.getStatus() != SavingsStatus.ACTIVE) {
+                throw new IllegalArgumentException("'" + envelopeRequest.getName() + "' cannot sweep into an inactive savings pot.");
+            }
+            if (goal.getMaturityDate() == null || !request.getStartDate().isBefore(goal.getMaturityDate())) {
+                throw new IllegalArgumentException("'" + envelopeRequest.getName()
+                        + "' cannot sweep into '" + goal.getName()
+                        + "' because that savings pot matures on " + goal.getMaturityDate()
+                        + ". Choose a savings pot that matures after the budget start date, or remove the sweep.");
+            }
+        }
+    }
+
+    private Long parseLong(Object value) {
+        if (value == null) {
+            return null;
+        }
+        try {
+            return Long.valueOf(value.toString());
+        } catch (NumberFormatException e) {
+            return null;
         }
     }
 
@@ -525,17 +592,19 @@ public class BudgetService {
 
         // 0. CHECK ACTIVE BUDGET LIMIT (Max 10)
         List<Budget> userBudgets = budgetRepository.findByUserId(user.getId());
-        long activeBudgetCount = userBudgets.stream()
-                .filter(b -> b.getStatus() == BudgetStatus.ACTIVE)
+        long fundedBudgetCount = userBudgets.stream()
+                .filter(b -> isFundedBudgetStatus(b.getStatus()))
                 .count();
 
-        if (activeBudgetCount >= 10) {
-            throw new IllegalStateException("Limit reached: You can have a maximum of 10 active budgets.");
+        if (fundedBudgetCount >= 10) {
+            throw new IllegalStateException("Limit reached: You can have a maximum of 10 active or scheduled budgets.");
         }
 
         LocalDateTime now = fetchCurrentDateTimeFromDatabase();
 
         normalizeAndValidateBudgetDates(request, now.toLocalDate());
+        BudgetStatus initialStatus = resolveInitialBudgetStatus(request, now.toLocalDate());
+        validateSavingsSweepTargets(request, user);
 
         // Minimum budget amount is product-configurable via system_config.
         BigDecimal minAmount = systemConfig.getBudgetMinAmount();
@@ -667,7 +736,7 @@ public class BudgetService {
         budget.setStartDate(request.getStartDate());
         budget.setEndDate(request.getEndDate());
         budget.setDurationDays((int) durationDays);
-        budget.setStatus(request.getStatus());
+        budget.setStatus(initialStatus);
         budget.setCreatedAt(now);
         budget.setRemainingAmount(originalAmount);       // Initially full amount
 
@@ -682,21 +751,28 @@ public class BudgetService {
 
             Envelope envelope = envelopeService.createEnvelopeEntity(envelopeRequest, savedBudget, email, true, true);
 
-            // Savings sweep logic (unchanged)
             Map<String, Object> conditions = envelope.getConditions();
             if (conditions != null && "savings_sweep".equalsIgnoreCase((String) conditions.getOrDefault("type", ""))) {
-                try {
-                    Long targetSavingsId = Long.valueOf(conditions.get("targetSavingsGoalId").toString());
-                    savingsService.sweepEnvelopeToSavings(user.getId(), targetSavingsId, correctAmount,
-                            envelope.getName(), savedBudget.getId(), envelope.getId());
-
-                    envelope.setRemainingAmount(BigDecimal.ZERO);
-                    envelope.setTotalRemainingAmount(BigDecimal.ZERO);
-                    envelope.setHasMatured(true);
+                if (savedBudget.getStatus() == BudgetStatus.SCHEDULED) {
+                    conditions.put("savingsSweepStatus", "PENDING_ACTIVATION");
+                    envelope.setConditions(conditions);
                     envelopeRepository.save(envelope);
-                } catch (Exception e) {
-                    logger.error("Failed to sweep envelope to savings for user {}", user.getId(), e);
-                    throw new IllegalStateException("Failed to process savings sweep");
+                } else {
+                    try {
+                        Long targetSavingsId = Long.valueOf(conditions.get("targetSavingsGoalId").toString());
+                        savingsService.sweepEnvelopeToSavings(user.getId(), targetSavingsId, correctAmount,
+                                envelope.getName(), savedBudget.getId(), envelope.getId());
+
+                        conditions.put("savingsSweepStatus", "COMPLETED");
+                        envelope.setConditions(conditions);
+                        envelope.setRemainingAmount(BigDecimal.ZERO);
+                        envelope.setTotalRemainingAmount(BigDecimal.ZERO);
+                        envelope.setHasMatured(true);
+                        envelopeRepository.save(envelope);
+                    } catch (Exception e) {
+                        logger.error("Failed to sweep envelope to savings for user {}", user.getId(), e);
+                        throw new IllegalStateException("Failed to process savings sweep");
+                    }
                 }
             }
 
@@ -717,6 +793,13 @@ public class BudgetService {
 
         savedBudget.clearEnvelopes();
         savedBudget.addAllEnvelopes(envelopes);
+        BigDecimal remainingInBudget = envelopes.stream()
+                .map(envelope -> envelope.getTotalRemainingAmount() != null
+                        ? envelope.getTotalRemainingAmount()
+                        : BigDecimal.ZERO)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        savedBudget.setRemainingAmount(remainingInBudget);
+        budgetRepository.save(savedBudget);
 
         // === NOW DEDUCT FEE USING PRIVATE HELPER (skipped when fee = 0) ===
         deductBudgetCreationFee(user.getId(), fee);
@@ -742,7 +825,9 @@ public class BudgetService {
         allocationLog.setFee(fee);
         allocationLog.setTransactionType(BUDGET_ALLOCATION);
         allocationLog.setReference("BUD-ALL-" + savedBudget.getId() + "-" + System.currentTimeMillis());
-        allocationLog.setDescription("Allocated to budget envelopes");
+        allocationLog.setDescription(savedBudget.getStatus() == BudgetStatus.SCHEDULED
+                ? "Reserved for scheduled budget envelopes"
+                : "Allocated to budget envelopes");
         allocationLog.setStatus(TransactionStatus.COMPLETED);
         allocationLog.setCreatedAt(now);
         transactionLogRepository.save(allocationLog);
@@ -779,13 +864,18 @@ public class BudgetService {
         params.put("allocated", allocationSum);
         params.put("fee", fee);
         params.put("envelopeCount", request.getEnvelopes().size());
+        params.put("startDate", savedBudget.getStartDate().toString());
 
         eventPublisher.publishEvent(new GenericNotificationEvent(
-                this, user.getId().toString(), NotificationType.BUDGET_CREATION,
+                this, user.getId().toString(),
+                savedBudget.getStatus() == BudgetStatus.SCHEDULED
+                        ? NotificationType.BUDGET_SCHEDULED
+                        : NotificationType.BUDGET_CREATION,
                 params, savedBudget.getId(), null, "/budgets/" + savedBudget.getId()
         ));
 
-        return new BudgetResponse(/* ... your existing response mapping ... */);
+        monnieCacheInvalidationService.evictUserAfterCommit(user.getId());
+        return mapToResponse(savedBudget);
     }
 
     // Helper classes to calculate period
@@ -817,7 +907,7 @@ public class BudgetService {
     @Transactional
     public BudgetResponse activateBudget(Long budgetId, String email) {
         User user = userService.findByEmail(email);
-        Budget budget = budgetRepository.findById(budgetId)
+        Budget budget = budgetRepository.findByIdForUpdate(budgetId)
                 .orElseThrow(() -> new IllegalArgumentException("Budget not found with ID: " + budgetId));
         if (!budget.getUser().getId().equals(user.getId())) {
             throw new SecurityException("You do not have permission to activate this budget");
@@ -825,17 +915,76 @@ public class BudgetService {
         if (budget.getStatus() == BudgetStatus.ACTIVE) {
             throw new IllegalArgumentException("Budget is already active");
         }
+        if (budget.getStatus() == BudgetStatus.COMPLETED
+                || budget.getStatus() == BudgetStatus.CANCELLED
+                || budget.getStatus() == BudgetStatus.FAILED_PROCESSING) {
+            throw new IllegalArgumentException("This budget cannot be activated");
+        }
+        if (budget.getStatus() == BudgetStatus.SCHEDULED) {
+            LocalDate today = fetchCurrentDateTimeFromDatabase().toLocalDate();
+            if (budget.getStartDate() != null && budget.getStartDate().isAfter(today)) {
+                throw new IllegalArgumentException("Budget is scheduled to start on " + budget.getStartDate());
+            }
+            Budget activatedBudget = budgetLifeCycleManager.activateScheduledBudget(budgetId);
+            monnieCacheInvalidationService.evictUserAfterCommit(user.getId());
+            return mapToResponse(activatedBudget);
+        }
         budget.setStatus(BudgetStatus.ACTIVE);
         Budget updatedBudget = budgetRepository.save(budget);
         monnieCacheInvalidationService.evictUserAfterCommit(user.getId());
         return mapToResponse(updatedBudget);
     }
 
+    @Transactional
+    public BudgetResponse cancelScheduledBudget(Long budgetId, String email) {
+        User user = userService.findByEmail(email);
+        Budget budget = budgetRepository.findByIdForUpdate(budgetId)
+                .orElseThrow(() -> new IllegalArgumentException("Budget not found with ID: " + budgetId));
+
+        if (!budget.getUser().getId().equals(user.getId())) {
+            throw new SecurityException("You do not have permission to cancel this budget");
+        }
+        if (budget.getStatus() == BudgetStatus.CANCELLED) {
+            return mapToResponse(budget);
+        }
+        if (budget.getStatus() != BudgetStatus.SCHEDULED) {
+            throw new IllegalStateException("Only scheduled budgets can be cancelled here");
+        }
+
+        BigDecimal refunded = budgetLifeCycleManager.refundUnusedBudgetBalance(budget, user);
+
+        budget.setStatus(BudgetStatus.CANCELLED);
+        budget.setRemainingAmount(BigDecimal.ZERO);
+        Budget cancelledBudget = budgetRepository.save(budget);
+
+        Map<String, Object> params = new HashMap<>();
+        params.put("budgetName", cancelledBudget.getName());
+        params.put("refunded", refunded);
+        params.put("__message", String.format(
+                "Your scheduled budget '%s' has been cancelled. \u20A6%,.2f has been returned to your wallet.",
+                cancelledBudget.getName(),
+                refunded
+        ));
+
+        eventPublisher.publishEvent(new GenericNotificationEvent(
+                this,
+                user.getId().toString(),
+                NotificationType.BUDGET_UPDATED,
+                params,
+                cancelledBudget.getId(),
+                null,
+                "/budgets"
+        ));
+
+        monnieCacheInvalidationService.evictUserAfterCommit(user.getId());
+        return mapToResponse(cancelledBudget);
+    }
+
     // New: Delete a Budget
     @Transactional
     public void deleteBudget(Long budgetId, String email) {
         User user = userService.findByEmail(email);
-        Budget budget = budgetRepository.findById(budgetId)
+        Budget budget = budgetRepository.findByIdForUpdate(budgetId)
                 .orElseThrow(() -> new IllegalArgumentException("Budget not found with ID: " + budgetId));
         if (!budget.getUser().getId().equals(user.getId())) {
             throw new SecurityException("You do not have permission to delete this budget");
@@ -843,11 +992,10 @@ public class BudgetService {
         if (budget.getStatus() == BudgetStatus.CANCELLED) {
             return; // already dissolved — idempotent, nothing to do
         }
-        // Creating a budget debits the wallet, so return any allocated-but-unspent
-        // envelope balance (and zero the envelopes) before removing it — otherwise
-        // that money is silently lost. Only ACTIVE budgets are refunded: a DRAFT
-        // was never debited and a COMPLETED one was already refunded at completion.
-        if (budget.getStatus() == BudgetStatus.ACTIVE) {
+        // Creating a funded budget debits the wallet, so ACTIVE and SCHEDULED
+        // budgets must refund allocated-but-unspent envelope balance before
+        // soft-cancel. DRAFT was never debited; COMPLETED was already refunded.
+        if (isFundedBudgetStatus(budget.getStatus())) {
             budgetLifeCycleManager.refundUnusedBudgetBalance(budget, user);
         }
         // Soft-delete rather than hard-delete: keep the budget, its envelopes, and
@@ -1074,6 +1222,12 @@ public class BudgetService {
         if (budget.getStatus() == BudgetStatus.COMPLETED) {
             throw new IllegalArgumentException("Cannot extend an ended budget. Create a new budget instead.");
         }
+        if (budget.getStatus() == BudgetStatus.SCHEDULED) {
+            throw new IllegalArgumentException("Scheduled budgets cannot be extended. Cancel it and create a new schedule.");
+        }
+        if (budget.getStatus() != BudgetStatus.ACTIVE) {
+            throw new IllegalArgumentException("Only active budgets can be extended");
+        }
 
         // Step 2: Update Budget details
         if (newName != null && !newName.trim().isEmpty()) {
@@ -1120,6 +1274,7 @@ public class BudgetService {
         List<Object[]> rows = budgetRepository.findDashboardSummariesByUserId(user.getId());
         Map<String, List<Map<String, Object>>> budgetMap = new HashMap<>();
         budgetMap.put("active", new ArrayList<>());
+        budgetMap.put("scheduled", new ArrayList<>());
         budgetMap.put("completed", new ArrayList<>());
 
         LocalDate today = LocalDate.now();
@@ -1152,8 +1307,13 @@ public class BudgetService {
             budgetSummary.put("envelopeCount", envelopeCount);
             budgetSummary.put("remainingAmount", remainingAmount);
             budgetSummary.put("spentAmount", spentAmount);
+            budgetSummary.put("isFunded", status == BudgetStatus.ACTIVE || status == BudgetStatus.SCHEDULED);
 
-            if (status == BudgetStatus.ACTIVE && endDate != null && !endDate.isBefore(today)) {
+            if (status == BudgetStatus.SCHEDULED) {
+                long daysUntilStart = startDate != null ? ChronoUnit.DAYS.between(today, startDate) : 0;
+                budgetSummary.put("daysUntilStart", Math.max(0, daysUntilStart));
+                budgetMap.get("scheduled").add(budgetSummary);
+            } else if (status == BudgetStatus.ACTIVE && endDate != null && !endDate.isBefore(today)) {
                 // Quick-spend rail: attach the budget's envelopes sorted spendable-first so the
                 // dashboard can render tap-to-spend links without a second round-trip. Cap a little
                 // above the 3 the UI shows for headroom. Active budgets only — keeps the payload
