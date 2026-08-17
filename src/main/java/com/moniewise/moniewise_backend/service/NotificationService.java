@@ -568,6 +568,51 @@ public class NotificationService {
         outboxEventRepository.save(event);
     }
 
+    @Transactional
+    public Long enqueueAdminBroadcastNotification(Long userId,
+                                                  NotificationType type,
+                                                  String title,
+                                                  String message,
+                                                  String actionType,
+                                                  String redirectUrl,
+                                                  long ttlSeconds) {
+        if (userId == null) {
+            throw new IllegalArgumentException("userId is required");
+        }
+        if (type == null) {
+            throw new IllegalArgumentException("notification type is required");
+        }
+        if (message == null || message.isBlank()) {
+            throw new IllegalArgumentException("message is required");
+        }
+
+        Map<String, Object> payload = new java.util.HashMap<>();
+        if (title != null && !title.isBlank()) {
+            payload.put("__title", title);
+        }
+        payload.put("__message", message);
+        if (actionType != null && !actionType.isBlank()) {
+            payload.put("__actionType", actionType);
+        }
+        if (redirectUrl != null && !redirectUrl.isBlank()) {
+            payload.put("__redirectUrl", redirectUrl);
+            if (ACTION_OPEN_EXTERNAL_URL.equals(actionType)) {
+                payload.put("__androidUrl", redirectUrl);
+                payload.put("__iosUrl", redirectUrl);
+            }
+        }
+
+        OutboxEvent event = new OutboxEvent();
+        event.setEventType(type.name());
+        event.setUserId(userId);
+        event.setPayload(payload);
+        event.setStatus("PENDING");
+        event.setCreatedAt(LocalDateTime.now());
+        event.setTtlSeconds(ttlSeconds > 0 ? ttlSeconds : 86_400L);
+        outboxEventRepository.save(event);
+        return event.getId();
+    }
+
     // =========================================================================
     // 3. CORE FCM LOGIC
     // =========================================================================
@@ -591,6 +636,8 @@ public class NotificationService {
             case PRE_DISBURSEMENT, DISBURSEMENT_REMINDER                  -> 2_700_000L;   // 45 min
             case ONBOARDING_REMINDER                                      -> 7_200_000L;   // 2 h
             case SIGNUP_RETURN_NUDGE                                      -> 172_800_000L; // 48 h
+            case SERVICE_OUTAGE, SPECIAL_ANNOUNCEMENT                     -> 86_400_000L;  // 24 h
+            case SCHEDULED_MAINTENANCE                                    -> 259_200_000L; // 72 h
             case DISBURSEMENT_SUCCESS, DISBURSEMENT_READY, DISBURSEMENT,
                  WALLET_FUNDED, WALLET_DEPOSIT, EXTERNAL_TRANSFER,
                  ENVELOPE_TRANSFER, REFUND_ISSUED, DISBURSEMENT_REFUNDED,
@@ -760,6 +807,9 @@ public class NotificationService {
             case AUTO_TRANSFER_FAILED -> "Auto-Transfer Failed ❌";
             case AUTO_TRANSFER_INSUFFICIENT_FUNDS -> "Auto-Transfer Skipped ⚠️";
             case ADMIN_RECONCILIATION_ALERT -> "Reconciliation Alert";
+            case SERVICE_OUTAGE -> "Service Alert";
+            case SCHEDULED_MAINTENANCE -> "Scheduled Maintenance";
+            case SPECIAL_ANNOUNCEMENT -> "Wisemonie Update";
             case SYSTEM -> "System Update 📢";
             case POSITIVE_NUDGE -> "Keep it up! 💪";
             default -> "Wisemonie Notification";
@@ -799,6 +849,7 @@ public class NotificationService {
                     // it was missing here, falling to default LOW = push never sent.
                     SAVINGS_MATURED,
                     AUTO_TRANSFER_SUCCESS, AUTO_TRANSFER_FAILED, AUTO_TRANSFER_INSUFFICIENT_FUNDS,
+                    SERVICE_OUTAGE,
                     ADMIN_PAYEELORD_LOW_BALANCE,
                     ADMIN_RECONCILIATION_ALERT -> NotificationPriority.HIGH;
 
@@ -810,6 +861,7 @@ public class NotificationService {
                     SALARY_WEEK_NUDGE, POST_SALARY_NUDGE, MID_MONTH_NUDGE,
                     SPECIAL_OCCASION_NUDGE, BIRTHDAY_NUDGE, HOW_TO_USE_WISEMONIE,
                     SIGNUP_RETURN_NUDGE, ONBOARDING_REMINDER,
+                    SCHEDULED_MAINTENANCE, SPECIAL_ANNOUNCEMENT,
                     WELCOME -> NotificationPriority.MEDIUM;
             default -> NotificationPriority.LOW;
         };
@@ -879,6 +931,52 @@ public class NotificationService {
             logger.info("Sent HTML welcome email to {}", email);
         } catch (MessagingException e) {
             logger.error("Failed to send welcome email to {}", email, e);
+        }
+    }
+
+    public void sendAdminBroadcastEmail(String email,
+                                        String firstName,
+                                        String subject,
+                                        String tag,
+                                        String title,
+                                        String body,
+                                        String footerNote,
+                                        String ctaLabel,
+                                        String ctaUrl) {
+        if ("stub".equals(activeProfile) || mailSender == null) {
+            logger.info("[STUB] Sending admin broadcast email '{}' to {}", subject, email);
+            return;
+        }
+        try {
+            Context context = new Context();
+            context.setVariable("logoUrl", logoUrl());
+            context.setVariable("firstName", firstName != null && !firstName.isBlank() ? firstName : "there");
+            context.setVariable("subject", subject != null && !subject.isBlank() ? subject : "Wisemonie update");
+            context.setVariable("tag", tag != null && !tag.isBlank() ? tag : "Wisemonie update");
+            context.setVariable("title", title != null && !title.isBlank() ? title : "Wisemonie update");
+            context.setVariable("body", body != null && !body.isBlank() ? body : "We have an update for you.");
+            context.setVariable("footerNote", footerNote != null && !footerNote.isBlank()
+                    ? footerNote
+                    : "Thank you for using Wisemonie.");
+            context.setVariable("ctaLabel", ctaLabel != null && !ctaLabel.isBlank() ? ctaLabel : "Open Wisemonie");
+            context.setVariable("ctaUrl", ctaUrl != null && !ctaUrl.isBlank() ? ctaUrl : appBaseUrl);
+            context.setVariable("hasCta", ctaUrl != null && !ctaUrl.isBlank());
+
+            String htmlContent = templateEngine.process("admin-broadcast", context);
+
+            MimeMessage mimeMessage = mailSender.createMimeMessage();
+            MimeMessageHelper helper = new MimeMessageHelper(mimeMessage, true);
+
+            setWisemonieSender(helper);
+            helper.setTo(email);
+            helper.setSubject(subject != null && !subject.isBlank() ? subject : "Wisemonie update");
+            helper.setText(htmlContent, true);
+            attachLogo(helper);
+
+            mailSender.send(mimeMessage);
+            logger.info("Sent admin broadcast email '{}' to {}", subject, email);
+        } catch (Exception e) {
+            logger.error("Failed to send admin broadcast email '{}' to {}", subject, email, e);
         }
     }
 

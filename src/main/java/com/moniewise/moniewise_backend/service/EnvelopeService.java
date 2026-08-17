@@ -1908,8 +1908,11 @@ public class EnvelopeService {
                 }
                 break;
             case "weekly":
+            case "monthly":
+            case "quarterly":
+            case "biannual":
                 if (!conditions.containsKey("limit") || !(conditions.get("limit") instanceof Number)) {
-                    throw new IllegalArgumentException("Weekly envelope must include a numeric 'limit'");
+                    throw new IllegalArgumentException(type + " envelope must include a numeric 'limit'");
                 }
                 break;
             case "dynamic":

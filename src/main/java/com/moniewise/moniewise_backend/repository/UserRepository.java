@@ -4,6 +4,7 @@ import com.moniewise.moniewise_backend.entity.User;
 import com.moniewise.moniewise_backend.entity.UserSummary;
 import com.moniewise.moniewise_backend.enums.Role;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Slice;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Modifying;
@@ -16,6 +17,7 @@ import javax.persistence.LockModeType;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -606,6 +608,38 @@ List<UserSummary> searchUsers(@Param("query") String query, Pageable pageable);
             @Param("limit") int limit);
 
     Optional<User> findByEmail(String email);
+
+    @Query("""
+            SELECT u
+            FROM User u
+            WHERE u.isDeleted = false
+              AND (:includeTestAccounts = true OR u.testAccount = false)
+            ORDER BY u.id ASC
+            """)
+    Slice<User> findBroadcastRecipients(@Param("includeTestAccounts") boolean includeTestAccounts,
+                                        Pageable pageable);
+
+    @Query("""
+            SELECT u
+            FROM User u
+            WHERE u.isDeleted = false
+              AND (:includeTestAccounts = true OR u.testAccount = false)
+              AND u.id IN :ids
+            ORDER BY u.id ASC
+            """)
+    List<User> findBroadcastRecipientsByIds(@Param("ids") Collection<Long> ids,
+                                            @Param("includeTestAccounts") boolean includeTestAccounts);
+
+    @Query("""
+            SELECT u
+            FROM User u
+            WHERE u.isDeleted = false
+              AND (:includeTestAccounts = true OR u.testAccount = false)
+              AND lower(u.email) IN :emails
+            ORDER BY u.id ASC
+            """)
+    List<User> findBroadcastRecipientsByEmails(@Param("emails") Collection<String> emails,
+                                               @Param("includeTestAccounts") boolean includeTestAccounts);
 
     /**
      * Accounts where the user asked to close but a withdrawal still had to

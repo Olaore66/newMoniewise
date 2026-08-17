@@ -1086,6 +1086,9 @@ public class BudgetLifeCycleManager {
             // The Scheduler already checked the time. Trust the Scheduler.
             case "daily":
             case "weekly":
+            case "monthly":
+            case "quarterly":
+            case "biannual":
             case "dynamic":
 //                // 🛑 2. SAFETY CHECK FOR NEW ENVELOPES
 //                // If lastDisbursedAt is NULL (The Bug), assume it was created "Just Now" and fix the date
@@ -1375,6 +1378,22 @@ public class BudgetLifeCycleManager {
                 LocalDate lastWeekStart = lastRunDate.minusDays(lastRunDate.getDayOfWeek().getValue() - 1);
 
                 return thisWeekStart.isEqual(lastWeekStart);
+
+            case "monthly":
+                return today.getYear() == lastRunDate.getYear()
+                        && today.getMonthValue() == lastRunDate.getMonthValue();
+
+            case "quarterly": {
+                int thisQ = (today.getMonthValue() - 1) / 3;
+                int lastQ = (lastRunDate.getMonthValue() - 1) / 3;
+                return today.getYear() == lastRunDate.getYear() && thisQ == lastQ;
+            }
+
+            case "biannual": {
+                int thisH = today.getMonthValue() <= 6 ? 1 : 2;
+                int lastH = lastRunDate.getMonthValue() <= 6 ? 1 : 2;
+                return today.getYear() == lastRunDate.getYear() && thisH == lastH;
+            }
 
             default:
                 return false; // Default to "Run It" if type is unknown
@@ -1713,6 +1732,45 @@ public class BudgetLifeCycleManager {
                     logger.error("Error calculating dynamic time for envelope {}", envelope.getId(), e);
                 }
                 return null;
+
+            case "monthly": {
+                LocalDate nextMonth = last.toLocalDate().plusMonths(1).withDayOfMonth(1);
+                LocalDateTime target = nextMonth.atStartOfDay();
+                while (!target.isAfter(now)) {
+                    target = target.plusMonths(1).withDayOfMonth(1);
+                }
+                if (budgetStart != null && target.toLocalDate().isBefore(budgetStart)) {
+                    target = budgetStart.withDayOfMonth(1).atStartOfDay();
+                    if (!target.isAfter(now)) target = target.plusMonths(1).withDayOfMonth(1);
+                }
+                if (target.isAfter(budgetEnd.atTime(23, 59, 59))) return null;
+                return target;
+            }
+
+            case "quarterly": {
+                LocalDate lastDate = last.toLocalDate();
+                int qMonth = ((lastDate.getMonthValue() - 1) / 3) * 3 + 1;
+                LocalDate nextQ = LocalDate.of(lastDate.getYear(), qMonth, 1).plusMonths(3);
+                LocalDateTime target = nextQ.atStartOfDay();
+                while (!target.isAfter(now)) {
+                    target = target.plusMonths(3);
+                }
+                if (target.isAfter(budgetEnd.atTime(23, 59, 59))) return null;
+                return target;
+            }
+
+            case "biannual": {
+                LocalDate lastDate = last.toLocalDate();
+                int hStart = lastDate.getMonthValue() <= 6 ? 7 : 1;
+                int hYear = lastDate.getMonthValue() <= 6 ? lastDate.getYear() : lastDate.getYear() + 1;
+                LocalDateTime target = LocalDate.of(hYear, hStart, 1).atStartOfDay();
+                while (!target.isAfter(now)) {
+                    target = target.plusMonths(6);
+                }
+                if (target.isAfter(budgetEnd.atTime(23, 59, 59))) return null;
+                return target;
+            }
+
         case "safe_lock":
             case "strict_lock":
                 if (conditions.containsKey("lockStartDate") && conditions.containsKey("lockDurationDays")) {
