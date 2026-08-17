@@ -159,6 +159,8 @@ public class WalletService {
                 w.setCurrency(cur != null ? cur.toString() : "NGN");
                 Object acct = snap.get("accountNumber");
                 w.setAccountNumber(acct != null ? acct.toString() : null);
+                Object acctName = snap.get("accountName");
+                w.setAccountName(acctName != null ? acctName.toString() : null);
                 Object bank = snap.get("bankName");
                 w.setBankName(bank != null ? bank.toString() : null);
                 Object st = snap.get("status");
@@ -183,6 +185,7 @@ public class WalletService {
             snap.put("balance",        wallet.getBalance() != null ? wallet.getBalance().toPlainString() : "0");
             snap.put("currency",       wallet.getCurrency() != null ? wallet.getCurrency() : "NGN");
             snap.put("accountNumber",  wallet.getAccountNumber());
+            snap.put("accountName",    wallet.getAccountName());
             snap.put("bankName",       wallet.getBankName());
             snap.put("status",            wallet.getStatus() != null ? wallet.getStatus().name() : "ACTIVE");
             snap.put("providerName",      wallet.getProviderName());
@@ -541,6 +544,7 @@ public class WalletService {
         Map<String, String> virtualAccount = gateway.createVirtualAccount(user);
 
         wallet.setAccountNumber(virtualAccount.get("accountNumber"));
+        wallet.setAccountName(virtualAccount.get("accountName"));
         wallet.setBankName(virtualAccount.get("bank"));
 
         // optional provider fields: set only if returned
@@ -551,6 +555,15 @@ public class WalletService {
         wallet.setSubWalletRef(virtualAccount.get("subWalletRef"));
         wallet.setProviderStatus("ACTIVE");
         wallet.setLastBalanceSyncAt(LocalDateTime.now());
+
+        Map<String, Object> providerMetadata = new HashMap<>();
+        if (virtualAccount.get("accountName") != null) {
+            providerMetadata.put("accountName", virtualAccount.get("accountName"));
+        }
+        if (virtualAccount.get("bankCode") != null) {
+            providerMetadata.put("bankCode", virtualAccount.get("bankCode"));
+        }
+        wallet.setProviderMetadata(providerMetadata);
 
         return walletRepository.save(wallet);
     }
@@ -1413,6 +1426,31 @@ public class WalletService {
         return user != null ? resolveDisplayName(user) : "ACCOUNT HOLDER";
     }
 
+    public String resolveFundingAccountName(Wallet wallet, User user) {
+        if (wallet != null) {
+            String storedAccountName = safeString(wallet.getAccountName());
+            if (!storedAccountName.isBlank()) {
+                return storedAccountName;
+            }
+
+            Map<String, Object> metadata = wallet.getProviderMetadata();
+            if (metadata != null) {
+                String metadataAccountName = firstPresentMetadataValue(
+                        metadata,
+                        "accountName",
+                        "account_name",
+                        "walletAccountName",
+                        "wallet_account_name"
+                );
+                if (!metadataAccountName.isBlank()) {
+                    return metadataAccountName;
+                }
+            }
+        }
+
+        return user != null ? resolveDisplayName(user) : "ACCOUNT HOLDER";
+    }
+
     /** Resolves the user's display name from BVN profile fields, falling back to email prefix. */
     public String resolveDisplayName(User user) {
         Map<String, Object> profile = user.getProfileData() != null ? user.getProfileData() : Map.of();
@@ -1423,6 +1461,16 @@ public class WalletService {
         // Last resort: use the part of the email before @
         String email = user.getEmail();
         return email != null ? email.split("@")[0].toUpperCase() : "ACCOUNT HOLDER";
+    }
+
+    private String firstPresentMetadataValue(Map<String, Object> metadata, String... keys) {
+        for (String key : keys) {
+            String value = safeString(metadata.get(key));
+            if (!value.isBlank()) {
+                return value;
+            }
+        }
+        return "";
     }
 
     private String strFromProfile(Map<String, Object> profile, String... keys) {
