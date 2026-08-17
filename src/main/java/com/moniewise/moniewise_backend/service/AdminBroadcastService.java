@@ -104,10 +104,60 @@ public class AdminBroadcastService {
             throw new IllegalArgumentException("At least one of sendFcm or sendEmail must be true");
         }
 
+        boolean hasTargets = hasValues(request.getUserIds()) || hasValues(request.getEmails());
+        boolean allUsers = request.getAllUsers() == null ? !hasTargets : request.getAllUsers();
+
+        if (allUsers) {
+            emailDispatcher.executeBroadcastAsync(
+                    type, title, message, emailSubject, emailBody, tag,
+                    footerNote, ctaLabel, ctaUrl, pushActionType,
+                    sendFcm, sendEmail, includeTestAccounts, deliverNow,
+                    ttlSeconds, adminEmail, null, null
+            );
+
+            logger.info("[ADMIN-BROADCAST] admin={} type={} allUsers=true — dispatched to background",
+                    adminEmail, type);
+
+            return new AdminBroadcastResponse(
+                    true,
+                    type.name(),
+                    -1,
+                    0,
+                    0,
+                    0,
+                    deliverNow,
+                    List.of(),
+                    type.name() + " broadcast accepted — delivering in background via "
+                            + (sendFcm && sendEmail ? "FCM and email" : sendFcm ? "FCM" : "email") + "."
+            );
+        }
+
         RecipientSelection selection = resolveRecipients(request, includeTestAccounts);
         List<User> recipients = selection.users();
-        List<AdminBroadcastEmailDispatcher.Recipient> emailRecipients = new ArrayList<>();
 
+        if (recipients.size() > 50) {
+            List<Long> recipientIds = recipients.stream().map(User::getId).toList();
+            emailDispatcher.executeBroadcastAsync(
+                    type, title, message, emailSubject, emailBody, tag,
+                    footerNote, ctaLabel, ctaUrl, pushActionType,
+                    sendFcm, sendEmail, includeTestAccounts, deliverNow,
+                    ttlSeconds, adminEmail, recipientIds, null
+            );
+
+            return new AdminBroadcastResponse(
+                    true,
+                    type.name(),
+                    recipients.size(),
+                    0,
+                    0,
+                    0,
+                    deliverNow,
+                    selection.skippedTargets(),
+                    type.name() + " broadcast accepted for " + recipients.size() + " recipients — delivering in background."
+            );
+        }
+
+        List<AdminBroadcastEmailDispatcher.Recipient> emailRecipients = new ArrayList<>();
         int fcmQueued = 0;
         int fcmDeliveryAttempts = 0;
 
