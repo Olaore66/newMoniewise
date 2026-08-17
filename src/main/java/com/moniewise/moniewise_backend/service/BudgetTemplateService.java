@@ -157,6 +157,38 @@ public class BudgetTemplateService {
                 ? request.getStartDate()
                 : LocalDate.now(ZoneId.of("Africa/Lagos"));
 
+        long durationDays = java.time.temporal.ChronoUnit.DAYS.between(startDate, request.getEndDate()) + 1;
+        for (Map<String, Object> def : template.getEnvelopeDefinitions()) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> cond = (Map<String, Object>) def.get("conditions");
+            if (cond == null) continue;
+            String type = cond.get("type") != null ? cond.get("type").toString() : "";
+            String envName = (String) def.get("name");
+            switch (type) {
+                case "monthly":
+                    if (durationDays < 28) {
+                        throw new IllegalArgumentException(
+                                "Envelope \"" + envName + "\" is monthly but your budget is only "
+                                        + durationDays + " days. Monthly envelopes need at least 28 days.");
+                    }
+                    break;
+                case "quarterly":
+                    if (durationDays < 85) {
+                        throw new IllegalArgumentException(
+                                "Envelope \"" + envName + "\" is quarterly but your budget is only "
+                                        + durationDays + " days. Quarterly envelopes need at least 85 days.");
+                    }
+                    break;
+                case "biannual":
+                    if (durationDays < 170) {
+                        throw new IllegalArgumentException(
+                                "Envelope \"" + envName + "\" is biannual but your budget is only "
+                                        + durationDays + " days. Biannual envelopes need at least 170 days.");
+                    }
+                    break;
+            }
+        }
+
         List<EnvelopeRequest> envelopeRequests = new ArrayList<>();
         for (Map<String, Object> def : template.getEnvelopeDefinitions()) {
             EnvelopeRequest env = new EnvelopeRequest();
