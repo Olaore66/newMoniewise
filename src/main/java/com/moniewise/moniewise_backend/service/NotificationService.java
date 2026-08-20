@@ -751,7 +751,7 @@ public class NotificationService {
                 } catch (Exception ex) {
                     logger.error("[FCM] Failed to clear dead token for user {}", userId, ex);
                 }
-                // Do NOT rethrow — dead token errors are permanent, not retriable.
+                throw new DeadTokenException(fcmToken);
             } else {
                 // Transient error (QUOTA_EXCEEDED, INTERNAL, UNAVAILABLE, etc.)
                 // Rethrow so the outbox worker marks the event as PENDING and retries.
@@ -2030,6 +2030,8 @@ public class NotificationService {
                 sendFCMMessage(target.token(), plan.title, plan.message, actionType, redirectUrl,
                         plan.type, plan.userId, plan.envelopeId, target.devicePlatform());
                 delivered.add(target.token());
+            } catch (DeadTokenException ignored) {
+                // Token was permanently invalid — already cleaned up, don't count as delivered
             } catch (RuntimeException fcmError) {
                 transientError = fcmError.getMessage(); // stop; persist progress + retry below
                 break;

@@ -156,6 +156,10 @@ List<UserSummary> searchUsers(@Param("query") String query, Pageable pageable);
     @Query("UPDATE User u SET u.fcmToken = NULL WHERE u.id = :id")
     void clearFcmToken(@Param("id") Long id);
 
+    @Modifying
+    @Query("UPDATE User u SET u.fcmToken = NULL WHERE u.fcmToken = :token")
+    void clearFcmTokenByToken(@Param("token") String token);
+
     /**
      * Finds "abandoned signups" — users who registered but never finished
      * onboarding, i.e. they have NEITHER a wallet NOR a KYC profile.

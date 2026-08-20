@@ -111,6 +111,7 @@ public class AuthSessionService {
     @Transactional
     public void clearDeadFcmToken(String token) {
         authSessionRepository.clearFcmTokenByToken(token);
+        userRepository.clearFcmTokenByToken(token);
     }
 
     private String normalizeDevicePlatform(String value) {
