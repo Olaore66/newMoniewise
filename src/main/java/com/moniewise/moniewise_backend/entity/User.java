@@ -155,6 +155,9 @@ public class User {
     @Column(name = "profile_image_blob_name", columnDefinition = "TEXT")
     private String profileImageBlobName;
 
+    @Column(name = "referral_source", length = 50)
+    private String referralSource;
+
     // For JwtUtil compatibility (pass email as token subject)
     public String getUsername() {
         return email;

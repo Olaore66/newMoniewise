@@ -743,6 +743,10 @@ public class UserService implements UserDetailsService {
         profileData.put("savingsGoal", request.getSavingsGoal());
         profileData.put("occupation", request.getOccupation());
 
+        if (request.getReferralSource() != null && !request.getReferralSource().isBlank()) {
+            user.setReferralSource(request.getReferralSource().trim());
+        }
+
 //        if (request.getDob() != null) {
 //            // Keep the raw list for backward-compatibility with the frontend model.
 //            profileData.put("dob", request.getDob());
