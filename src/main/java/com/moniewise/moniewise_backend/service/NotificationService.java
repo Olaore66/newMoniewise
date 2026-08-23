@@ -833,6 +833,11 @@ public class NotificationService {
             case DISBURSEMENT, DISBURSEMENT_SUCCESS, DISBURSEMENT_READY ->
                     "DISB_" + (userId != null ? userId : "0")
                             + "_" + (envelopeId != null ? envelopeId : "0");
+            case AUTO_TRANSFER_SUCCESS, AUTO_TRANSFER_FAILED, AUTO_TRANSFER_INSUFFICIENT_FUNDS ->
+                    "AUTOXFER_" + (userId != null ? userId : "0")
+                            + "_" + (envelopeId != null ? envelopeId : "0");
+            case BUDGET_ACTIVATED ->
+                    "BUDGETACT_" + (userId != null ? userId : "0");
             case WALLET_DEPOSIT, WALLET_FUNDED, ENVELOPE_TRANSFER -> "TRANSACTIONS";
             case LOW_BALANCE_WARNING, BUDGET_LIMIT_WARNING -> "WARNINGS";
             default -> "GENERAL";
@@ -2142,17 +2147,27 @@ public class NotificationService {
         }
 
         if (tokensToPush.isEmpty()) {
-            // Nothing to push (not eligible, no active token, or all already delivered).
-            // redeliverMissedPushes() covers the no-token case via the pushSent=false flag.
-            if (pushEligible && pushTargets.isEmpty()) {
-                logger.info("[OUTBOX] No active token for user {} — will redeliver on next token registration",
-                        event.getUserId());
+            // Diagnose WHY no push is being sent — critical for HIGH-priority events.
+            if (!pushEligible) {
+                logger.info("[OUTBOX] Delivered event {} type={} (no push: priority=LOW)",
+                        event.getId(), event.getEventType());
+            } else if ("stub".equals(activeProfile)) {
+                logger.warn("[OUTBOX] Delivered event {} type={} (no push: stub profile)",
+                        event.getId(), event.getEventType());
+            } else if (firebaseMessaging == null) {
+                logger.error("[OUTBOX] Delivered event {} type={} (no push: Firebase NOT initialized)",
+                        event.getId(), event.getEventType());
+            } else if (pushTargets.isEmpty()) {
+                logger.warn("[OUTBOX] Delivered event {} type={} (no push: no FCM token for user {}) — will redeliver on next token registration",
+                        event.getId(), event.getEventType(), event.getUserId());
+            } else {
+                logger.info("[OUTBOX] Delivered event {} type={} (no push: all {} token(s) already delivered)",
+                        event.getId(), event.getEventType(), alreadyDelivered.size());
             }
             event.setStatus("PROCESSED");
             event.setProcessedAt(LocalDateTime.now());
             event.setLastError(null);
             outboxEventRepository.save(event);
-            logger.info("[OUTBOX] Delivered event {} type={} (no push)", event.getId(), event.getEventType());
             return null;
         }
 
