@@ -1,10 +1,12 @@
 package com.moniewise.moniewise_backend.entity;
 
+import com.vladmihalcea.hibernate.type.json.JsonBinaryType;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 import org.hibernate.annotations.Type;
+import org.hibernate.annotations.TypeDef;
 
 import javax.persistence.*;
 import java.time.LocalDateTime;
@@ -12,6 +14,7 @@ import java.util.Map;
 
 @Entity
 @Table(name = "user_events")
+@TypeDef(name = "jsonb", typeClass = JsonBinaryType.class)
 @Getter
 @Setter
 @NoArgsConstructor
@@ -30,6 +33,7 @@ public class UserEvent {
     @Column(name = "screen_name", length = 100)
     private String screenName;
 
+    @Convert(disableConversion = true)
     @Type(type = "jsonb")
     @Column(columnDefinition = "jsonb")
     private Map<String, Object> metadata;
