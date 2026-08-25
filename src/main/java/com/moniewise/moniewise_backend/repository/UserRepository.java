@@ -221,27 +221,26 @@ List<UserSummary> searchUsers(@Param("query") String query, Pageable pageable);
             @Param("limit") int limit);
 
     /**
-     * Recent wallet users who may need the "How to use Wisemonie" guide:
-     * either their wallet balance is still zero OR they have no active budget.
+     * Recent users with a ready wallet who may need the "How to use Wisemonie"
+     * guide because they have not funded the wallet and have no active budget.
      */
     @Query(value = """
             SELECT u.*
             FROM users u
+            JOIN wallets w ON w.user_id = u.id
             WHERE u.is_deleted = false
               AND u.id > :afterUserId
               AND u.is_verified = true
               AND coalesce(u.test_account, false) = false
+              AND w.status = 'ACTIVE'
+              AND coalesce(w.is_revenue_wallet, false) = false
+              AND w.account_number IS NOT NULL
+              AND btrim(w.account_number) <> ''
+              AND coalesce(w.balance, 0) <= 0
               AND u.email IS NOT NULL
               AND btrim(u.email) <> ''
               AND u.created_at >= :createdAfter
               AND u.created_at <= :createdBefore
-              AND NOT EXISTS (
-                    SELECT 1
-                    FROM wallets w_funded
-                    WHERE w_funded.user_id = u.id
-                      AND coalesce(w_funded.is_revenue_wallet, false) = false
-                      AND coalesce(w_funded.balance, 0) > 0
-              )
               AND NOT EXISTS (
                     SELECT 1
                     FROM budgets b_active

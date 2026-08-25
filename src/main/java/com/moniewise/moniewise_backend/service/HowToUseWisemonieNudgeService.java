@@ -166,7 +166,12 @@ public class HowToUseWisemonieNudgeService {
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public boolean sendHowToUseNudgeIfAllowed(User user, LocalDateTime now) {
-        if (user == null || user.getId() == null || user.isDeleted() || user.isTestAccount() || !hasEmail(user)) {
+        if (user == null || user.getId() == null || user.isDeleted() || user.isTestAccount()
+                || !user.isVerified() || !hasEmail(user)) {
+            return false;
+        }
+
+        if (!walletRepository.existsReadyUserWallet(user.getId())) {
             return false;
         }
 
@@ -284,7 +289,7 @@ public class HowToUseWisemonieNudgeService {
         return List.of(
                 new GuideCopy(
                         "how-to-use-01",
-                        "your Wisemonie account is ready \uD83E\uDDED",
+                        "your Wisemonie wallet is ready \uD83E\uDDED",
                         "Thank you for downloading Wisemonie. You probably came because you want money to feel less scattered and more intentional. The first step can feel unclear, so we made a short video guide for you. Watch \""
                                 + GUIDE_VIDEO_TITLE
                                 + "\" to see how to fund your wallet, create a simple budget, use envelopes and spend from your plan without mental maths.",
@@ -348,8 +353,8 @@ public class HowToUseWisemonieNudgeService {
                 new GuideCopy(
                         "how-to-use-10",
                         "make Wisemonie useful today \uD83D\uDE0A",
-                        "Your account is ready. The next step is simply understanding the flow: fund wallet, create budget, split into envelopes, set when money is available, then spend with more peace. The video shows it clearly.",
-                        "your account is ready. Watch the quick video and make Wisemonie useful today:")
+                        "Your wallet is ready. The next step is simply understanding the flow: fund wallet, create budget, split into envelopes, set when money is available, then spend with more peace. The video shows it clearly.",
+                        "your wallet is ready. Watch the quick video and make Wisemonie useful today:")
         );
     }
 
