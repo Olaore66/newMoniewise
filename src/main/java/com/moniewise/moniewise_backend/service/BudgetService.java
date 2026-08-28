@@ -13,6 +13,7 @@ import com.moniewise.moniewise_backend.enums.NotificationType;
 import com.moniewise.moniewise_backend.enums.SavingsStatus;
 import com.moniewise.moniewise_backend.enums.TransactionStatus;
 import com.moniewise.moniewise_backend.exception.InsufficientFundsException;
+import com.moniewise.moniewise_backend.psp.rubies.RubiesGateway;
 import com.moniewise.moniewise_backend.repository.*;
 import com.moniewise.moniewise_backend.service.SystemConfigService;
 import org.slf4j.Logger;
@@ -23,6 +24,8 @@ import org.springframework.context.annotation.Lazy;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import javax.annotation.PostConstruct;
 import java.math.BigDecimal;
@@ -840,7 +843,8 @@ public class BudgetService {
             feeLog.setAmount(fee.negate());
             feeLog.setFee(BigDecimal.ZERO);
             feeLog.setTransactionType(BUDGET_CREATION_FEE);
-            feeLog.setReference("BUD-FEE-" + savedBudget.getId() + "-" + System.currentTimeMillis());
+            String feeReference = "BUD-FEE-" + savedBudget.getId() + "-" + System.currentTimeMillis();
+            feeLog.setReference(feeReference);
             feeLog.setDescription("Budget creation fee");
             feeLog.setStatus(TransactionStatus.COMPLETED);
             feeLog.setCreatedAt(now);
@@ -856,6 +860,8 @@ public class BudgetService {
                 revenueLog.setCreatedAt(now);
                 revenueLogRepository.save(revenueLog);
             }
+
+            collectRubiesBudgetCreationFeeAfterCommit(user.getId(), fee, feeReference);
         }
 
         // === NOTIFICATION ===
@@ -1619,6 +1625,55 @@ public class BudgetService {
 
         walletService.deductBalance(userId, feeAmount);
         logger.info("[Budget] Budget creation fee of ₦{} deducted from user {}", feeAmount, userId);
+    }
+
+    private void collectRubiesBudgetCreationFeeAfterCommit(Long userId, BigDecimal feeAmount, String feeReference) {
+        if (feeAmount == null || feeAmount.compareTo(BigDecimal.ZERO) <= 0
+                || feeReference == null || feeReference.isBlank()) {
+            return;
+        }
+
+        Wallet userWallet = walletRepository.findByUserId(userId).orElse(null);
+        if (userWallet == null) {
+            logger.warn("[Budget] Cannot collect budget creation fee physically: wallet not found for user {}", userId);
+            return;
+        }
+        if (!RubiesGateway.PROVIDER_NAME.equalsIgnoreCase(userWallet.getProviderName())) {
+            return;
+        }
+        if (userWallet.getProviderWalletRef() == null || userWallet.getProviderWalletRef().isBlank()) {
+            logger.warn("[Budget] Cannot collect budget creation fee physically: Rubies wallet ref missing for user {}",
+                    userId);
+            return;
+        }
+
+        String fromWalletRef = userWallet.getProviderWalletRef();
+        String debitName = walletService.resolveDisplayNameByUserId(userId);
+        Runnable collectFee = () -> {
+            try {
+                walletService.collectRubiesBudgetCreationFeeAsync(
+                        feeAmount,
+                        fromWalletRef,
+                        debitName,
+                        feeReference,
+                        userId
+                );
+            } catch (Exception e) {
+                logger.error("[Budget] Failed to enqueue Rubies budget creation fee collection for ref={}: {}",
+                        feeReference, e.getMessage());
+            }
+        };
+
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    collectFee.run();
+                }
+            });
+        } else {
+            collectFee.run();
+        }
     }
 
     private EnvelopeResponse mapEnvelopeToResponse(Envelope envelope, Budget budget, String email) {

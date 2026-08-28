@@ -6,6 +6,7 @@ import com.moniewise.moniewise_backend.enums.TransactionStatus;
 import com.moniewise.moniewise_backend.psp.rubies.RubiesGateway;
 import com.moniewise.moniewise_backend.repository.TransactionLogRepository;
 import com.moniewise.moniewise_backend.repository.WalletRepository;
+import com.moniewise.moniewise_backend.service.BudgetFeeBackfillService;
 import com.moniewise.moniewise_backend.service.ExternalTransferSettlementService;
 import com.moniewise.moniewise_backend.service.SystemConfigService;
 import org.slf4j.Logger;
@@ -43,17 +44,20 @@ public class RubiesAdminController {
     private final WalletRepository walletRepository;
     private final TransactionLogRepository transactionLogRepository;
     private final ExternalTransferSettlementService settlementService;
+    private final BudgetFeeBackfillService budgetFeeBackfillService;
 
     public RubiesAdminController(RubiesGateway rubiesGateway,
                                  SystemConfigService systemConfig,
                                  WalletRepository walletRepository,
                                  TransactionLogRepository transactionLogRepository,
-                                 ExternalTransferSettlementService settlementService) {
+                                 ExternalTransferSettlementService settlementService,
+                                 BudgetFeeBackfillService budgetFeeBackfillService) {
         this.rubiesGateway            = rubiesGateway;
         this.systemConfig             = systemConfig;
         this.walletRepository         = walletRepository;
         this.transactionLogRepository = transactionLogRepository;
         this.settlementService        = settlementService;
+        this.budgetFeeBackfillService = budgetFeeBackfillService;
     }
 
     /**
@@ -482,6 +486,40 @@ public class RubiesAdminController {
                 "errorRefs",   errorRefs,
                 "message",     settled + " transfer(s) settled, " + skipped + " error(s)."
         ));
+    }
+
+    /**
+     * POST /admin/rubies/backfill-budget-fees
+     *
+     * <p>Backfills historical budget creation fees that were deducted internally
+     * but never physically swept from users' Rubies wallets into the Moniewise
+     * Rubies revenue wallet.
+     *
+     * <p>Dry-run is the default. Call with {@code dryRun=false} only after checking
+     * the preview response.
+     *
+     * <p>Examples:
+     * <pre>
+     * POST /admin/rubies/backfill-budget-fees
+     * POST /admin/rubies/backfill-budget-fees?dryRun=false&limit=100
+     * POST /admin/rubies/backfill-budget-fees?dryRun=false&budgetId=42
+     * POST /admin/rubies/backfill-budget-fees?dryRun=false&userId=102
+     * </pre>
+     */
+    @PostMapping("/backfill-budget-fees")
+    public ResponseEntity<?> backfillBudgetFees(
+            @RequestParam(defaultValue = "true") boolean dryRun,
+            @RequestParam(defaultValue = "100") int limit,
+            @RequestParam(required = false) Long userId,
+            @RequestParam(required = false) Long budgetId,
+            @RequestParam(defaultValue = "true") boolean retryFailed) {
+
+        return ResponseEntity.ok(budgetFeeBackfillService.backfillMissingRubiesBudgetFees(
+                dryRun,
+                limit,
+                userId,
+                budgetId,
+                retryFailed));
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────

@@ -66,6 +66,10 @@ public interface TransactionLogRepository extends JpaRepository<TransactionLog, 
     List<TransactionLog> findByUserId(Long userId);
     List<TransactionLog> findByBudgetId(Long budgetId);
 
+    List<TransactionLog> findByBudgetIdAndTransactionTypeOrderByCreatedAtAsc(
+            Long budgetId,
+            TransactionType transactionType);
+
     @Query("SELECT t FROM TransactionLog t WHERE t.userId = :userId " +
             "AND t.transactionType IN :types " +
             "ORDER BY t.createdAt DESC")

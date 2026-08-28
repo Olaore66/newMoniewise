@@ -1875,6 +1875,22 @@ public class WalletService {
     }
 
     /**
+     * Physically moves a budget creation fee from the user's Rubies wallet into
+     * Moniewise's Rubies revenue/internal account. The user-facing debit remains
+     * the {@link TransactionType#BUDGET_CREATION_FEE} log written by BudgetService;
+     * this internal REV-* log exists only for provider-level collection tracking.
+     */
+    public void collectRubiesBudgetCreationFeeAsync(
+            BigDecimal feeAmount,
+            String fromWalletRef,
+            String fromWalletName,
+            String originalRef,
+            Long userId) {
+        collectRubiesToRevenueAsync(feeAmount, fromWalletRef, fromWalletName, originalRef, userId,
+                TransactionType.BUDGET_FEE_COLLECTION, "Budget creation fee");
+    }
+
+    /**
      * Shared core for both Rubies-to-revenue collectors. {@code label} drives the
      * human-readable log/narration text and {@code txnType} the ledger category.
      * Reference is always {@code REV-{originalRef}} (idempotent retry key).
@@ -1953,9 +1969,9 @@ public class WalletService {
                 logger.warn("[Rubies-Fee] Could not write SKIPPED fee log for ref={}: {}", skipRef, ex.getMessage());
             }
             logger.error("[Rubies-Fee] *** Revenue account NOT CONFIGURED *** — " +
-                    "₦{} markup fee for ref={} was NOT transferred to Moniewise revenue wallet. " +
+                    "₦{} {} for ref={} was NOT transferred to Moniewise revenue wallet. " +
                     "Register the account via POST /admin/rubies/register-revenue-wallet",
-                    feeAmount, originalRef);
+                    feeAmount, label.toLowerCase(Locale.ROOT), originalRef);
             return;
         }
 
@@ -2005,14 +2021,25 @@ public class WalletService {
                             .build());
                 }
             } catch (Exception ex) {
-                logger.warn("[Rubies-Fee] Could not write/reset PENDING fee log for ref={}: {}",
+                logger.warn("[Rubies-Fee] Could not write/reset PENDING collection log for ref={}: {}",
                         revRef, ex.getMessage());
-                // Proceed anyway — we still want to attempt the transfer even if the log write failed
-                feeLog = null;
+                try {
+                    TransactionLog existing = transactionLogRepository.findByReference(revRef).orElse(null);
+                    if (existing != null) {
+                        logger.info("[Rubies-Fee] Collection log already exists for ref={} with status={} — skipping duplicate provider call.",
+                                revRef, existing.getStatus());
+                        return;
+                    }
+                } catch (Exception lookupEx) {
+                    logger.warn("[Rubies-Fee] Could not re-check collection log for ref={}: {}",
+                            revRef, lookupEx.getMessage());
+                }
+                logger.error("[Rubies-Fee] No collection log could be claimed for ref={} — provider transfer not attempted.",
+                        revRef);
+                return;
             }
 
             // ── 2. Fire Rubies-to-Rubies P2P ─────────────────────────────────────
-            final TransactionLog logRef = feeLog;
             try {
                 PaymentGateway rubies = paymentGatewayResolver
                         .resolveByProviderName(RubiesGateway.PROVIDER_NAME);
@@ -2033,8 +2060,8 @@ public class WalletService {
                     log.setStatus(TransactionStatus.COMPLETED);
                     transactionLogRepository.save(log);
                 });
-                logger.info("[Rubies-Fee] ₦{} markup fee transferred to revenue wallet. ref={}",
-                        feeAmount, revRef);
+                logger.info("[Rubies-Fee] ₦{} {} transferred to revenue wallet. ref={}",
+                        feeAmount, label.toLowerCase(Locale.ROOT), revRef);
 
             } catch (Exception e) {
                 // ── 4. Update log to FAILED ───────────────────────────────────────
