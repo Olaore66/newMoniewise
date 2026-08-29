@@ -7,6 +7,7 @@ import com.moniewise.moniewise_backend.enums.SavingsStatus;
 import com.moniewise.moniewise_backend.enums.TransactionStatus;
 import com.moniewise.moniewise_backend.enums.TransactionType;
 import com.moniewise.moniewise_backend.repository.*;
+import com.moniewise.moniewise_backend.service.BadgeAwardService;
 import com.moniewise.moniewise_backend.service.EnvelopeAutoTransferService;
 import com.moniewise.moniewise_backend.service.EnvelopeService;
 import com.moniewise.moniewise_backend.service.MonnieCacheInvalidationService;
@@ -58,6 +59,7 @@ public class BudgetLifeCycleManager {
     private final EnvelopeAutoTransferService envelopeAutoTransferService;
     private final SavingsGoalRepository savingsGoalRepository;
     private final SavingsService savingsService;
+    private final BadgeAwardService badgeAwardService;
 
     private final OutboxEventRepository outboxEventRepository;
 
@@ -81,7 +83,8 @@ public class BudgetLifeCycleManager {
             OutboxEventRepository outboxEventRepository, ApplicationEventPublisher eventPublisher,
             @Lazy EnvelopeAutoTransferService envelopeAutoTransferService,
             SavingsGoalRepository savingsGoalRepository,
-            SavingsService savingsService) {
+            SavingsService savingsService,
+            BadgeAwardService badgeAwardService) {
         this.budgetRepository = budgetRepository;
         this.envelopeRepository = envelopeRepository;
         this.scheduledTaskRepository = scheduledTaskRepository;
@@ -98,6 +101,7 @@ public class BudgetLifeCycleManager {
         this.envelopeAutoTransferService = envelopeAutoTransferService;
         this.savingsGoalRepository = savingsGoalRepository;
         this.savingsService = savingsService;
+        this.badgeAwardService = badgeAwardService;
     }
 
     @PostConstruct
@@ -1043,6 +1047,7 @@ public class BudgetLifeCycleManager {
         budget.setStatus(BudgetStatus.COMPLETED);
         budget.setRemainingAmount(BigDecimal.ZERO);
         budgetsToUpdate.add(budget);
+        badgeAwardService.awardBudgetCompletionBadgeAfterCommit(user, budget, totalRefunded);
 
         logger.info(
                 "Budget {} completed. Refundable total ₦{} sent to user {}.",

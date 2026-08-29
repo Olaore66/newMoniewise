@@ -66,6 +66,23 @@ public interface TransactionLogRepository extends JpaRepository<TransactionLog, 
     List<TransactionLog> findByUserId(Long userId);
     List<TransactionLog> findByBudgetId(Long budgetId);
 
+    @Query("""
+        SELECT t FROM TransactionLog t
+        WHERE t.userId = :userId
+          AND (
+              t.budgetId = :budgetId
+              OR t.sourceEnvelopeId IN (
+                  SELECT e.id FROM Envelope e WHERE e.budget.id = :budgetId
+              )
+              OR t.targetEnvelopeId IN (
+                  SELECT e.id FROM Envelope e WHERE e.budget.id = :budgetId
+              )
+          )
+        """)
+    List<TransactionLog> findBudgetActivityLogs(
+            @Param("userId") Long userId,
+            @Param("budgetId") Long budgetId);
+
     List<TransactionLog> findByBudgetIdAndTransactionTypeOrderByCreatedAtAsc(
             Long budgetId,
             TransactionType transactionType);

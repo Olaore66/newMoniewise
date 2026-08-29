@@ -4,6 +4,7 @@ import com.moniewise.moniewise_backend.entity.SavingsGoal;
 import com.moniewise.moniewise_backend.enums.NotificationType;
 import com.moniewise.moniewise_backend.enums.SavingsStatus;
 import com.moniewise.moniewise_backend.repository.SavingsGoalRepository;
+import com.moniewise.moniewise_backend.service.BadgeAwardService;
 import com.moniewise.moniewise_backend.service.NotificationService;
 import com.moniewise.moniewise_backend.service.SavingsCacheService;
 import org.slf4j.Logger;
@@ -35,13 +36,16 @@ public class SavingsLifeCycleManager {
     private final SavingsGoalRepository savingsGoalRepository;
     private final NotificationService notificationService;
     private final SavingsCacheService savingsCacheService;
+    private final BadgeAwardService badgeAwardService;
 
     public SavingsLifeCycleManager(SavingsGoalRepository savingsGoalRepository,
                                    NotificationService notificationService,
-                                   SavingsCacheService savingsCacheService) {
+                                   SavingsCacheService savingsCacheService,
+                                   BadgeAwardService badgeAwardService) {
         this.savingsGoalRepository = savingsGoalRepository;
         this.notificationService = notificationService;
         this.savingsCacheService = savingsCacheService;
+        this.badgeAwardService = badgeAwardService;
     }
 
     /**
@@ -152,6 +156,7 @@ public class SavingsLifeCycleManager {
         goal.setStatus(SavingsStatus.MATURED);
         savingsGoalRepository.save(goal);
         savingsCacheService.evictUserSavingsCachesAfterCommit(goal.getUser().getId());
+        badgeAwardService.awardSavingsMaturedBadgeAfterCommit(goal);
 
         logger.info("🎉 Savings Goal '{}' (ID: {}) for User {} has MATURED!",
                 goal.getName(), goal.getId(), goal.getUser().getId());

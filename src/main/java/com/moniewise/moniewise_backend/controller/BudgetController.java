@@ -2,6 +2,7 @@ package com.moniewise.moniewise_backend.controller;
 
 import com.moniewise.moniewise_backend.dto.request.BudgetRequest;
 import com.moniewise.moniewise_backend.dto.request.LockRequest;
+import com.moniewise.moniewise_backend.dto.response.BudgetCompletionAnalyticsResponse;
 import com.moniewise.moniewise_backend.dto.response.BudgetResponse;
 import com.moniewise.moniewise_backend.dto.response.EnvelopeResponse;
 import com.moniewise.moniewise_backend.entity.ScheduledTask;
@@ -9,6 +10,7 @@ import com.moniewise.moniewise_backend.entity.User;
 import com.moniewise.moniewise_backend.exception.InsufficientFundsException;
 import com.moniewise.moniewise_backend.repository.BudgetRepository;
 import com.moniewise.moniewise_backend.repository.ScheduledTaskRepository;
+import com.moniewise.moniewise_backend.service.BudgetCompletionAnalyticsService;
 import com.moniewise.moniewise_backend.service.BudgetService;
 import com.moniewise.moniewise_backend.service.EnvelopeService;
 import com.moniewise.moniewise_backend.service.UserService;
@@ -54,6 +56,9 @@ public class BudgetController {
 
     @Autowired
     private ScheduledTaskRepository scheduledTaskRepository;
+
+    @Autowired
+    private BudgetCompletionAnalyticsService budgetCompletionAnalyticsService;
 
     private static final Logger logger = LoggerFactory.getLogger(BudgetController.class);
 
@@ -133,6 +138,26 @@ public class BudgetController {
             return ResponseEntity.status(HttpStatus.FORBIDDEN).body(e.getMessage());
         } catch (Exception e) {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("Error fetching envelopes: " + e.getMessage());
+        }
+    }
+
+    @GetMapping("/{budgetId}/completion-analytics")
+    public ResponseEntity<?> getBudgetCompletionAnalytics(@PathVariable Long budgetId, Authentication authentication) {
+        try {
+            User user = userService.findByEmail(authentication.getName());
+            BudgetCompletionAnalyticsResponse response =
+                    budgetCompletionAnalyticsService.getCompletionAnalytics(user.getId(), budgetId);
+            return ResponseEntity.ok(response);
+        } catch (SecurityException e) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of("error", e.getMessage()));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("error", e.getMessage()));
+        } catch (IllegalStateException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        } catch (Exception e) {
+            logger.error("Error fetching completion analytics for budget {}", budgetId, e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", "Failed to fetch budget completion analytics"));
         }
     }
 
@@ -468,5 +493,4 @@ public class BudgetController {
     }
 
 }
-
 
