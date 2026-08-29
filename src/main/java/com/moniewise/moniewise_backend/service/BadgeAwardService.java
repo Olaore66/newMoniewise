@@ -16,6 +16,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -38,18 +40,19 @@ public class BadgeAwardService {
     private final BadgeRepository badgeRepository;
     private final UserBadgeRepository userBadgeRepository;
     private final UserRepository userRepository;
-    private final TransactionTemplate transactionTemplate;
+    private final TransactionTemplate requiresNewTransactionTemplate;
     private final SimpMessagingTemplate messagingTemplate;
 
     public BadgeAwardService(BadgeRepository badgeRepository,
                              UserBadgeRepository userBadgeRepository,
                              UserRepository userRepository,
-                             TransactionTemplate transactionTemplate,
+                             PlatformTransactionManager transactionManager,
                              SimpMessagingTemplate messagingTemplate) {
         this.badgeRepository = badgeRepository;
         this.userBadgeRepository = userBadgeRepository;
         this.userRepository = userRepository;
-        this.transactionTemplate = transactionTemplate;
+        this.requiresNewTransactionTemplate = new TransactionTemplate(transactionManager);
+        this.requiresNewTransactionTemplate.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
         this.messagingTemplate = messagingTemplate;
     }
 
@@ -213,7 +216,7 @@ public class BadgeAwardService {
 
     private UserBadgeResponse persistAward(AwardCommand command) {
         try {
-            return transactionTemplate.execute(status -> {
+            return requiresNewTransactionTemplate.execute(status -> {
                 if (userBadgeRepository.findAward(
                         command.userId(),
                         command.badgeCode(),

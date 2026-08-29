@@ -536,7 +536,6 @@ public class BudgetLifeCycleManager {
         }
     }
 
-    @Transactional(timeout = 120)
     @Scheduled(cron = "0 */15 * * * ?", zone = "Africa/Lagos")
     public void processBudgets() {
         LocalDateTime now = fetchCurrentDateTimeFromDatabase();
@@ -594,8 +593,9 @@ public class BudgetLifeCycleManager {
                 }
             }
 
-            // 🧹 RAM CLEANUP
-            entityManager.flush();
+            // The per-budget TransactionTemplate above commits writes. Keep only
+            // the persistence-context cleanup here so this scheduled method never
+            // requires an outer transaction.
             entityManager.clear();
 
             hasMore = page.hasNext();
