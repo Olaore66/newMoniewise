@@ -40,6 +40,7 @@ import com.moniewise.moniewise_backend.repository.OutboxEventRepository;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 @Service
@@ -222,7 +223,7 @@ public class NotificationService {
                         for (String fcmToken : fcmTokens) {
                             sendFCMMessage(fcmToken, dynamicTitle, message, null,
                                     event.getActionUrl(), event.getType(), userId,
-                                    event.getContextId2()); // contextId2 = envelopeId
+                                    event.getContextId1(), event.getContextId2(), null, null);
                         }
                     } else {
                         logger.warn("âš ï¸ FCM is not initialized. Cannot send push.");
@@ -642,7 +643,9 @@ public class NotificationService {
                  WALLET_FUNDED, WALLET_DEPOSIT, EXTERNAL_TRANSFER,
                  ENVELOPE_TRANSFER, REFUND_ISSUED, DISBURSEMENT_REFUNDED,
                  BUDGET_UNALLOCATED_REFUNDED, BUDGET_SCHEDULED,
-                 BUDGET_ACTIVATED, HOW_TO_USE_WISEMONIE                   -> 259_200_000L; // 72 h
+                 BUDGET_ACTIVATED, AUTO_TRANSFER_SUCCESS, HOW_TO_USE_WISEMONIE
+                                                                            -> 259_200_000L; // 72 h
+            case AUTO_TRANSFER_FAILED, AUTO_TRANSFER_INSUFFICIENT_FUNDS    -> 86_400_000L;  // 24 h
             case LOW_BALANCE_WARNING, ENVELOPE_LOW_BALANCE               -> 21_600_000L;  //  6 h
             default                                                       -> 86_400_000L;  // 24 h
         };
@@ -651,25 +654,31 @@ public class NotificationService {
     /**
      * Sends one FCM push notification.
      *
-     * @param envelopeId used to build a per-envelope collapse key so that
-     *                   multiple disbursement notifications are NOT silently
-     *                   merged into one on Android.
+     * @param envelopeId used to group related envelope notifications while the
+     *                   visible Android tag stays unique per notification.
      */
     private void sendFCMMessage(String fcmToken, String title, String body, String actionType,
                                 String redirectUrl, NotificationType type, Long userId, Long envelopeId) {
-        sendFCMMessage(fcmToken, title, body, actionType, redirectUrl, type, userId, envelopeId, null);
+        sendFCMMessage(fcmToken, title, body, actionType, redirectUrl, type, userId, null, envelopeId, null, null);
     }
 
     private void sendFCMMessage(String fcmToken, String title, String body, String actionType,
                                 String redirectUrl, NotificationType type, Long userId, Long envelopeId,
                                 String devicePlatform) {
+        sendFCMMessage(fcmToken, title, body, actionType, redirectUrl, type, userId, null, envelopeId,
+                devicePlatform, null);
+    }
+
+    private void sendFCMMessage(String fcmToken, String title, String body, String actionType,
+                                String redirectUrl, NotificationType type, Long userId, Long budgetId,
+                                Long envelopeId, String devicePlatform, Long notificationContextId) {
         try {
-            // ── Unique collapse key per envelope ─────────────────────────────────────
-            // The old code used a single "DISBURSEMENTS" key for every disbursement
-            // notification, which caused Android to keep only the *last* one and silently
-            // discard all earlier ones.  A per-envelope key ensures every notification
-            // for a different envelope is shown independently.
-            String collapseKey = getGroupKey(type, userId, envelopeId);
+            // Grouping keeps related notifications visually organized, while the
+            // notification tag/id below stays unique so quick back-to-back financial
+            // events do not replace each other in Android's notification tray.
+            String groupKey = getGroupKey(type, userId, envelopeId);
+            String notificationTag = buildNotificationTag(type, userId, envelopeId, notificationContextId);
+            String notificationId = buildNotificationId(notificationTag);
 
             // ── Per-type FCM TTL ──────────────────────────────────────────────────────
             long ttlMs = computeFcmTtlMs(type);
@@ -688,6 +697,7 @@ public class NotificationService {
                             .setChannelId("wisemonie_alerts_v2") // Must match Flutter Channel
                             .setSound("wisemonie")
                             .setDefaultSound(false)
+                            .setTag(notificationTag)
                             .setTitle(title)
                             .setBody(body)
                             .setPriority(AndroidNotification.Priority.MAX)
@@ -700,7 +710,7 @@ public class NotificationService {
                     .setAps(Aps.builder()
                             .setSound("wisemonie.wav")
                             .setContentAvailable(true)
-                            .setThreadId(collapseKey)
+                            .setThreadId(groupKey)
                             .build())
                     .build();
 
@@ -712,6 +722,13 @@ public class NotificationService {
 
             // Data Payload for Flutter navigation
             messageBuilder.putData("click_action", "FLUTTER_NOTIFICATION_CLICK");
+            messageBuilder.putData("eventType", type != null ? type.name() : "UNKNOWN");
+            messageBuilder.putData("notificationId", notificationId);
+            messageBuilder.putData("notificationTag", notificationTag);
+            messageBuilder.putData("groupKey", groupKey);
+            if (userId != null) messageBuilder.putData("userId", userId.toString());
+            if (budgetId != null) messageBuilder.putData("budgetId", budgetId.toString());
+            if (envelopeId != null) messageBuilder.putData("envelopeId", envelopeId.toString());
             if (actionType != null) messageBuilder.putData("actionType", actionType);
             if (devicePlatform != null) messageBuilder.putData("devicePlatform", devicePlatform);
 
@@ -734,8 +751,8 @@ public class NotificationService {
             messageBuilder.putData("body", body);
 
             String messageId = firebaseMessaging.send(messageBuilder.build());
-            logger.info("[FCM] Delivered to user {} type={} envelope={} ttlMs={} messageId={}",
-                    userId, type, envelopeId, ttlMs, messageId);
+            logger.info("[FCM] Delivered to user {} type={} envelope={} notificationTag={} ttlMs={} messageId={}",
+                    userId, type, envelopeId, notificationTag, ttlMs, messageId);
 
         } catch (FirebaseMessagingException e) {
             String errorCode = e.getMessagingErrorCode() != null
@@ -816,14 +833,14 @@ public class NotificationService {
         };
     }
     /**
-     * Builds an Android/APNs collapse key for a notification.
+     * Builds an Android/APNs group key for a notification.
      *
      * IMPORTANT: disbursement types get a PER-ENVELOPE unique key.
      * Using a shared "DISBURSEMENTS" key caused Android to keep only the
      * last notification and silently discard all earlier ones, so users
      * with multiple envelopes would miss every disbursement except the last.
      *
-     * Transaction types still share a collapse key so that a rapid burst of
+     * Transaction types still share a group key so that a rapid burst of
      * wallet-top-up events is consolidated — that's intentional and user-friendly.
      */
     private String getGroupKey(NotificationType type, Long userId, Long envelopeId) {
@@ -842,6 +859,18 @@ public class NotificationService {
             case LOW_BALANCE_WARNING, BUDGET_LIMIT_WARNING -> "WARNINGS";
             default -> "GENERAL";
         };
+    }
+
+    private String buildNotificationTag(NotificationType type, Long userId, Long envelopeId, Long contextId) {
+        String typeName = type != null ? type.name() : "UNKNOWN";
+        Long id = contextId != null
+                ? contextId
+                : System.currentTimeMillis() + Math.abs(Objects.hash(typeName, userId, envelopeId));
+        return "MW_" + typeName + "_" + id;
+    }
+
+    private String buildNotificationId(String notificationTag) {
+        return Integer.toString(notificationTag.hashCode() & 0x7fffffff);
     }
 
     private NotificationPriority getPriority(NotificationType type) {
@@ -2033,7 +2062,8 @@ public class NotificationService {
                 String actionType = plan.actionTypeFor(target.devicePlatform());
                 String redirectUrl = plan.redirectUrlFor(target.devicePlatform());
                 sendFCMMessage(target.token(), plan.title, plan.message, actionType, redirectUrl,
-                        plan.type, plan.userId, plan.envelopeId, target.devicePlatform());
+                        plan.type, plan.userId, plan.budgetId, plan.envelopeId,
+                        target.devicePlatform(), plan.eventId);
                 delivered.add(target.token());
             } catch (DeadTokenException ignored) {
                 // Token was permanently invalid — already cleaned up, don't count as delivered
@@ -2183,6 +2213,8 @@ public class NotificationService {
         plan.iosExternalUrl = iosExternalUrl;
         plan.type = type;
         plan.userId = event.getUserId();
+        plan.eventId = event.getId();
+        plan.budgetId = event.getBudgetId();
         plan.envelopeId = event.getEnvelopeId();
         plan.tokensToPush = tokensToPush;
         plan.alreadyDelivered = alreadyDelivered;
@@ -2221,6 +2253,8 @@ public class NotificationService {
         String iosExternalUrl;
         NotificationType type;
         Long userId;
+        Long eventId;
+        Long budgetId;
         Long envelopeId;
         List<AuthSessionService.PushTarget> tokensToPush;
         Set<String> alreadyDelivered;
@@ -2501,8 +2535,8 @@ public class NotificationService {
                     String title = getNotificationTitle(n.getType());
                     for (AuthSessionService.PushTarget target : pushTargets) {
                         sendFCMMessage(target.token(), title, n.getMessage(), n.getActionType(),
-                                n.getRedirectUrl(), n.getType(), userId, n.getEnvelopeId(),
-                                target.devicePlatform());
+                                n.getRedirectUrl(), n.getType(), userId, n.getBudgetId(),
+                                n.getEnvelopeId(), target.devicePlatform(), n.getId());
                     }
                     n.setPushSent(true);
                     redelivered++;
