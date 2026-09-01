@@ -564,14 +564,22 @@ public class BudgetLifeCycleManager {
             }
 
             for (Budget budget : page.getContent()) {
+                Long budgetId = budget.getId();
                 try {
                     // 2. Process EACH budget in its own isolated transaction
                     transactionTemplate.execute(status -> {
+                        Budget budgetToExpire = budgetRepository.findByIdForUpdate(budgetId).orElse(null);
+                        if (budgetToExpire == null
+                                || budgetToExpire.getStatus() != BudgetStatus.ACTIVE
+                                || !isBudgetPastEndDate(budgetToExpire, now)) {
+                            return null;
+                        }
+
                         List<Budget> bUpdate = new ArrayList<>();
                         List<Envelope> eUpdate = new ArrayList<>();
                         List<TransactionLog> lSave = new ArrayList<>();
 
-                        processBudgetExpiry(budget, bUpdate, eUpdate, lSave);
+                        processBudgetExpiry(budgetToExpire, bUpdate, eUpdate, lSave);
 
                         budgetRepository.saveAll(bUpdate);
                         envelopeRepository.saveAll(eUpdate);
@@ -579,11 +587,11 @@ public class BudgetLifeCycleManager {
                         return null;
                     });
                 } catch (Exception e) {
-                    logger.error("🚨 Failed to expire Budget ID {}. Quarantining.", budget.getId(), e);
+                    logger.error("🚨 Failed to expire Budget ID {}. Quarantining.", budgetId, e);
 
                     // 3. Save Quarantine state in a NEW transaction so it doesn't roll back
                     transactionTemplate.execute(status -> {
-                        Budget failedBudget = budgetRepository.findById(budget.getId()).orElse(null);
+                        Budget failedBudget = budgetRepository.findByIdForUpdate(budgetId).orElse(null);
                         if (failedBudget != null) {
                             failedBudget.setStatus(BudgetStatus.FAILED_PROCESSING);
                             budgetRepository.save(failedBudget);
