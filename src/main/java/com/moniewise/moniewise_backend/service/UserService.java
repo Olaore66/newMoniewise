@@ -74,10 +74,11 @@ public class UserService implements UserDetailsService {
     private final RegistrationCacheService registrationCacheService;
     private final ProvidusExpressGateway providusExpressGateway;
     private final KycProfileRepository kycProfileRepository;
+    private final KycService kycService;
     private final StringRedisTemplate redisTemplate;
     private final ObjectMapper objectMapper;
 
-    public UserService(UserRepository userRepository, PasswordEncoder passwordEncoder, WalletService walletService, WalletRepository walletRepository, WalletService walletService1, OtpService otpService, PasswordResetTokenRepository passwordResetTokenRepository, NotificationService notificationService, BudgetRepository budgetRepository, RegistrationCacheService registrationCacheService, ProvidusExpressGateway providusExpressGateway, KycProfileRepository kycProfileRepository, StringRedisTemplate redisTemplate, ObjectMapper objectMapper, SavingsGoalRepository savingsGoalRepository) {
+    public UserService(UserRepository userRepository, PasswordEncoder passwordEncoder, WalletService walletService, WalletRepository walletRepository, WalletService walletService1, OtpService otpService, PasswordResetTokenRepository passwordResetTokenRepository, NotificationService notificationService, BudgetRepository budgetRepository, RegistrationCacheService registrationCacheService, ProvidusExpressGateway providusExpressGateway, KycProfileRepository kycProfileRepository, StringRedisTemplate redisTemplate, ObjectMapper objectMapper, SavingsGoalRepository savingsGoalRepository, KycService kycService) {
         this.userRepository = userRepository;
         this.passwordEncoder = passwordEncoder; // No link to SecurityConfig
         this.walletRepository = walletRepository;
@@ -90,6 +91,7 @@ public class UserService implements UserDetailsService {
         this.registrationCacheService = registrationCacheService;
         this.providusExpressGateway = providusExpressGateway;
         this.kycProfileRepository = kycProfileRepository;
+        this.kycService = kycService;
         this.redisTemplate = redisTemplate;
         this.objectMapper = objectMapper;
     }
@@ -824,6 +826,10 @@ public class UserService implements UserDetailsService {
         // âš¡ 3. CHECK & CREATE WALLET (Synchronous)
         // ============================================================
         if (!walletRepository.existsByUser(savedUser)) {
+            // Emergency off-switch: comment out this one invocation to skip the
+            // new BVN-provider fallback path during onboarding wallet creation.
+            ensureVerifiedKycBeforeWalletCreation(savedUser, request);
+
             logger.info("âš¡ Profile complete. Creating Wallet for: {}", savedUser.getEmail());
 
             // We do this synchronously. If SecureWave fails, it throws an error to the frontend!
@@ -863,6 +869,38 @@ public class UserService implements UserDetailsService {
         return savedUser;
     }
 
+    private void ensureVerifiedKycBeforeWalletCreation(User user, ProfileRequest request) {
+        if (user == null || user.getId() == null || user.getBvn() == null || user.getBvn().isBlank()) {
+            return;
+        }
+
+        BvnVerificationResultDto result = kycService.verifyBvnWithProvider(user.getId(), user.getBvn());
+
+        Map<String, Object> profileData = user.getProfileData() != null
+                ? new HashMap<>(user.getProfileData())
+                : new HashMap<>();
+
+        String firstName = firstNonBlank(
+                result.getFirstName(),
+                request != null ? request.getFirstName() : null,
+                stringValue(profileData.get("firstName")));
+        String lastName = firstNonBlank(
+                result.getLastName(),
+                request != null ? request.getLastName() : null,
+                stringValue(profileData.get("lastName")));
+        String dob = firstNonBlank(
+                result.getDateOfBirth(),
+                request != null && request.getDob() != null ? request.getDob().toString() : null,
+                stringValue(profileData.get("dateOfBirth")));
+
+        putIfPresent(profileData, "bvnFirstName", firstName);
+        putIfPresent(profileData, "bvnLastName", lastName);
+        putIfPresent(profileData, "dateOfBirth", dob);
+
+        user.setProfileData(profileData);
+        userRepository.save(user);
+    }
+
     private void syncProvidusCustomerProfileIfEnabled(User user, ProfileRequest request) {
         if (!providusExpressGateway.isEnabled()) {
             return;
@@ -897,6 +935,24 @@ public class UserService implements UserDetailsService {
         if (value != null && !value.isBlank()) {
             updates.put(key, value.trim());
         }
+    }
+
+    private String firstNonBlank(String... values) {
+        for (String value : values) {
+            String clean = stringValue(value);
+            if (clean != null) {
+                return clean;
+            }
+        }
+        return null;
+    }
+
+    private String stringValue(Object value) {
+        if (value == null) {
+            return null;
+        }
+        String text = value.toString().trim();
+        return text.isBlank() ? null : text;
     }
 //    @Transactional
 //    public User updateProfile(String email, ProfileRequest request) {

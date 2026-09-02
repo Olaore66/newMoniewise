@@ -23,4 +23,12 @@ public class BvnPreVerifyRequest {
     @NotBlank(message = "BVN is required")
     @Pattern(regexp = "\\d{11}", message = "BVN must be exactly 11 digits")
     private String bvn;
+
+    /**
+     * Optional fields used only by providers such as Rubies that need the name
+     * details to validate BVN. Existing clients can continue sending phone+bvn.
+     */
+    private String firstName;
+    private String lastName;
+    private String dob;
 }

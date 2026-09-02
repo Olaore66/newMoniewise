@@ -209,7 +209,11 @@ public class AuthController {
 
         try {
             BvnVerificationResultDto result = kycService.preVerifyBvn(
-                    phone, request.getBvn().trim());
+                    phone,
+                    request.getBvn().trim(),
+                    request.getFirstName(),
+                    request.getLastName(),
+                    request.getDob());
 
             abuseProtectionService.recordSuccess(AbuseProtectionService.BVN_PRE_VERIFY, throttleKey);
             return ResponseEntity.ok(result);
