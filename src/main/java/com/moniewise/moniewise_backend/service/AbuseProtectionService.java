@@ -227,6 +227,11 @@ public class AbuseProtectionService {
             // Dashboard nudge — mostly free server-ranked path; allow 120 req/hour
             // so normal dashboard browsing never triggers a lockout
             case AI_DASHBOARD_ACTION -> new AttemptPolicy(120, Duration.ofHours(1), Duration.ofMinutes(15));
+            case "ai.agent_turn" -> new AttemptPolicy(40, Duration.ofHours(1), Duration.ofMinutes(15));
+            case "ai.agent_tool" -> new AttemptPolicy(400, Duration.ofHours(1), Duration.ofMinutes(10));
+            case "ai.action_prepare" -> new AttemptPolicy(30, Duration.ofHours(1), Duration.ofMinutes(15));
+            case "ai.action_confirm" -> new AttemptPolicy(20, Duration.ofHours(1), Duration.ofMinutes(15));
+            case "ai.recipient_resolve" -> new AttemptPolicy(60, Duration.ofHours(1), Duration.ofMinutes(10));
 
             // Beneficiaries
             case BENEFICIARY_ADD -> new AttemptPolicy(10, Duration.ofHours(1), Duration.ofMinutes(30));
