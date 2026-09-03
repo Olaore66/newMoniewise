@@ -66,8 +66,8 @@ public class ExternalTransferSettlementService {
     @Transactional
     public void settleExternalTransfer(String reference, String status) {
 
-        TransactionLog txn = transactionLogRepository.findByReference(reference)
-                .or(() -> transactionLogRepository.findByProviderReference(reference))
+        TransactionLog txn = transactionLogRepository.findByReferenceForUpdate(reference)
+                .or(() -> transactionLogRepository.findEnvelopeTransferByProviderReferenceForUpdate(reference))
                 .orElseThrow(() -> new EntityNotFoundException("External transfer transaction not found"));
 
         if (txn.getStatus() == TransactionStatus.COMPLETED ||
@@ -76,7 +76,7 @@ public class ExternalTransferSettlementService {
             return;
         }
 
-        Envelope source = envelopeRepository.findById(txn.getSourceEnvelopeId())
+        Envelope source = envelopeRepository.findByIdForUpdate(txn.getSourceEnvelopeId())
                 .orElseThrow(() -> new EntityNotFoundException("Source envelope not found"));
 
         BigDecimal transferAmount = txn.getAmount().abs();
@@ -152,6 +152,10 @@ public class ExternalTransferSettlementService {
                 });
             }
 
+            if (isAutoTransfer(txn)) {
+                notifyAutoTransferCompleted(txn, source, transferAmount);
+            }
+
         } else if (isFailed(status)) {
             // On failure: release the hold and refund the send amount.
             source.setHeldAmount(source.getHeldAmount().subtract(transferAmount).max(BigDecimal.ZERO));
@@ -184,7 +188,11 @@ public class ExternalTransferSettlementService {
             // Refund the fees (NIP + markup) that were pre-deducted from the wallet at initiation.
             BigDecimal totalFeeToRefund = nipFee.add(markupFee);
             walletService.refundTransferFee(txn.getUserId(), totalFeeToRefund);
-            notifyTransferReversed(txn, transferAmount, totalFeeToRefund, refundTarget);
+            if (isAutoTransfer(txn)) {
+                notifyAutoTransferFailed(txn, transferAmount, totalFeeToRefund, refundTarget);
+            } else {
+                notifyTransferReversed(txn, transferAmount, totalFeeToRefund, refundTarget);
+            }
             logger.info("[ExternalTransfer] Fee ₦{} refunded to wallet for user {} — transfer failed, ref={}",
                     totalFeeToRefund, txn.getUserId(), txn.getReference());
 
@@ -235,6 +243,75 @@ public class ExternalTransferSettlementService {
             return oldDescription;
         }
         return oldDescription + " | " + extra;
+    }
+
+    private boolean isAutoTransfer(TransactionLog txn) {
+        return txn != null
+                && txn.getReference() != null
+                && txn.getReference().startsWith("AUTO-EXT-");
+    }
+
+    private void notifyAutoTransferCompleted(TransactionLog txn, Envelope source, BigDecimal transferAmount) {
+        String recipient = txn.getExternalAccountName() != null && !txn.getExternalAccountName().isBlank()
+                ? txn.getExternalAccountName()
+                : "the recipient";
+        String envelopeName = source.getName() != null && !source.getName().isBlank()
+                ? source.getName()
+                : "your envelope";
+        String message = String.format(
+                "Your auto-transfer of NGN %,.2f from '%s' to %s was successful.",
+                transferAmount,
+                envelopeName,
+                recipient
+        );
+
+        notificationService.sendNotification(
+                txn.getUserId().toString(),
+                message,
+                NotificationType.AUTO_TRANSFER_SUCCESS,
+                txn.getBudgetId(),
+                txn.getSourceEnvelopeId(),
+                actionTypeForEnvelope(txn),
+                redirectUrlForEnvelope(txn)
+        );
+    }
+
+    private void notifyAutoTransferFailed(TransactionLog txn,
+                                          BigDecimal transferAmount,
+                                          BigDecimal refundedFee,
+                                          String refundTarget) {
+        String recipient = txn.getExternalAccountName() != null && !txn.getExternalAccountName().isBlank()
+                ? txn.getExternalAccountName()
+                : "the recipient";
+        String message = String.format(
+                "Your auto-transfer of NGN %,.2f to %s could not be completed. The amount has been returned to your %s.",
+                transferAmount,
+                recipient,
+                refundTarget
+        );
+        if (refundedFee != null && refundedFee.compareTo(BigDecimal.ZERO) > 0) {
+            message += String.format(" Transfer fees of NGN %,.2f were refunded to your wallet.", refundedFee);
+        }
+
+        notificationService.sendNotification(
+                txn.getUserId().toString(),
+                message,
+                NotificationType.AUTO_TRANSFER_FAILED,
+                txn.getBudgetId(),
+                txn.getSourceEnvelopeId(),
+                actionTypeForEnvelope(txn),
+                redirectUrlForEnvelope(txn)
+        );
+    }
+
+    private String actionTypeForEnvelope(TransactionLog txn) {
+        return txn.getSourceEnvelopeId() != null ? "VIEW_ENVELOPE" : "VIEW_ACTIVITY";
+    }
+
+    private String redirectUrlForEnvelope(TransactionLog txn) {
+        return txn.getSourceEnvelopeId() != null
+                ? "/envelopes/" + txn.getSourceEnvelopeId()
+                : "/activity";
     }
 
     private void notifyTransferReversed(TransactionLog txn,

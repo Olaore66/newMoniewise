@@ -29,6 +29,19 @@ public interface WalletRepository extends JpaRepository<Wallet, Long> {
             """)
     boolean existsFundedUserWallet(@Param("userId") Long userId);
 
+    @Query(value = """
+            SELECT EXISTS (
+                SELECT 1
+                FROM wallets w
+                WHERE w.user_id = :userId
+                  AND w.status = 'ACTIVE'
+                  AND coalesce(w.is_revenue_wallet, false) = false
+                  AND w.account_number IS NOT NULL
+                  AND btrim(w.account_number) <> ''
+            )
+            """, nativeQuery = true)
+    boolean existsReadyUserWallet(@Param("userId") Long userId);
+
     Optional<Wallet> findByUser(User user);
 
     boolean existsByUser(User user); // Add this method

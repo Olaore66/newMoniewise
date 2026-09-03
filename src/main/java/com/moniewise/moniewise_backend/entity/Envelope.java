@@ -181,6 +181,9 @@ public class Envelope {
 
     private BigDecimal heldAmount = BigDecimal.ZERO;
 
+    @Column(name = "is_automated", nullable = false)
+    private Boolean isAutomated = false;
+
     // Soft Delete Helper
     public boolean isDeleted() {
         return deletedAt != null;

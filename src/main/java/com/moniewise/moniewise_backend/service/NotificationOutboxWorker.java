@@ -33,6 +33,8 @@ public class NotificationOutboxWorker {
 
     private static final int BATCH_SIZE = 200;
 
+    private volatile String lastDeadLetterAlertSignature;
+
     private final OutboxEventRepository outboxEventRepository;
     private final NotificationService notificationService;
 
@@ -85,22 +87,32 @@ public class NotificationOutboxWorker {
     @Scheduled(fixedDelayString = "${moniewise.outbox.deadletter.alert-ms:900000}") // 15 min
     public void alertOnDeadLetters() {
         long failed;
+        StringBuilder breakdown = new StringBuilder();
         try {
             failed = outboxEventRepository.countByStatus("FAILED");
+            for (Object[] row : outboxEventRepository.countFailedByType()) {
+                if (breakdown.length() > 0) {
+                    breakdown.append(", ");
+                }
+                breakdown.append(row[0]).append('=').append(row[1]);
+            }
         } catch (Exception e) {
             logger.error("[OUTBOX] Dead-letter check failed", e);
             return;
         }
         if (failed == 0) {
+            lastDeadLetterAlertSignature = null;
             return;
         }
-        StringBuilder breakdown = new StringBuilder();
-        for (Object[] row : outboxEventRepository.countFailedByType()) {
-            if (breakdown.length() > 0) {
-                breakdown.append(", ");
-            }
-            breakdown.append(row[0]).append('=').append(row[1]);
+
+        String signature = failed + "|" + breakdown;
+        if (signature.equals(lastDeadLetterAlertSignature)) {
+            logger.warn("[OUTBOX][DEAD-LETTER] {} notification event(s) still FAILED and need attention: {}",
+                    failed, breakdown);
+            return;
         }
+
+        lastDeadLetterAlertSignature = signature;
         logger.error("[OUTBOX][DEAD-LETTER] {} notification event(s) permanently FAILED and need attention: {}",
                 failed, breakdown);
     }

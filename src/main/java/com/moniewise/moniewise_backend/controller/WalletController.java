@@ -55,7 +55,8 @@ public class WalletController {
 
     @GetMapping
     public ResponseEntity<?> getMyWallet(Authentication authentication) {
-        Long userId = currentUser(authentication.getName()).getId();
+        User user = currentUser(authentication.getName());
+        Long userId = user.getId();
 
         Wallet wallet = walletService.getWalletByUserId(userId);
         BigDecimal totalHoldings = walletService.getTotalHoldings(userId);
@@ -65,6 +66,7 @@ public class WalletController {
                 wallet.getCurrency(),
                 wallet.getAccountNumber(),
                 wallet.getBankName(),
+                walletService.resolveFundingAccountName(wallet, user),
                 wallet.getStatus().name(),
                 wallet.getUpdatedAt(),
                 wallet.getProviderName(),

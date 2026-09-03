@@ -63,6 +63,40 @@
       text-transform: uppercase;
       letter-spacing: 0.5px;
     }
+    .funding-hint {
+      background: #FFFAEB;
+      border: 1px solid #FEC84B;
+      border-radius: 8px;
+      color: #92400E;
+      font-size: 13px;
+      line-height: 1.6;
+      padding: 14px 16px;
+      margin-bottom: 24px;
+    }
+    .steps-card {
+      background: #F9FAFB;
+      border: 1px solid #E4E7EC;
+      border-radius: 10px;
+      padding: 18px 20px;
+      margin-bottom: 28px;
+    }
+    .steps-title {
+      color: #101828;
+      font-size: 14px;
+      font-weight: 700;
+      margin-bottom: 10px;
+    }
+    .steps-list {
+      padding-left: 20px;
+      margin: 0;
+    }
+    .steps-list li {
+      color: #475467;
+      font-size: 14px;
+      line-height: 1.6;
+      margin-bottom: 7px;
+      padding-left: 3px;
+    }
     .divider { border: none; border-top: 1px solid #F2F4F7; margin: 24px 0; }
     .info-row {
       display: flex;
@@ -139,8 +173,8 @@
 
       <p class="greeting">Hello <span th:text="${firstName}">there</span>,</p>
       <p class="body-text">
-        Welcome to Wisemonie! Your secure wallet has been created and is ready to use.
-        Fund it via any bank app and start managing your money smarter.
+        Welcome to Wisemonie. Your wallet account has been created and is ready to receive money.
+        The important thing to know is the bank name to search in your banking app.
       </p>
 
       <div class="account-card">
@@ -149,20 +183,36 @@
         <div class="account-bank" th:text="${bankName}">Rubies MFB</div>
       </div>
 
+      <div class="funding-hint">
+        In your banking app, search for <strong>Rubies MFB</strong>, <strong>Rubies Microfinance Bank</strong> or <strong>Rubies</strong>.
+        Do not search for Wisemonie as the bank name.
+      </div>
+
+      <div class="steps-card">
+        <div class="steps-title">How to fund your wallet</div>
+        <ol class="steps-list">
+          <li>Open your banking app.</li>
+          <li>Choose transfer to another bank.</li>
+          <li>Search for Rubies MFB, Rubies Microfinance Bank or Rubies.</li>
+          <li>Paste your Wisemonie account number.</li>
+          <li>Confirm the account name shown by your bank app, then send.</li>
+        </ol>
+      </div>
+
       <hr class="divider">
 
       <div class="info-row">
         <div class="info-icon">🏦</div>
         <div class="info-text">
           <strong>Fund via bank transfer</strong><br>
-          Send money from any Nigerian bank app to the account number above. Your balance updates instantly.
+          Send money from any Nigerian bank app to the account number above. Your balance updates once the transfer is confirmed.
         </div>
       </div>
       <div class="info-row">
         <div class="info-icon">📊</div>
         <div class="info-text">
-          <strong>Create your first budget</strong><br>
-          Organise your money into envelopes and take control of your spending.
+          <strong>Give your money instructions</strong><br>
+          Split money into envelopes for food, transport, bills, savings, family or enjoyment before pressure shows up.
         </div>
       </div>
       <div class="info-row">
@@ -191,7 +241,7 @@
   </div>
 
   <div class="outer-footer">
-    &copy; 2025 Wisemonie. All rights reserved.
+    &copy; <span th:text="${T(java.time.Year).now().getValue()}">2025</span> Wisemonie. All rights reserved.
   </div>
 
 </div>

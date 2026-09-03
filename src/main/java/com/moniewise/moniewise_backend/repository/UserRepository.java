@@ -4,6 +4,7 @@ import com.moniewise.moniewise_backend.entity.User;
 import com.moniewise.moniewise_backend.entity.UserSummary;
 import com.moniewise.moniewise_backend.enums.Role;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Slice;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Modifying;
@@ -13,8 +14,10 @@ import org.springframework.stereotype.Repository;
 
 import javax.transaction.Transactional;
 import javax.persistence.LockModeType;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -153,6 +156,10 @@ List<UserSummary> searchUsers(@Param("query") String query, Pageable pageable);
     @Query("UPDATE User u SET u.fcmToken = NULL WHERE u.id = :id")
     void clearFcmToken(@Param("id") Long id);
 
+    @Modifying
+    @Query("UPDATE User u SET u.fcmToken = NULL WHERE u.fcmToken = :token")
+    void clearFcmTokenByToken(@Param("token") String token);
+
     /**
      * Finds "abandoned signups" — users who registered but never finished
      * onboarding, i.e. they have NEITHER a wallet NOR a KYC profile.
@@ -214,27 +221,26 @@ List<UserSummary> searchUsers(@Param("query") String query, Pageable pageable);
             @Param("limit") int limit);
 
     /**
-     * Recent wallet users who may need the "How to use Wisemonie" guide:
-     * either their wallet balance is still zero OR they have no active budget.
+     * Recent users with a ready wallet who may need the "How to use Wisemonie"
+     * guide because they have not funded the wallet and have no active budget.
      */
     @Query(value = """
             SELECT u.*
             FROM users u
+            JOIN wallets w ON w.user_id = u.id
             WHERE u.is_deleted = false
               AND u.id > :afterUserId
               AND u.is_verified = true
               AND coalesce(u.test_account, false) = false
+              AND w.status = 'ACTIVE'
+              AND coalesce(w.is_revenue_wallet, false) = false
+              AND w.account_number IS NOT NULL
+              AND btrim(w.account_number) <> ''
+              AND coalesce(w.balance, 0) <= 0
               AND u.email IS NOT NULL
               AND btrim(u.email) <> ''
               AND u.created_at >= :createdAfter
               AND u.created_at <= :createdBefore
-              AND NOT EXISTS (
-                    SELECT 1
-                    FROM wallets w_funded
-                    WHERE w_funded.user_id = u.id
-                      AND coalesce(w_funded.is_revenue_wallet, false) = false
-                      AND coalesce(w_funded.balance, 0) > 0
-              )
               AND NOT EXISTS (
                     SELECT 1
                     FROM budgets b_active
@@ -481,7 +487,162 @@ List<UserSummary> searchUsers(@Param("query") String query, Pageable pageable);
             @Param("returnGraceMinutes") int returnGraceMinutes,
             @Param("limit") int limit);
 
+    @Query(value = """
+            SELECT u.*
+            FROM users u
+            LEFT JOIN wallets w ON w.user_id = u.id
+            WHERE w.id IS NULL
+              AND u.is_deleted = false
+              AND coalesce(u.test_account, false) = false
+              AND u.email IS NOT NULL
+              AND btrim(u.email) <> ''
+              AND u.created_at <= :inactiveBefore
+              AND (u.last_login IS NULL OR u.last_login <= :inactiveBeforeInstant)
+              AND coalesce((
+                    SELECT max(coalesce(s.last_seen_at, s.created_at))
+                    FROM auth_sessions s
+                    WHERE s.user_id = u.id
+              ), u.created_at) <= :inactiveBefore
+              AND (
+                    u.last_onboarding_reminder_at IS NULL
+                    OR u.last_onboarding_reminder_at <= :recentOnboardingBefore
+              )
+              AND NOT EXISTS (
+                    SELECT 1
+                    FROM engagement_nudge_notifications n
+                    WHERE n.user_id = u.id
+                      AND n.campaign = 'SETUP_RECOVERY_15D'
+              )
+            ORDER BY u.created_at ASC, u.id ASC
+            LIMIT :limit
+            """, nativeQuery = true)
+    List<User> findDormantUsersWithoutWalletForRecovery(
+            @Param("inactiveBefore") LocalDateTime inactiveBefore,
+            @Param("inactiveBeforeInstant") Instant inactiveBeforeInstant,
+            @Param("recentOnboardingBefore") LocalDateTime recentOnboardingBefore,
+            @Param("limit") int limit);
+
+    @Query(value = """
+            SELECT u.*
+            FROM users u
+            JOIN wallets w ON w.user_id = u.id
+            WHERE u.is_deleted = false
+              AND coalesce(u.test_account, false) = false
+              AND u.email IS NOT NULL
+              AND btrim(u.email) <> ''
+              AND w.status = 'ACTIVE'
+              AND coalesce(w.is_revenue_wallet, false) = false
+              AND w.account_number IS NOT NULL
+              AND btrim(w.account_number) <> ''
+              AND coalesce(w.balance, 0) <= 0
+              AND u.created_at <= :inactiveBefore
+              AND (u.last_login IS NULL OR u.last_login <= :inactiveBeforeInstant)
+              AND coalesce((
+                    SELECT max(coalesce(s.last_seen_at, s.created_at))
+                    FROM auth_sessions s
+                    WHERE s.user_id = u.id
+              ), u.created_at) <= :inactiveBefore
+              AND NOT EXISTS (
+                    SELECT 1
+                    FROM budgets b
+                    WHERE b.user_id = u.id
+              )
+              AND NOT EXISTS (
+                    SELECT 1
+                    FROM savings_goals sg
+                    WHERE sg.user_id = u.id
+              )
+              AND NOT EXISTS (
+                    SELECT 1
+                    FROM engagement_nudge_notifications n
+                    WHERE n.user_id = u.id
+                      AND n.campaign = 'SETUP_RECOVERY_15D'
+              )
+            ORDER BY coalesce(w.updated_at, u.created_at) ASC, u.id ASC
+            LIMIT :limit
+            """, nativeQuery = true)
+    List<User> findDormantWalletUsersNotFundedForRecovery(
+            @Param("inactiveBefore") LocalDateTime inactiveBefore,
+            @Param("inactiveBeforeInstant") Instant inactiveBeforeInstant,
+            @Param("limit") int limit);
+
+    @Query(value = """
+            SELECT u.*
+            FROM users u
+            JOIN wallets w ON w.user_id = u.id
+            WHERE u.is_deleted = false
+              AND coalesce(u.test_account, false) = false
+              AND u.email IS NOT NULL
+              AND btrim(u.email) <> ''
+              AND w.status = 'ACTIVE'
+              AND coalesce(w.is_revenue_wallet, false) = false
+              AND w.account_number IS NOT NULL
+              AND btrim(w.account_number) <> ''
+              AND coalesce(w.balance, 0) > 0
+              AND u.created_at <= :inactiveBefore
+              AND (u.last_login IS NULL OR u.last_login <= :inactiveBeforeInstant)
+              AND coalesce((
+                    SELECT max(coalesce(s.last_seen_at, s.created_at))
+                    FROM auth_sessions s
+                    WHERE s.user_id = u.id
+              ), u.created_at) <= :inactiveBefore
+              AND NOT EXISTS (
+                    SELECT 1
+                    FROM budgets b
+                    WHERE b.user_id = u.id
+              )
+              AND NOT EXISTS (
+                    SELECT 1
+                    FROM savings_goals sg
+                    WHERE sg.user_id = u.id
+              )
+              AND NOT EXISTS (
+                    SELECT 1
+                    FROM engagement_nudge_notifications n
+                    WHERE n.user_id = u.id
+                      AND n.campaign = 'SETUP_RECOVERY_15D'
+              )
+            ORDER BY coalesce(w.updated_at, u.created_at) ASC, u.id ASC
+            LIMIT :limit
+            """, nativeQuery = true)
+    List<User> findDormantFundedWalletUsersWithoutPlanForRecovery(
+            @Param("inactiveBefore") LocalDateTime inactiveBefore,
+            @Param("inactiveBeforeInstant") Instant inactiveBeforeInstant,
+            @Param("limit") int limit);
+
     Optional<User> findByEmail(String email);
+
+    @Query("""
+            SELECT u
+            FROM User u
+            WHERE u.isDeleted = false
+              AND (:includeTestAccounts = true OR u.testAccount = false)
+            ORDER BY u.id ASC
+            """)
+    Slice<User> findBroadcastRecipients(@Param("includeTestAccounts") boolean includeTestAccounts,
+                                        Pageable pageable);
+
+    @Query("""
+            SELECT u
+            FROM User u
+            WHERE u.isDeleted = false
+              AND (:includeTestAccounts = true OR u.testAccount = false)
+              AND u.id IN :ids
+            ORDER BY u.id ASC
+            """)
+    List<User> findBroadcastRecipientsByIds(@Param("ids") Collection<Long> ids,
+                                            @Param("includeTestAccounts") boolean includeTestAccounts);
+
+    @Query("""
+            SELECT u
+            FROM User u
+            WHERE u.isDeleted = false
+              AND (:includeTestAccounts = true OR u.testAccount = false)
+              AND lower(u.email) IN :emails
+            ORDER BY u.id ASC
+            """)
+    List<User> findBroadcastRecipientsByEmails(@Param("emails") Collection<String> emails,
+                                               @Param("includeTestAccounts") boolean includeTestAccounts);
 
     /**
      * Accounts where the user asked to close but a withdrawal still had to

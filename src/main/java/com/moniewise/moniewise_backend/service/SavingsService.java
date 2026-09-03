@@ -43,6 +43,7 @@ public class SavingsService {
     private final PaymentGatewayResolver paymentGatewayResolver;
     private final BeneficiaryService beneficiaryService;
     private final MarkupCalculatorService markupCalculatorService;
+    private final SavingsProjectionWebSocketService savingsProjectionWebSocketService;
 
     private static final String RUBIES_BANK_CODE = "090175";
     private static final String RUBIES_BANK_NAME = "Rubies MFB";
@@ -58,10 +59,11 @@ public class SavingsService {
                            NotificationService notificationService,
                            SavingsCacheService savingsCacheService,
                            SavingsLifeCycleManager savingsLifeCycleManager,
-                           UserService userService,
+                          UserService userService,
                           PaymentGatewayResolver paymentGatewayResolver,
                           BeneficiaryService beneficiaryService,
-                          MarkupCalculatorService markupCalculatorService) {
+                          MarkupCalculatorService markupCalculatorService,
+                          SavingsProjectionWebSocketService savingsProjectionWebSocketService) {
         this.savingsGoalRepository = savingsGoalRepository;
         this.userRepository = userRepository;
         this.walletService = walletService;
@@ -74,6 +76,7 @@ public class SavingsService {
         this.paymentGatewayResolver = paymentGatewayResolver;
         this.beneficiaryService = beneficiaryService;
         this.markupCalculatorService = markupCalculatorService;
+        this.savingsProjectionWebSocketService = savingsProjectionWebSocketService;
     }
 
     /**
@@ -750,6 +753,12 @@ public class SavingsService {
         goal.setCurrentBalance(goal.getCurrentBalance().add(amount));
         SavingsGoal updatedGoal = savingsGoalRepository.save(goal);
         savingsCacheService.evictUserSavingsCachesAfterCommit(userId);
+        savingsProjectionWebSocketService.sendTopUpProjectionAfterCommit(
+                goal.getUser().getEmail(),
+                userId,
+                updatedGoal,
+                amount
+        );
 
         // 3. Log the transaction
         TransactionLog log = new TransactionLog();

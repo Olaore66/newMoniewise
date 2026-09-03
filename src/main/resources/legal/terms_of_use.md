@@ -2,7 +2,7 @@
 
 ### Terms of Use
 
-Wisemonie Mobile Application  ·  Effective Date: June 2026
+Wisemonie Mobile Application  ·  Effective Date: August 2026
 These Terms of Use ("Terms") govern your access to and use of the Wisemonie mobile application, website, and all associated products, features, wallets, envelopes, and services ("Wisemonie", "App", "we", "us", or "our").
 By downloading, accessing, or using Wisemonie, you agree to be bound by these Terms. If you do not agree, do not use the App.
 
@@ -35,6 +35,7 @@ By creating an account or using any Wisemonie feature, you acknowledge that you:
 ## 4. Account Creation & KYC
 
 To use Wisemonie, you must register and provide accurate information as required, including identity verification documents. We may request additional KYC or AML details at any time as required by regulation or our banking partner.
+Wisemonie may request your Bank Verification Number (BVN) so that our licensed banking partner can verify your identity, open a wallet account for you, and provide you with a dedicated account number that you can use to fund your Wisemonie Wallet.
 By registering, you:
 - Authorise Wisemonie to create and manage a digital wallet on your behalf through Rubies Microfinance Bank
 - Consent to the processing of your personal data for verification and compliance
@@ -246,6 +247,7 @@ Upon termination, all active features (automations, scheduled releases, hard-loc
 ## 21. Privacy
 
 Your use of Wisemonie is subject to our Privacy Policy. By using the App, you consent to the collection and processing of your data as described in the Privacy Policy.
+We use Sentry for error tracking, crash reporting, and service reliability monitoring. Error-tracking data processed through Sentry may be stored in the United States of America.
 
 ## 22. General Provisions
 

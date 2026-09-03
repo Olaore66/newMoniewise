@@ -159,6 +159,8 @@ public class WalletService {
                 w.setCurrency(cur != null ? cur.toString() : "NGN");
                 Object acct = snap.get("accountNumber");
                 w.setAccountNumber(acct != null ? acct.toString() : null);
+                Object acctName = snap.get("accountName");
+                w.setAccountName(acctName != null ? acctName.toString() : null);
                 Object bank = snap.get("bankName");
                 w.setBankName(bank != null ? bank.toString() : null);
                 Object st = snap.get("status");
@@ -183,6 +185,7 @@ public class WalletService {
             snap.put("balance",        wallet.getBalance() != null ? wallet.getBalance().toPlainString() : "0");
             snap.put("currency",       wallet.getCurrency() != null ? wallet.getCurrency() : "NGN");
             snap.put("accountNumber",  wallet.getAccountNumber());
+            snap.put("accountName",    wallet.getAccountName());
             snap.put("bankName",       wallet.getBankName());
             snap.put("status",            wallet.getStatus() != null ? wallet.getStatus().name() : "ACTIVE");
             snap.put("providerName",      wallet.getProviderName());
@@ -228,8 +231,8 @@ public class WalletService {
                 .map(w -> w.getBalance() != null ? w.getBalance() : BigDecimal.ZERO)
                 .orElse(BigDecimal.ZERO);
 
-        BigDecimal envelopeTotal = envelopeRepository.sumTotalRemainingByUserIdAndBudgetStatus(
-                userId, BudgetStatus.ACTIVE);
+        BigDecimal envelopeTotal = envelopeRepository.sumTotalRemainingByUserIdAndBudgetStatuses(
+                userId, List.of(BudgetStatus.ACTIVE, BudgetStatus.SCHEDULED));
         BigDecimal savingsTotal = savingsGoalRepository.sumBalanceByUserIdAndStatus(
                 userId, SavingsStatus.ACTIVE);
 
@@ -340,7 +343,7 @@ public class WalletService {
 
     @Transactional
     public void deductBalance(Long userId, BigDecimal amount) {
-        Wallet wallet = walletRepository.findByUserId(userId)
+        Wallet wallet = walletRepository.findByUserIdForUpdate(userId)
                 .orElseThrow(() -> new IllegalArgumentException("Wallet not found for user ID: " + userId));
 
         if (wallet.getBalance().compareTo(amount) < 0) {
@@ -392,7 +395,7 @@ public class WalletService {
     @Transactional
     public void deductTransferFee(Long userId, BigDecimal totalFee,
                                    BigDecimal bankCharge, BigDecimal markupFee) {
-        Wallet wallet = walletRepository.findByUserId(userId)
+        Wallet wallet = walletRepository.findByUserIdForUpdate(userId)
                 .orElseThrow(() -> new IllegalArgumentException("Wallet not found for user " + userId));
         BigDecimal balance = wallet.getBalance() != null ? wallet.getBalance() : BigDecimal.ZERO;
         if (balance.compareTo(totalFee) < 0) {
@@ -541,6 +544,7 @@ public class WalletService {
         Map<String, String> virtualAccount = gateway.createVirtualAccount(user);
 
         wallet.setAccountNumber(virtualAccount.get("accountNumber"));
+        wallet.setAccountName(virtualAccount.get("accountName"));
         wallet.setBankName(virtualAccount.get("bank"));
 
         // optional provider fields: set only if returned
@@ -551,6 +555,15 @@ public class WalletService {
         wallet.setSubWalletRef(virtualAccount.get("subWalletRef"));
         wallet.setProviderStatus("ACTIVE");
         wallet.setLastBalanceSyncAt(LocalDateTime.now());
+
+        Map<String, Object> providerMetadata = new HashMap<>();
+        if (virtualAccount.get("accountName") != null) {
+            providerMetadata.put("accountName", virtualAccount.get("accountName"));
+        }
+        if (virtualAccount.get("bankCode") != null) {
+            providerMetadata.put("bankCode", virtualAccount.get("bankCode"));
+        }
+        wallet.setProviderMetadata(providerMetadata);
 
         return walletRepository.save(wallet);
     }
@@ -1413,6 +1426,31 @@ public class WalletService {
         return user != null ? resolveDisplayName(user) : "ACCOUNT HOLDER";
     }
 
+    public String resolveFundingAccountName(Wallet wallet, User user) {
+        if (wallet != null) {
+            String storedAccountName = safeString(wallet.getAccountName());
+            if (!storedAccountName.isBlank()) {
+                return storedAccountName;
+            }
+
+            Map<String, Object> metadata = wallet.getProviderMetadata();
+            if (metadata != null) {
+                String metadataAccountName = firstPresentMetadataValue(
+                        metadata,
+                        "accountName",
+                        "account_name",
+                        "walletAccountName",
+                        "wallet_account_name"
+                );
+                if (!metadataAccountName.isBlank()) {
+                    return metadataAccountName;
+                }
+            }
+        }
+
+        return user != null ? resolveDisplayName(user) : "ACCOUNT HOLDER";
+    }
+
     /** Resolves the user's display name from BVN profile fields, falling back to email prefix. */
     public String resolveDisplayName(User user) {
         Map<String, Object> profile = user.getProfileData() != null ? user.getProfileData() : Map.of();
@@ -1423,6 +1461,16 @@ public class WalletService {
         // Last resort: use the part of the email before @
         String email = user.getEmail();
         return email != null ? email.split("@")[0].toUpperCase() : "ACCOUNT HOLDER";
+    }
+
+    private String firstPresentMetadataValue(Map<String, Object> metadata, String... keys) {
+        for (String key : keys) {
+            String value = safeString(metadata.get(key));
+            if (!value.isBlank()) {
+                return value;
+            }
+        }
+        return "";
     }
 
     private String strFromProfile(Map<String, Object> profile, String... keys) {
@@ -1827,6 +1875,22 @@ public class WalletService {
     }
 
     /**
+     * Physically moves a budget creation fee from the user's Rubies wallet into
+     * Moniewise's Rubies revenue/internal account. The user-facing debit remains
+     * the {@link TransactionType#BUDGET_CREATION_FEE} log written by BudgetService;
+     * this internal REV-* log exists only for provider-level collection tracking.
+     */
+    public void collectRubiesBudgetCreationFeeAsync(
+            BigDecimal feeAmount,
+            String fromWalletRef,
+            String fromWalletName,
+            String originalRef,
+            Long userId) {
+        collectRubiesToRevenueAsync(feeAmount, fromWalletRef, fromWalletName, originalRef, userId,
+                TransactionType.BUDGET_FEE_COLLECTION, "Budget creation fee");
+    }
+
+    /**
      * Shared core for both Rubies-to-revenue collectors. {@code label} drives the
      * human-readable log/narration text and {@code txnType} the ledger category.
      * Reference is always {@code REV-{originalRef}} (idempotent retry key).
@@ -1905,9 +1969,9 @@ public class WalletService {
                 logger.warn("[Rubies-Fee] Could not write SKIPPED fee log for ref={}: {}", skipRef, ex.getMessage());
             }
             logger.error("[Rubies-Fee] *** Revenue account NOT CONFIGURED *** — " +
-                    "₦{} markup fee for ref={} was NOT transferred to Moniewise revenue wallet. " +
+                    "₦{} {} for ref={} was NOT transferred to Moniewise revenue wallet. " +
                     "Register the account via POST /admin/rubies/register-revenue-wallet",
-                    feeAmount, originalRef);
+                    feeAmount, label.toLowerCase(Locale.ROOT), originalRef);
             return;
         }
 
@@ -1957,14 +2021,25 @@ public class WalletService {
                             .build());
                 }
             } catch (Exception ex) {
-                logger.warn("[Rubies-Fee] Could not write/reset PENDING fee log for ref={}: {}",
+                logger.warn("[Rubies-Fee] Could not write/reset PENDING collection log for ref={}: {}",
                         revRef, ex.getMessage());
-                // Proceed anyway — we still want to attempt the transfer even if the log write failed
-                feeLog = null;
+                try {
+                    TransactionLog existing = transactionLogRepository.findByReference(revRef).orElse(null);
+                    if (existing != null) {
+                        logger.info("[Rubies-Fee] Collection log already exists for ref={} with status={} — skipping duplicate provider call.",
+                                revRef, existing.getStatus());
+                        return;
+                    }
+                } catch (Exception lookupEx) {
+                    logger.warn("[Rubies-Fee] Could not re-check collection log for ref={}: {}",
+                            revRef, lookupEx.getMessage());
+                }
+                logger.error("[Rubies-Fee] No collection log could be claimed for ref={} — provider transfer not attempted.",
+                        revRef);
+                return;
             }
 
             // ── 2. Fire Rubies-to-Rubies P2P ─────────────────────────────────────
-            final TransactionLog logRef = feeLog;
             try {
                 PaymentGateway rubies = paymentGatewayResolver
                         .resolveByProviderName(RubiesGateway.PROVIDER_NAME);
@@ -1985,8 +2060,8 @@ public class WalletService {
                     log.setStatus(TransactionStatus.COMPLETED);
                     transactionLogRepository.save(log);
                 });
-                logger.info("[Rubies-Fee] ₦{} markup fee transferred to revenue wallet. ref={}",
-                        feeAmount, revRef);
+                logger.info("[Rubies-Fee] ₦{} {} transferred to revenue wallet. ref={}",
+                        feeAmount, label.toLowerCase(Locale.ROOT), revRef);
 
             } catch (Exception e) {
                 // ── 4. Update log to FAILED ───────────────────────────────────────

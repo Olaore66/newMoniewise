@@ -113,6 +113,17 @@
       margin: 24px 0;
     }
     .notice strong { color: #78350F; }
+    .trust-box {
+      background: #F9FAFB;
+      border: 1px solid #E4E7EC;
+      border-radius: 8px;
+      color: #475467;
+      font-size: 13px;
+      line-height: 1.6;
+      padding: 14px 16px;
+      margin: 22px 0;
+    }
+    .trust-box strong { color: #101828; }
     .card-footer {
       border-top: 1px solid #F2F4F7;
       padding: 24px 40px;
@@ -179,9 +190,16 @@
         That feeling, that quiet, low-grade anxiety about money, is exactly what
         <strong>Wisemonie</strong> was built to take off your shoulders. You started creating
         your account, which tells us something important: <strong>you're already looking for
-        a better way.</strong> You just haven't taken the last step yet, and that's okay —
-        we kept everything exactly as you left it.
+        a better way.</strong> You just haven't taken the last step yet, and that's okay.
+        We kept everything exactly as you left it.
       </p>
+
+      <div class="trust-box">
+        <strong>Why BVN may be requested:</strong><br>
+        <span th:text="${bvnTrustLine}">
+          BVN is used so our licensed banking partner can verify your identity, open your wallet account and give you an account number for funding.
+        </span>
+      </div>
 
       <div class="btn-container">
         <table class="store-options" role="presentation" cellpadding="0" cellspacing="0">
@@ -260,7 +278,7 @@
   </div>
 
   <div class="outer-footer">
-    &copy; 2025 Wisemonie. All rights reserved.
+    &copy; <span th:text="${T(java.time.Year).now().getValue()}">2025</span> Wisemonie. All rights reserved.
   </div>
 
 </div>

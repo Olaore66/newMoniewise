@@ -6,10 +6,12 @@ import com.moniewise.moniewise_backend.enums.TransactionType;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import javax.persistence.LockModeType;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -64,6 +66,27 @@ public interface TransactionLogRepository extends JpaRepository<TransactionLog, 
     List<TransactionLog> findByUserId(Long userId);
     List<TransactionLog> findByBudgetId(Long budgetId);
 
+    @Query("""
+        SELECT t FROM TransactionLog t
+        WHERE t.userId = :userId
+          AND (
+              t.budgetId = :budgetId
+              OR t.sourceEnvelopeId IN (
+                  SELECT e.id FROM Envelope e WHERE e.budget.id = :budgetId
+              )
+              OR t.targetEnvelopeId IN (
+                  SELECT e.id FROM Envelope e WHERE e.budget.id = :budgetId
+              )
+          )
+        """)
+    List<TransactionLog> findBudgetActivityLogs(
+            @Param("userId") Long userId,
+            @Param("budgetId") Long budgetId);
+
+    List<TransactionLog> findByBudgetIdAndTransactionTypeOrderByCreatedAtAsc(
+            Long budgetId,
+            TransactionType transactionType);
+
     @Query("SELECT t FROM TransactionLog t WHERE t.userId = :userId " +
             "AND t.transactionType IN :types " +
             "ORDER BY t.createdAt DESC")
@@ -86,6 +109,16 @@ public interface TransactionLogRepository extends JpaRepository<TransactionLog, 
     Optional<TransactionLog> findByReference(String reference);
 
     boolean existsByReference(String transactionReference);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT t FROM TransactionLog t WHERE t.reference = :reference")
+    Optional<TransactionLog> findByReferenceForUpdate(@Param("reference") String reference);
+
+    boolean existsBySourceEnvelopeIdAndTransactionTypeAndStatusInAndReferenceStartingWith(
+            Long sourceEnvelopeId,
+            TransactionType transactionType,
+            List<TransactionStatus> statuses,
+            String referencePrefix);
 
     // 👇 ADD THIS NUCLEAR METHOD 👇
     // 👇 FIX: Use ABS() to handle both negative and positive log entries correctly
@@ -158,6 +191,16 @@ public interface TransactionLogRepository extends JpaRepository<TransactionLog, 
         ORDER BY t.createdAt ASC
         """)
     Optional<TransactionLog> findEnvelopeTransferByProviderReference(@Param("ref") String ref);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("""
+        SELECT t FROM TransactionLog t
+        WHERE t.providerReference = :ref
+          AND t.sourceEnvelopeId IS NOT NULL
+          AND t.transactionType = com.moniewise.moniewise_backend.enums.TransactionType.ENVELOPE_TO_EXTERNAL
+        ORDER BY t.createdAt ASC
+        """)
+    Optional<TransactionLog> findEnvelopeTransferByProviderReferenceForUpdate(@Param("ref") String ref);
 
     Optional<TransactionLog> findFirstByUserIdAndTransactionTypeAndReferenceInOrderByCreatedAtDesc(
             Long userId,

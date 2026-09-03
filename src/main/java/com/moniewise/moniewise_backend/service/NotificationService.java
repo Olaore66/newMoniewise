@@ -5,7 +5,9 @@ import com.moniewise.moniewise_backend.config.GenericNotificationEvent;
 import com.moniewise.moniewise_backend.dto.response.NotificationBulkReadResponse;
 import com.moniewise.moniewise_backend.entity.Notification;
 import com.moniewise.moniewise_backend.entity.User;
+import com.moniewise.moniewise_backend.enums.AccountClosureEmailScenario;
 import com.moniewise.moniewise_backend.enums.BudgetEngagementNudgeType;
+import com.moniewise.moniewise_backend.enums.LifecycleRecoveryType;
 import com.moniewise.moniewise_backend.enums.NotificationPriority;
 import com.moniewise.moniewise_backend.enums.NotificationType;
 import com.moniewise.moniewise_backend.repository.NotificationRepository;
@@ -38,6 +40,7 @@ import com.moniewise.moniewise_backend.repository.OutboxEventRepository;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 @Service
@@ -220,7 +223,7 @@ public class NotificationService {
                         for (String fcmToken : fcmTokens) {
                             sendFCMMessage(fcmToken, dynamicTitle, message, null,
                                     event.getActionUrl(), event.getType(), userId,
-                                    event.getContextId2()); // contextId2 = envelopeId
+                                    event.getContextId1(), event.getContextId2(), null, null);
                         }
                     } else {
                         logger.warn("âš ï¸ FCM is not initialized. Cannot send push.");
@@ -255,9 +258,10 @@ public class NotificationService {
                     DISBURSEMENT_SUCCESS, EXPIRED_DISBURSEMENT, DISBURSEMENT_FAILED,
                     INSUFFICIENT_BALANCE, LOW_BALANCE_WARNING, ENVELOPE_LOW_BALANCE,
                     LIMIT_REACHED, BUDGET_LIMIT_WARNING, EMERGENCY_USED,
-                    BUDGET_CREATION, BUDGET_COMPLETED,
+                    BUDGET_CREATION, BUDGET_SCHEDULED, BUDGET_ACTIVATED, BUDGET_COMPLETED,
                     ENVELOPE_UPDATED, ENVELOPE_LOCKED, ENVELOPE_UNLOCKED,
                     BUDGET_END, BUDGET_END_SOON, BUDGET_ENDS_TODAY,
+                    AUTO_TRANSFER_SUCCESS, AUTO_TRANSFER_FAILED, AUTO_TRANSFER_INSUFFICIENT_FUNDS,
                     HOW_TO_USE_WISEMONIE, SYSTEM -> true;
 
             default -> true;
@@ -310,6 +314,26 @@ public class NotificationService {
                     yield "And we're live! Your '" + name + "' budget is set up with \u20A6" + amount
                             + " across " + envCount + " envelopes. (Includes \u20A6" + fee + " setup fee).";
                 }
+                case BUDGET_SCHEDULED -> {
+                    String amount = formatAmount(params.getOrDefault("allocated", "0"));
+                    String name = safeText(params.get("budgetName"), "your");
+                    String startDate = safeText(params.get("startDate"), "your start date");
+                    String envCount = safeText(params.get("envelopeCount"), "your");
+                    yield "Your '" + name + "' budget is funded and scheduled for " + startDate
+                            + ". \u20A6" + amount + " is protected across " + envCount + " envelopes until it starts.";
+                }
+                case BUDGET_ACTIVATED -> {
+                    String name = safeText(params.get("budgetName"), "your");
+                    yield "Your scheduled budget '" + name + "' is now active. Your envelopes are ready based on their release rules.";
+                }
+                case BUDGET_UPDATED -> {
+                    String custom = safeText(params.get("__message"), null);
+                    if (custom != null) {
+                        yield custom;
+                    }
+                    String name = safeText(params.get("budgetName"), "your");
+                    yield "Your '" + name + "' budget has been updated.";
+                }
                 case BUDGET_CREATION_FEE -> {
                     String amount = formatAmount(params.getOrDefault("amount", "0"));
                     yield "A budget creation fee of \u20A6" + amount + " was deducted from your wallet.";
@@ -352,6 +376,23 @@ public class NotificationService {
                 case ENVELOPE_LOW_BALANCE -> {
                     String name = safeText(params.get("envelopeName"), "selected");
                     yield "Your '" + name + "' envelope did not have enough money for its scheduled release.";
+                }
+                case AUTO_TRANSFER_SUCCESS -> {
+                    String amount = formatAmount(params.getOrDefault("amount", "0"));
+                    String recipient = safeText(params.get("recipient"), "the recipient");
+                    String name = safeText(params.get("envelopeName"), "selected");
+                    yield "₦" + amount + " from your '" + name + "' envelope has been auto-transferred to " + recipient + ".";
+                }
+                case AUTO_TRANSFER_FAILED -> {
+                    String name = safeText(params.get("envelopeName"), "selected");
+                    String reason = safeText(params.get("reason"), "Please check your envelope and try a manual transfer.");
+                    yield "Auto-transfer failed for your '" + name + "' envelope. " + reason;
+                }
+                case AUTO_TRANSFER_INSUFFICIENT_FUNDS -> {
+                    String amount = formatAmount(params.getOrDefault("amount", "0"));
+                    String fee = formatAmount(params.getOrDefault("fee", "0"));
+                    String name = safeText(params.get("envelopeName"), "selected");
+                    yield "Auto-transfer of ₦" + amount + " from your '" + name + "' envelope was skipped. Insufficient funds to cover ₦" + fee + " in transfer charges.";
                 }
                 case LOW_BALANCE_WARNING -> "Your wallet balance is getting low. Please top up if you still have important payments planned.";
                 case BUDGET_END_SOON, BUDGET_ENDING_SOON -> {
@@ -528,6 +569,51 @@ public class NotificationService {
         outboxEventRepository.save(event);
     }
 
+    @Transactional
+    public Long enqueueAdminBroadcastNotification(Long userId,
+                                                  NotificationType type,
+                                                  String title,
+                                                  String message,
+                                                  String actionType,
+                                                  String redirectUrl,
+                                                  long ttlSeconds) {
+        if (userId == null) {
+            throw new IllegalArgumentException("userId is required");
+        }
+        if (type == null) {
+            throw new IllegalArgumentException("notification type is required");
+        }
+        if (message == null || message.isBlank()) {
+            throw new IllegalArgumentException("message is required");
+        }
+
+        Map<String, Object> payload = new java.util.HashMap<>();
+        if (title != null && !title.isBlank()) {
+            payload.put("__title", title);
+        }
+        payload.put("__message", message);
+        if (actionType != null && !actionType.isBlank()) {
+            payload.put("__actionType", actionType);
+        }
+        if (redirectUrl != null && !redirectUrl.isBlank()) {
+            payload.put("__redirectUrl", redirectUrl);
+            if (ACTION_OPEN_EXTERNAL_URL.equals(actionType)) {
+                payload.put("__androidUrl", redirectUrl);
+                payload.put("__iosUrl", redirectUrl);
+            }
+        }
+
+        OutboxEvent event = new OutboxEvent();
+        event.setEventType(type.name());
+        event.setUserId(userId);
+        event.setPayload(payload);
+        event.setStatus("PENDING");
+        event.setCreatedAt(LocalDateTime.now());
+        event.setTtlSeconds(ttlSeconds > 0 ? ttlSeconds : 86_400L);
+        outboxEventRepository.save(event);
+        return event.getId();
+    }
+
     // =========================================================================
     // 3. CORE FCM LOGIC
     // =========================================================================
@@ -551,10 +637,15 @@ public class NotificationService {
             case PRE_DISBURSEMENT, DISBURSEMENT_REMINDER                  -> 2_700_000L;   // 45 min
             case ONBOARDING_REMINDER                                      -> 7_200_000L;   // 2 h
             case SIGNUP_RETURN_NUDGE                                      -> 172_800_000L; // 48 h
+            case SERVICE_OUTAGE, SPECIAL_ANNOUNCEMENT                     -> 86_400_000L;  // 24 h
+            case SCHEDULED_MAINTENANCE                                    -> 259_200_000L; // 72 h
             case DISBURSEMENT_SUCCESS, DISBURSEMENT_READY, DISBURSEMENT,
                  WALLET_FUNDED, WALLET_DEPOSIT, EXTERNAL_TRANSFER,
                  ENVELOPE_TRANSFER, REFUND_ISSUED, DISBURSEMENT_REFUNDED,
-                 BUDGET_UNALLOCATED_REFUNDED, HOW_TO_USE_WISEMONIE        -> 259_200_000L; // 72 h
+                 BUDGET_UNALLOCATED_REFUNDED, BUDGET_SCHEDULED,
+                 BUDGET_ACTIVATED, AUTO_TRANSFER_SUCCESS, HOW_TO_USE_WISEMONIE
+                                                                            -> 259_200_000L; // 72 h
+            case AUTO_TRANSFER_FAILED, AUTO_TRANSFER_INSUFFICIENT_FUNDS    -> 86_400_000L;  // 24 h
             case LOW_BALANCE_WARNING, ENVELOPE_LOW_BALANCE               -> 21_600_000L;  //  6 h
             default                                                       -> 86_400_000L;  // 24 h
         };
@@ -563,25 +654,31 @@ public class NotificationService {
     /**
      * Sends one FCM push notification.
      *
-     * @param envelopeId used to build a per-envelope collapse key so that
-     *                   multiple disbursement notifications are NOT silently
-     *                   merged into one on Android.
+     * @param envelopeId used to group related envelope notifications while the
+     *                   visible Android tag stays unique per notification.
      */
     private void sendFCMMessage(String fcmToken, String title, String body, String actionType,
                                 String redirectUrl, NotificationType type, Long userId, Long envelopeId) {
-        sendFCMMessage(fcmToken, title, body, actionType, redirectUrl, type, userId, envelopeId, null);
+        sendFCMMessage(fcmToken, title, body, actionType, redirectUrl, type, userId, null, envelopeId, null, null);
     }
 
     private void sendFCMMessage(String fcmToken, String title, String body, String actionType,
                                 String redirectUrl, NotificationType type, Long userId, Long envelopeId,
                                 String devicePlatform) {
+        sendFCMMessage(fcmToken, title, body, actionType, redirectUrl, type, userId, null, envelopeId,
+                devicePlatform, null);
+    }
+
+    private void sendFCMMessage(String fcmToken, String title, String body, String actionType,
+                                String redirectUrl, NotificationType type, Long userId, Long budgetId,
+                                Long envelopeId, String devicePlatform, Long notificationContextId) {
         try {
-            // ── Unique collapse key per envelope ─────────────────────────────────────
-            // The old code used a single "DISBURSEMENTS" key for every disbursement
-            // notification, which caused Android to keep only the *last* one and silently
-            // discard all earlier ones.  A per-envelope key ensures every notification
-            // for a different envelope is shown independently.
-            String collapseKey = getGroupKey(type, userId, envelopeId);
+            // Grouping keeps related notifications visually organized, while the
+            // notification tag/id below stays unique so quick back-to-back financial
+            // events do not replace each other in Android's notification tray.
+            String groupKey = getGroupKey(type, userId, envelopeId);
+            String notificationTag = buildNotificationTag(type, userId, envelopeId, notificationContextId);
+            String notificationId = buildNotificationId(notificationTag);
 
             // ── Per-type FCM TTL ──────────────────────────────────────────────────────
             long ttlMs = computeFcmTtlMs(type);
@@ -600,6 +697,7 @@ public class NotificationService {
                             .setChannelId("wisemonie_alerts_v2") // Must match Flutter Channel
                             .setSound("wisemonie")
                             .setDefaultSound(false)
+                            .setTag(notificationTag)
                             .setTitle(title)
                             .setBody(body)
                             .setPriority(AndroidNotification.Priority.MAX)
@@ -612,7 +710,7 @@ public class NotificationService {
                     .setAps(Aps.builder()
                             .setSound("wisemonie.wav")
                             .setContentAvailable(true)
-                            .setThreadId(collapseKey)
+                            .setThreadId(groupKey)
                             .build())
                     .build();
 
@@ -624,6 +722,13 @@ public class NotificationService {
 
             // Data Payload for Flutter navigation
             messageBuilder.putData("click_action", "FLUTTER_NOTIFICATION_CLICK");
+            messageBuilder.putData("eventType", type != null ? type.name() : "UNKNOWN");
+            messageBuilder.putData("notificationId", notificationId);
+            messageBuilder.putData("notificationTag", notificationTag);
+            messageBuilder.putData("groupKey", groupKey);
+            if (userId != null) messageBuilder.putData("userId", userId.toString());
+            if (budgetId != null) messageBuilder.putData("budgetId", budgetId.toString());
+            if (envelopeId != null) messageBuilder.putData("envelopeId", envelopeId.toString());
             if (actionType != null) messageBuilder.putData("actionType", actionType);
             if (devicePlatform != null) messageBuilder.putData("devicePlatform", devicePlatform);
 
@@ -646,8 +751,8 @@ public class NotificationService {
             messageBuilder.putData("body", body);
 
             String messageId = firebaseMessaging.send(messageBuilder.build());
-            logger.info("[FCM] Delivered to user {} type={} envelope={} ttlMs={} messageId={}",
-                    userId, type, envelopeId, ttlMs, messageId);
+            logger.info("[FCM] Delivered to user {} type={} envelope={} notificationTag={} ttlMs={} messageId={}",
+                    userId, type, envelopeId, notificationTag, ttlMs, messageId);
 
         } catch (FirebaseMessagingException e) {
             String errorCode = e.getMessagingErrorCode() != null
@@ -663,7 +768,7 @@ public class NotificationService {
                 } catch (Exception ex) {
                     logger.error("[FCM] Failed to clear dead token for user {}", userId, ex);
                 }
-                // Do NOT rethrow — dead token errors are permanent, not retriable.
+                throw new DeadTokenException(fcmToken);
             } else {
                 // Transient error (QUOTA_EXCEEDED, INTERNAL, UNAVAILABLE, etc.)
                 // Rethrow so the outbox worker marks the event as PENDING and retries.
@@ -683,6 +788,8 @@ public class NotificationService {
 
     private String getNotificationTitle(NotificationType type) {
         if (type == null) return "Wisemonie";
+        if (type == NotificationType.BUDGET_SCHEDULED) return "Budget Scheduled";
+        if (type == NotificationType.BUDGET_ACTIVATED) return "Budget Active";
 
         return switch (type) {
             case WALLET_FUNDED, WALLET_DEPOSIT, REFUND_ISSUED, DISBURSEMENT_REFUNDED, BUDGET_UNALLOCATED_REFUNDED -> "Credit Alert 🚀";
@@ -713,21 +820,27 @@ public class NotificationService {
             case HOW_TO_USE_WISEMONIE -> "Watch the Wisemonie guide \uD83C\uDFA5";
             case SIGNUP_RETURN_NUDGE -> "Come back to Wisemonie \uD83E\uDDED";
             case ONBOARDING_REMINDER -> "Complete your profile \uD83D\uDCDD";
+            case AUTO_TRANSFER_SUCCESS -> "Auto-Transfer Sent 🚀";
+            case AUTO_TRANSFER_FAILED -> "Auto-Transfer Failed ❌";
+            case AUTO_TRANSFER_INSUFFICIENT_FUNDS -> "Auto-Transfer Skipped ⚠️";
             case ADMIN_RECONCILIATION_ALERT -> "Reconciliation Alert";
+            case SERVICE_OUTAGE -> "Service Alert";
+            case SCHEDULED_MAINTENANCE -> "Scheduled Maintenance";
+            case SPECIAL_ANNOUNCEMENT -> "Wisemonie Update";
             case SYSTEM -> "System Update 📢";
             case POSITIVE_NUDGE -> "Keep it up! 💪";
             default -> "Wisemonie Notification";
         };
     }
     /**
-     * Builds an Android/APNs collapse key for a notification.
+     * Builds an Android/APNs group key for a notification.
      *
      * IMPORTANT: disbursement types get a PER-ENVELOPE unique key.
      * Using a shared "DISBURSEMENTS" key caused Android to keep only the
      * last notification and silently discard all earlier ones, so users
      * with multiple envelopes would miss every disbursement except the last.
      *
-     * Transaction types still share a collapse key so that a rapid burst of
+     * Transaction types still share a group key so that a rapid burst of
      * wallet-top-up events is consolidated — that's intentional and user-friendly.
      */
     private String getGroupKey(NotificationType type, Long userId, Long envelopeId) {
@@ -737,20 +850,40 @@ public class NotificationService {
             case DISBURSEMENT, DISBURSEMENT_SUCCESS, DISBURSEMENT_READY ->
                     "DISB_" + (userId != null ? userId : "0")
                             + "_" + (envelopeId != null ? envelopeId : "0");
+            case AUTO_TRANSFER_SUCCESS, AUTO_TRANSFER_FAILED, AUTO_TRANSFER_INSUFFICIENT_FUNDS ->
+                    "AUTOXFER_" + (userId != null ? userId : "0")
+                            + "_" + (envelopeId != null ? envelopeId : "0");
+            case BUDGET_ACTIVATED ->
+                    "BUDGETACT_" + (userId != null ? userId : "0");
             case WALLET_DEPOSIT, WALLET_FUNDED, ENVELOPE_TRANSFER -> "TRANSACTIONS";
             case LOW_BALANCE_WARNING, BUDGET_LIMIT_WARNING -> "WARNINGS";
             default -> "GENERAL";
         };
     }
 
+    private String buildNotificationTag(NotificationType type, Long userId, Long envelopeId, Long contextId) {
+        String typeName = type != null ? type.name() : "UNKNOWN";
+        Long id = contextId != null
+                ? contextId
+                : System.currentTimeMillis() + Math.abs(Objects.hash(typeName, userId, envelopeId));
+        return "MW_" + typeName + "_" + id;
+    }
+
+    private String buildNotificationId(String notificationTag) {
+        return Integer.toString(notificationTag.hashCode() & 0x7fffffff);
+    }
+
     private NotificationPriority getPriority(NotificationType type) {
         return switch (type) {
             case WALLET_DEPOSIT, WALLET_FUNDED, ENVELOPE_TRANSFER, EXTERNAL_TRANSFER,
                     LOW_BALANCE_WARNING, INSUFFICIENT_BALANCE, DISBURSEMENT, DISBURSEMENT_SUCCESS, DISBURSEMENT_READY, BUDGET_COMPLETED,
+                    BUDGET_SCHEDULED, BUDGET_ACTIVATED,
                     SAVINGS_GOAL_CREATED, SAVINGS_DEPOSIT, GOAL_ACHIEVED,
                     // "Your money is ready" is the single most important savings push —
                     // it was missing here, falling to default LOW = push never sent.
                     SAVINGS_MATURED,
+                    AUTO_TRANSFER_SUCCESS, AUTO_TRANSFER_FAILED, AUTO_TRANSFER_INSUFFICIENT_FUNDS,
+                    SERVICE_OUTAGE,
                     ADMIN_PAYEELORD_LOW_BALANCE,
                     ADMIN_RECONCILIATION_ALERT -> NotificationPriority.HIGH;
 
@@ -762,6 +895,7 @@ public class NotificationService {
                     SALARY_WEEK_NUDGE, POST_SALARY_NUDGE, MID_MONTH_NUDGE,
                     SPECIAL_OCCASION_NUDGE, BIRTHDAY_NUDGE, HOW_TO_USE_WISEMONIE,
                     SIGNUP_RETURN_NUDGE, ONBOARDING_REMINDER,
+                    SCHEDULED_MAINTENANCE, SPECIAL_ANNOUNCEMENT,
                     WELCOME -> NotificationPriority.MEDIUM;
             default -> NotificationPriority.LOW;
         };
@@ -779,6 +913,18 @@ public class NotificationService {
      */
     private String logoUrl() {
         return appBaseUrl + "/images/main_logo.png";
+    }
+
+    private String normalizeFundingBankName(String bankName) {
+        if (bankName == null || bankName.isBlank()) {
+            return "Rubies Microfinance Bank / Rubies MFB";
+        }
+        String normalized = bankName.trim();
+        String lower = normalized.toLowerCase();
+        if (lower.contains("rubies") && !lower.contains("microfinance")) {
+            return "Rubies Microfinance Bank / Rubies MFB";
+        }
+        return normalized;
     }
 
     /** No-op kept for backward compatibility — CID approach replaced by hosted URL. */
@@ -802,7 +948,7 @@ public class NotificationService {
             context.setVariable("logoUrl", logoUrl());
             context.setVariable("firstName", firstName != null && !firstName.isBlank() ? firstName : "there");
             context.setVariable("accountNumber", accountNumber);
-            context.setVariable("bankName", bankName != null ? bankName : "Rubies MFB");
+            context.setVariable("bankName", normalizeFundingBankName(bankName));
 
             String htmlContent = templateEngine.process("welcome-email", context);
 
@@ -811,7 +957,7 @@ public class NotificationService {
 
             setWisemonieSender(helper);
             helper.setTo(email);
-            helper.setSubject("🎊 Welcome to Wisemonie! Your Account is Ready");
+            helper.setSubject("Your Wisemonie wallet is ready. Search Rubies MFB to fund it");
             helper.setText(htmlContent, true);
             attachLogo(helper);
 
@@ -819,6 +965,52 @@ public class NotificationService {
             logger.info("Sent HTML welcome email to {}", email);
         } catch (MessagingException e) {
             logger.error("Failed to send welcome email to {}", email, e);
+        }
+    }
+
+    public void sendAdminBroadcastEmail(String email,
+                                        String firstName,
+                                        String subject,
+                                        String tag,
+                                        String title,
+                                        String body,
+                                        String footerNote,
+                                        String ctaLabel,
+                                        String ctaUrl) {
+        if ("stub".equals(activeProfile) || mailSender == null) {
+            logger.info("[STUB] Sending admin broadcast email '{}' to {}", subject, email);
+            return;
+        }
+        try {
+            Context context = new Context();
+            context.setVariable("logoUrl", logoUrl());
+            context.setVariable("firstName", firstName != null && !firstName.isBlank() ? firstName : "there");
+            context.setVariable("subject", subject != null && !subject.isBlank() ? subject : "Wisemonie update");
+            context.setVariable("tag", tag != null && !tag.isBlank() ? tag : "Wisemonie update");
+            context.setVariable("title", title != null && !title.isBlank() ? title : "Wisemonie update");
+            context.setVariable("body", body != null && !body.isBlank() ? body : "We have an update for you.");
+            context.setVariable("footerNote", footerNote != null && !footerNote.isBlank()
+                    ? footerNote
+                    : "Thank you for using Wisemonie.");
+            context.setVariable("ctaLabel", ctaLabel != null && !ctaLabel.isBlank() ? ctaLabel : "Open Wisemonie");
+            context.setVariable("ctaUrl", ctaUrl != null && !ctaUrl.isBlank() ? ctaUrl : appBaseUrl);
+            context.setVariable("hasCta", ctaUrl != null && !ctaUrl.isBlank());
+
+            String htmlContent = templateEngine.process("admin-broadcast", context);
+
+            MimeMessage mimeMessage = mailSender.createMimeMessage();
+            MimeMessageHelper helper = new MimeMessageHelper(mimeMessage, true);
+
+            setWisemonieSender(helper);
+            helper.setTo(email);
+            helper.setSubject(subject != null && !subject.isBlank() ? subject : "Wisemonie update");
+            helper.setText(htmlContent, true);
+            attachLogo(helper);
+
+            mailSender.send(mimeMessage);
+            logger.info("Sent admin broadcast email '{}' to {}", subject, email);
+        } catch (Exception e) {
+            logger.error("Failed to send admin broadcast email '{}' to {}", subject, email, e);
         }
     }
 
@@ -851,6 +1043,8 @@ public class NotificationService {
             context.setVariable("showUrgencyNotice", showUrgencyNotice);
             context.setVariable("introParagraph", copy.introParagraph());
             context.setVariable("supportParagraph", copy.supportParagraph());
+            context.setVariable("bvnTrustLine",
+                    "BVN is used so our licensed banking partner can verify your identity, open your wallet account and give you an account number for funding. It is not requested without a purpose.");
             context.setVariable("ctaSubtext", copy.ctaSubtext());
             context.setVariable("firstPointIcon", copy.firstPointIcon());
             context.setVariable("firstPointTitle", copy.firstPointTitle());
@@ -1018,10 +1212,160 @@ public class NotificationService {
         }
     }
 
+    @Async
+    public void sendLifecycleRecoveryEmail(String email,
+                                           String firstName,
+                                           LifecycleRecoveryType type,
+                                           String accountNumber,
+                                           String bankName) {
+        if ("stub".equals(activeProfile) || mailSender == null) {
+            logger.info("[STUB] Sending lifecycle recovery {} to {}", type, email);
+            return;
+        }
+
+        LifecycleRecoveryType safeType = type != null ? type : LifecycleRecoveryType.NO_WALLET;
+        try {
+            Context context = new Context();
+            context.setVariable("logoUrl", logoUrl());
+            context.setVariable("firstName", firstName != null && !firstName.isBlank() ? firstName : "there");
+            context.setVariable("subject", lifecycleRecoverySubject(safeType));
+            context.setVariable("tag", lifecycleRecoveryTag(safeType));
+            context.setVariable("headline", lifecycleRecoveryHeadline(safeType));
+            context.setVariable("introParagraph", lifecycleRecoveryIntro(safeType));
+            context.setVariable("insightParagraph", lifecycleRecoveryInsight(safeType));
+            context.setVariable("actionTitle", lifecycleRecoveryActionTitle(safeType));
+            context.setVariable("actionItems", lifecycleRecoveryActionItems(safeType));
+            context.setVariable("trustNote", lifecycleRecoveryTrustNote(safeType));
+            context.setVariable("footerNote", lifecycleRecoveryFooterNote(safeType));
+            context.setVariable("hasFundingDetails",
+                    safeType != LifecycleRecoveryType.NO_WALLET
+                            && accountNumber != null
+                            && !accountNumber.isBlank());
+            context.setVariable("accountNumber", accountNumber);
+            context.setVariable("bankName", normalizeFundingBankName(bankName));
+            addAppDownloadContext(context);
+
+            String htmlContent = templateEngine.process("lifecycle-recovery", context);
+
+            MimeMessage mimeMessage = mailSender.createMimeMessage();
+            MimeMessageHelper helper = new MimeMessageHelper(mimeMessage, true);
+
+            setWisemonieSender(helper);
+            helper.setTo(email);
+            helper.setSubject(lifecycleRecoverySubject(safeType));
+            helper.setText(htmlContent, true);
+            attachLogo(helper);
+
+            mailSender.send(mimeMessage);
+            logger.info("Sent lifecycle recovery {} email to {}", safeType, email);
+        } catch (Exception e) {
+            logger.error("Failed to send lifecycle recovery {} email to {}", safeType, email, e);
+        }
+    }
+
+    private String lifecycleRecoverySubject(LifecycleRecoveryType type) {
+        return switch (type) {
+            case NO_WALLET -> "Your Wisemonie wallet was not created yet";
+            case WALLET_READY_NOT_FUNDED -> "Still trying to fund your Wisemonie wallet?";
+            case FUNDED_NO_PLAN -> "Your money is inside Wisemonie. Give it instructions";
+        };
+    }
+
+    private String lifecycleRecoveryTag(LifecycleRecoveryType type) {
+        return switch (type) {
+            case NO_WALLET -> "Setup paused";
+            case WALLET_READY_NOT_FUNDED -> "Funding help";
+            case FUNDED_NO_PLAN -> "Next small step";
+        };
+    }
+
+    private String lifecycleRecoveryHeadline(LifecycleRecoveryType type) {
+        return switch (type) {
+            case NO_WALLET -> "Your wallet stopped before it was created";
+            case WALLET_READY_NOT_FUNDED -> "The bank name to search is Rubies MFB";
+            case FUNDED_NO_PLAN -> "One big balance still leaves too much in your head";
+        };
+    }
+
+    private String lifecycleRecoveryIntro(LifecycleRecoveryType type) {
+        return switch (type) {
+            case NO_WALLET ->
+                    "You started setting up Wisemonie, but the wallet account was not created yet.";
+            case WALLET_READY_NOT_FUNDED ->
+                    "Your wallet account is ready, but it looks like funding may have been the part that got unclear.";
+            case FUNDED_NO_PLAN ->
+                    "You already put money inside Wisemonie. That means the intention was real.";
+        };
+    }
+
+    private String lifecycleRecoveryInsight(LifecycleRecoveryType type) {
+        return switch (type) {
+            case NO_WALLET ->
+                    "Most people pause here because BVN feels sensitive, or because something interrupts the setup. The reason is simple: our licensed banking partner needs it to verify you and create your wallet account number.";
+            case WALLET_READY_NOT_FUNDED ->
+                    "One common mistake is searching for Wisemonie as the bank name. Your wallet account is provided through Rubies Microfinance Bank, so that is the name your banking app needs.";
+            case FUNDED_NO_PLAN ->
+                    "When money stays as one big balance, every spend becomes a fresh decision. That is where pressure, impulse and mental maths enter.";
+        };
+    }
+
+    private String lifecycleRecoveryActionTitle(LifecycleRecoveryType type) {
+        return switch (type) {
+            case NO_WALLET -> "Finish the wallet step";
+            case WALLET_READY_NOT_FUNDED -> "Fund with the right bank name";
+            case FUNDED_NO_PLAN -> "Start with one instruction";
+        };
+    }
+
+    private List<String> lifecycleRecoveryActionItems(LifecycleRecoveryType type) {
+        return switch (type) {
+            case NO_WALLET -> List.of(
+                    "Open Wisemonie on your phone.",
+                    "Continue identity verification.",
+                    "Complete the BVN step if requested.",
+                    "Once verified, your wallet account number can be created."
+            );
+            case WALLET_READY_NOT_FUNDED -> List.of(
+                    "Open your banking app.",
+                    "Choose transfer to another bank.",
+                    "Search for Rubies MFB, Rubies Microfinance Bank or Rubies.",
+                    "Paste your Wisemonie account number.",
+                    "Confirm the account name, then send."
+            );
+            case FUNDED_NO_PLAN -> List.of(
+                    "Open Wisemonie on your phone.",
+                    "Create one simple money plan.",
+                    "Start with food, transport, bills, savings, family or enjoyment.",
+                    "Put only what you can plan today. You can improve the rest later."
+            );
+        };
+    }
+
+    private String lifecycleRecoveryTrustNote(LifecycleRecoveryType type) {
+        return switch (type) {
+            case NO_WALLET ->
+                    "BVN is used so our licensed banking partner can verify your identity, open your wallet account and give you an account number for funding. It is not requested without a purpose.";
+            case WALLET_READY_NOT_FUNDED ->
+                    "Do not search for Wisemonie as the bank name. Search for Rubies MFB or Rubies Microfinance Bank.";
+            case FUNDED_NO_PLAN -> null;
+        };
+    }
+
+    private String lifecycleRecoveryFooterNote(LifecycleRecoveryType type) {
+        return switch (type) {
+            case NO_WALLET ->
+                    "You do not need to set up everything today. Finish the wallet step first.";
+            case WALLET_READY_NOT_FUNDED ->
+                    "If your bank app still does not show Rubies, reply to this email and tell us the bank app you used.";
+            case FUNDED_NO_PLAN ->
+                    "This is not about a perfect plan. It is about deciding before pressure shows up.";
+        };
+    }
+
     private String budgetNudgeSubject(BudgetEngagementNudgeType type) {
         return switch (type) {
             case FUNDED_WALLET_NO_BUDGET -> "Your Wisemonie balance needs a simple plan";
-            case POST_BUDGET_COMPLETION -> "Ready for your next Wisemonie budget?";
+            case POST_BUDGET_COMPLETION -> "Ready for your next money plan?";
             case WALLET_READY_NO_BUDGET -> "Your Wisemonie wallet is ready for a plan";
         };
     }
@@ -1029,7 +1373,7 @@ public class NotificationService {
     private String budgetNudgePushTitle(BudgetEngagementNudgeType type) {
         return switch (type) {
             case FUNDED_WALLET_NO_BUDGET -> "Give your money a job";
-            case POST_BUDGET_COMPLETION -> "Ready for your next budget?";
+            case POST_BUDGET_COMPLETION -> "Ready for your next plan?";
             case WALLET_READY_NO_BUDGET -> "Your wallet is ready";
         };
     }
@@ -1042,16 +1386,16 @@ public class NotificationService {
                 String balance = walletBalance != null && walletBalance.compareTo(BigDecimal.ZERO) > 0
                         ? "Your NGN " + formatAmount(walletBalance) + " balance"
                         : "Your Wisemonie balance";
-                yield balance + " is ready for structure. Create a budget and give the money a clear plan.";
+                yield balance + " is ready for structure. Create a simple plan and give the money a clear job.";
             }
             case POST_BUDGET_COMPLETION -> {
                 String budgetName = lastBudgetName != null && !lastBudgetName.isBlank()
                         ? "'" + lastBudgetName + "'"
-                        : "your last budget";
+                        : "your last plan";
                 yield budgetName + " has ended. Start the next money cycle with a fresh Wisemonie plan.";
             }
             case WALLET_READY_NO_BUDGET ->
-                    "Your Wisemonie wallet is ready. Fund it and create a simple budget so every naira has a purpose.";
+                    "Your Wisemonie wallet is ready. Fund it and create a simple plan so every naira has a purpose.";
         };
     }
 
@@ -1074,7 +1418,7 @@ public class NotificationService {
     private String budgetNudgeSubheadline(BudgetEngagementNudgeType type) {
         return switch (type) {
             case FUNDED_WALLET_NO_BUDGET -> "Your money is already inside Wisemonie. Now give it direction.";
-            case POST_BUDGET_COMPLETION -> "You have budgeted before. This is the easy restart.";
+            case POST_BUDGET_COMPLETION -> "You have planned with Wisemonie before. This is the easy restart.";
             case WALLET_READY_NO_BUDGET -> "A wallet is useful. A wallet with a plan is calmer.";
         };
     }
@@ -1084,21 +1428,21 @@ public class NotificationService {
             case FUNDED_WALLET_NO_BUDGET -> List.of(
                     "We know making more money is already challenging enough. Being intentional about how that money is spent should not become another challenge.",
                     "You already have money in your Wisemonie wallet. That is a strong start, but money without a plan can disappear through small unplanned decisions before you even notice.",
-                    "Create a budget, split the balance into envelopes, apply sending rules, and let Wisemonie quietly hold the structure for you. The goal is simple: less pressure, fewer surprises, and more confidence before you spend."
+                    "Create a simple plan, split the balance into envelopes, apply sending rules, and let Wisemonie quietly hold the structure for you. The goal is simple: less pressure, fewer surprises, and more confidence before you spend."
             );
             case POST_BUDGET_COMPLETION -> {
                 String budgetName = lastBudgetName != null && !lastBudgetName.isBlank()
                         ? "'" + lastBudgetName + "'"
                         : "your last";
                 yield List.of(
-                        "You have done this before. " + budgetName + " budget has ended, and the next money cycle deserves structure too.",
+                        "You have done this before. " + budgetName + " plan has ended, and the next money cycle deserves structure too.",
                         "We know making more money is already challenging enough. Being intentional about how that money is spent should not become another challenge.",
-                        "A fresh Wisemonie budget helps you decide what is for spending, what should be protected, and what can go into savings. Then you can spend directly from each envelope and know what is safe to spend."
+                        "A fresh Wisemonie plan helps you decide what is for spending, what should be protected, and what can go into savings. Then you can spend directly from each envelope and know what is safe to spend."
                 );
             }
             case WALLET_READY_NO_BUDGET -> List.of(
                     "We know making more money is already challenging enough. Being intentional about how that money is spent should not become another challenge.",
-                    "Your Wisemonie wallet is ready. Fund it, create a simple budget, and split the money into envelopes for the parts of life that usually pull on your balance: bills, food, transport, giving, enjoyment, and savings.",
+                    "Your Wisemonie wallet is ready. Fund it, create a simple plan, and split the money into envelopes for the parts of life that usually pull on your balance: bills, food, transport, giving, enjoyment, and savings.",
                     "Once every envelope has a purpose, you do not have to keep calculating in your head. Wisemonie helps you see what is safe to spend, reduces financial pressure, and still leaves room to save."
             );
         };
@@ -1123,7 +1467,7 @@ public class NotificationService {
     private String budgetNudgeFooterNote(BudgetEngagementNudgeType type) {
         return switch (type) {
             case FUNDED_WALLET_NO_BUDGET -> "This is not pressure. It is a simple way to protect the money already sitting in your wallet.";
-            case POST_BUDGET_COMPLETION -> "A completed budget is proof you can do this. The next one can be even easier.";
+            case POST_BUDGET_COMPLETION -> "A completed plan is proof you can do this. The next one can be even easier.";
             case WALLET_READY_NO_BUDGET -> "Start small if you need to. The calm comes from giving your money a direction.";
         };
     }
@@ -1150,7 +1494,7 @@ public class NotificationService {
                     "We clear abandoned accounts so your details do not sit around unfinished.",
                     "\uD83E\uDDED",
                     "Start with direction",
-                    "Once setup is complete, Wisemonie can help you fund, budget and spend with more clarity.",
+                    "Once setup is complete, Wisemonie can help you fund, plan and spend with more clarity.",
                     "We would rather help you finish than lose the progress you already started."
             );
         }
@@ -1169,7 +1513,7 @@ public class NotificationService {
                         "Your Wisemonie wallet needs the final profile step before it can fully work for you.",
                         "\uD83C\uDF31",
                         "Start small",
-                        "You do not need a perfect budget. One transport, food or savings plan is enough to begin.",
+                        "You do not need a perfect plan. One transport, food or savings instruction is enough to begin.",
                         "No pressure. Just one small step that makes the account useful."
                 ),
                 new OnboardingReminderCopy(
@@ -1201,7 +1545,7 @@ public class NotificationService {
                         "Rules and envelopes help you follow the plan when impulse spending shows up.",
                         "\u2705",
                         "Get one quick win",
-                        "Your first simple budget can be small and practical.",
+                        "Your first simple plan can be small and practical.",
                         "A small money habit today can save plenty stress later."
                 ),
                 new OnboardingReminderCopy(
@@ -1238,7 +1582,7 @@ public class NotificationService {
                 ),
                 new OnboardingReminderCopy(
                         "Your Wisemonie account can still become useful today",
-                        "Your account is still here, but the real value begins after setup. Until then, Wisemonie cannot fully help you fund a wallet, create a budget or spend from a plan.",
+                        "Your account is still here, but the real value begins after setup. Until then, Wisemonie cannot fully help you fund a wallet, create a plan or spend from the right envelope.",
                         "Finish the profile step, then start with one simple area: lunch at work, transport, family support, offering, savings or data. Small structure is still structure.",
                         "Complete setup and try one simple plan.",
                         "\uD83D\uDE80",
@@ -1246,7 +1590,7 @@ public class NotificationService {
                         "The account becomes useful when setup is complete.",
                         "\uD83C\uDF71",
                         "Plan something familiar",
-                        "Lunch, transport, data or savings is enough for a first budget.",
+                        "Lunch, transport, data or savings is enough for a first plan.",
                         "\uD83E\uDDD8",
                         "Keep it simple",
                         "You do not need to plan the whole month before you start.",
@@ -1364,7 +1708,7 @@ public class NotificationService {
 
     private String buildOnboardingReminderSubject(int daysSinceSignup, boolean urgent) {
         if (urgent) {
-            return "⏳ Your Wisemonie account is waiting — don't lose your spot";
+            return "Your Wisemonie account is waiting. Do not lose your spot";
         }
         if (daysSinceSignup <= 1) {
             return "👋 You're one step away from a calmer relationship with money";
@@ -1509,15 +1853,31 @@ public class NotificationService {
      */
     @Async
     public void sendAccountClosedEmail(String to, String userName, String reason) {
+        sendAccountClosedEmail(to, userName, reason, AccountClosureEmailScenario.GENERAL);
+    }
+
+    @Async
+    public void sendAccountClosedEmail(String to,
+                                       String userName,
+                                       String reason,
+                                       AccountClosureEmailScenario scenario) {
         if ("stub".equals(activeProfile) || mailSender == null) {
-            logger.info("[STUB] Sending account closed email to {}", to);
+            logger.info("[STUB] Sending account closed email {} to {}", scenario, to);
             return;
         }
+        AccountClosureEmailScenario safeScenario = scenario != null
+                ? scenario
+                : AccountClosureEmailScenario.GENERAL;
         try {
             Context context = new Context();
             context.setVariable("logoUrl", logoUrl());
-            context.setVariable("userName", userName);
-            context.setVariable("reason", reason);
+            context.setVariable("userName", userName != null && !userName.isBlank() ? userName : "there");
+            context.setVariable("reason", reason != null ? reason.trim() : "");
+            context.setVariable("scenarioTitle", accountClosureTitle(safeScenario));
+            context.setVariable("scenarioBody", accountClosureBody(safeScenario));
+            context.setVariable("feedbackPrompt", accountClosureFeedbackPrompt(safeScenario));
+            context.setVariable("reasonOptions", accountClosureReasonOptions(safeScenario));
+            context.setVariable("closingNote", accountClosureClosingNote(safeScenario));
 
             String htmlContent = templateEngine.process("account-closed", context);
 
@@ -1526,15 +1886,115 @@ public class NotificationService {
 
             setWisemonieSender(helper);
             helper.setTo(to);
-            helper.setSubject("You are valued — a note from Wisemonie 💚");
+            helper.setSubject(accountClosureSubject(safeScenario));
             helper.setText(htmlContent, true);
             attachLogo(helper);
 
             mailSender.send(mimeMessage);
-            logger.info("Sent account closed email to {}", to);
+            logger.info("Sent account closed email {} to {}", safeScenario, to);
         } catch (Exception e) {
             logger.error("Failed to send account closed email to {}", to, e);
         }
+    }
+
+    private String accountClosureSubject(AccountClosureEmailScenario scenario) {
+        return switch (scenario) {
+            case NO_WALLET -> "Was the wallet step unclear?";
+            case WALLET_NOT_FUNDED -> "Did funding your Wisemonie wallet get confusing?";
+            case FUNDED_NO_PLAN -> "What stopped Wisemonie from becoming useful?";
+            case USED_WISEMONIE -> "What made you leave Wisemonie?";
+            case GENERAL -> "Before you go, can you tell us what got in the way?";
+        };
+    }
+
+    private String accountClosureTitle(AccountClosureEmailScenario scenario) {
+        return switch (scenario) {
+            case NO_WALLET -> "It looks like setup stopped at the wallet step";
+            case WALLET_NOT_FUNDED -> "It looks like funding may have been the blocker";
+            case FUNDED_NO_PLAN -> "You funded Wisemonie, but the next step did not stick";
+            case USED_WISEMONIE -> "You gave Wisemonie a real try";
+            case GENERAL -> "Thank you for trying Wisemonie";
+        };
+    }
+
+    private String accountClosureBody(AccountClosureEmailScenario scenario) {
+        return switch (scenario) {
+            case NO_WALLET ->
+                    "If BVN or wallet creation felt unclear, that is useful for us to know. BVN may be requested so our licensed banking partner can verify you, open your wallet account and provide your account number for funding.";
+            case WALLET_NOT_FUNDED ->
+                    "Many users get stuck because they search for Wisemonie in their bank app. The bank name is Rubies MFB, Rubies Microfinance Bank or Rubies. If this was the confusing part, please tell us the bank app you used.";
+            case FUNDED_NO_PLAN ->
+                    "Funding the wallet means the intent was there. If Wisemonie did not quickly show you how to give that money instructions, we need to understand where the experience fell short.";
+            case USED_WISEMONIE ->
+                    "Because you actually used Wisemonie, your feedback carries extra weight. We want to understand whether the issue was trust, charges, delays, product fit, too much friction or something we did not see.";
+            case GENERAL ->
+                    "We are not going to send a long sales pitch. We only want to understand what got in the way so the product can become more useful for real people with real money pressure.";
+        };
+    }
+
+    private String accountClosureFeedbackPrompt(AccountClosureEmailScenario scenario) {
+        return switch (scenario) {
+            case NO_WALLET ->
+                    "Reply with one line if you can: did you stop because of BVN, trust, a failed step, too much information, or something else?";
+            case WALLET_NOT_FUNDED ->
+                    "Reply with one line if you can: did your bank app fail to show Rubies, did the account number not resolve, or did the funding step feel risky?";
+            case FUNDED_NO_PLAN ->
+                    "Reply with one line if you can: did you not understand the next step, did envelopes feel like too much, or did you not see a reason to continue?";
+            case USED_WISEMONIE ->
+                    "Reply with one line if you can: what was the moment that made you decide Wisemonie was not worth keeping?";
+            case GENERAL ->
+                    "Reply with one line if you can. A human reads it, and it helps us fix the part that made people leave.";
+        };
+    }
+
+    private List<String> accountClosureReasonOptions(AccountClosureEmailScenario scenario) {
+        return switch (scenario) {
+            case NO_WALLET -> List.of(
+                    "BVN request did not feel clear",
+                    "Wallet creation failed or took too long",
+                    "I did not trust the setup yet",
+                    "I got interrupted and did not see a reason to return"
+            );
+            case WALLET_NOT_FUNDED -> List.of(
+                    "I could not find Rubies MFB in my bank app",
+                    "The account number did not resolve",
+                    "I was not sure the transfer would be safe",
+                    "I wanted to fund later and forgot"
+            );
+            case FUNDED_NO_PLAN -> List.of(
+                    "I did not know what to do after funding",
+                    "Creating a plan felt like too much work",
+                    "I wanted more guidance before locking money into envelopes",
+                    "I funded the wallet, but the benefit was not obvious yet"
+            );
+            case USED_WISEMONIE -> List.of(
+                    "The app had too much friction",
+                    "A fee or transfer delay reduced my trust",
+                    "I needed a feature Wisemonie does not have yet",
+                    "The product did not match how I manage money"
+            );
+            case GENERAL -> List.of(
+                    "Something felt unclear",
+                    "I did not trust it enough yet",
+                    "I did not see the value quickly",
+                    "I had a bad app or payment experience"
+            );
+        };
+    }
+
+    private String accountClosureClosingNote(AccountClosureEmailScenario scenario) {
+        return switch (scenario) {
+            case NO_WALLET ->
+                    "If you ever come back, we should make the wallet step feel clearer than it did the first time.";
+            case WALLET_NOT_FUNDED ->
+                    "If you ever come back, search Rubies MFB or Rubies Microfinance Bank when funding your wallet.";
+            case FUNDED_NO_PLAN ->
+                    "If you ever come back, start with one practical instruction for your money. Food, transport, bills or savings is enough.";
+            case USED_WISEMONIE ->
+                    "If you ever come back, your account can be reactivated by signing in with your registered email.";
+            case GENERAL ->
+                    "If you ever come back, your account can be reactivated by signing in with your registered email.";
+        };
     }
 
     @Async
@@ -1602,8 +2062,11 @@ public class NotificationService {
                 String actionType = plan.actionTypeFor(target.devicePlatform());
                 String redirectUrl = plan.redirectUrlFor(target.devicePlatform());
                 sendFCMMessage(target.token(), plan.title, plan.message, actionType, redirectUrl,
-                        plan.type, plan.userId, plan.envelopeId, target.devicePlatform());
+                        plan.type, plan.userId, plan.budgetId, plan.envelopeId,
+                        target.devicePlatform(), plan.eventId);
                 delivered.add(target.token());
+            } catch (DeadTokenException ignored) {
+                // Token was permanently invalid — already cleaned up, don't count as delivered
             } catch (RuntimeException fcmError) {
                 transientError = fcmError.getMessage(); // stop; persist progress + retry below
                 break;
@@ -1714,17 +2177,27 @@ public class NotificationService {
         }
 
         if (tokensToPush.isEmpty()) {
-            // Nothing to push (not eligible, no active token, or all already delivered).
-            // redeliverMissedPushes() covers the no-token case via the pushSent=false flag.
-            if (pushEligible && pushTargets.isEmpty()) {
-                logger.info("[OUTBOX] No active token for user {} — will redeliver on next token registration",
-                        event.getUserId());
+            // Diagnose WHY no push is being sent — critical for HIGH-priority events.
+            if (!pushEligible) {
+                logger.info("[OUTBOX] Delivered event {} type={} (no push: priority=LOW)",
+                        event.getId(), event.getEventType());
+            } else if ("stub".equals(activeProfile)) {
+                logger.warn("[OUTBOX] Delivered event {} type={} (no push: stub profile)",
+                        event.getId(), event.getEventType());
+            } else if (firebaseMessaging == null) {
+                logger.error("[OUTBOX] Delivered event {} type={} (no push: Firebase NOT initialized)",
+                        event.getId(), event.getEventType());
+            } else if (pushTargets.isEmpty()) {
+                logger.warn("[OUTBOX] Delivered event {} type={} (no push: no FCM token for user {}) — will redeliver on next token registration",
+                        event.getId(), event.getEventType(), event.getUserId());
+            } else {
+                logger.info("[OUTBOX] Delivered event {} type={} (no push: all {} token(s) already delivered)",
+                        event.getId(), event.getEventType(), alreadyDelivered.size());
             }
             event.setStatus("PROCESSED");
             event.setProcessedAt(LocalDateTime.now());
             event.setLastError(null);
             outboxEventRepository.save(event);
-            logger.info("[OUTBOX] Delivered event {} type={} (no push)", event.getId(), event.getEventType());
             return null;
         }
 
@@ -1740,6 +2213,8 @@ public class NotificationService {
         plan.iosExternalUrl = iosExternalUrl;
         plan.type = type;
         plan.userId = event.getUserId();
+        plan.eventId = event.getId();
+        plan.budgetId = event.getBudgetId();
         plan.envelopeId = event.getEnvelopeId();
         plan.tokensToPush = tokensToPush;
         plan.alreadyDelivered = alreadyDelivered;
@@ -1778,6 +2253,8 @@ public class NotificationService {
         String iosExternalUrl;
         NotificationType type;
         Long userId;
+        Long eventId;
+        Long budgetId;
         Long envelopeId;
         List<AuthSessionService.PushTarget> tokensToPush;
         Set<String> alreadyDelivered;
@@ -2058,8 +2535,8 @@ public class NotificationService {
                     String title = getNotificationTitle(n.getType());
                     for (AuthSessionService.PushTarget target : pushTargets) {
                         sendFCMMessage(target.token(), title, n.getMessage(), n.getActionType(),
-                                n.getRedirectUrl(), n.getType(), userId, n.getEnvelopeId(),
-                                target.devicePlatform());
+                                n.getRedirectUrl(), n.getType(), userId, n.getBudgetId(),
+                                n.getEnvelopeId(), target.devicePlatform(), n.getId());
                     }
                     n.setPushSent(true);
                     redelivered++;

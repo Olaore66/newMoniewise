@@ -6,13 +6,20 @@ import com.moniewise.moniewise_backend.dto.PendingRegistrationData;
 import com.moniewise.moniewise_backend.dto.response.BvnVerificationResultDto;
 import com.moniewise.moniewise_backend.entity.KycProfile;
 import com.moniewise.moniewise_backend.entity.User;
+import com.moniewise.moniewise_backend.psp.rubies.RubiesGateway;
 import com.moniewise.moniewise_backend.repository.KycProfileRepository;
 import com.moniewise.moniewise_backend.repository.UserRepository;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.client.ResourceAccessException;
+import org.springframework.web.client.RestClientResponseException;
 
+import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 
 @Slf4j
 @Service
@@ -21,17 +28,23 @@ public class KycService {
     private final KycProfileRepository kycProfileRepository;
     private final UserRepository userRepository;
     private final SecureWavePaymentProvider secureWavePaymentProvider;
+    private final RubiesGateway rubiesGateway;
     private final RegistrationCacheService registrationCacheService;
+
+    @Value("${moniewise.kyc.rubies-fallback.enabled:true}")
+    private boolean rubiesBvnFallbackEnabled;
 
     public KycService(
             KycProfileRepository kycProfileRepository,
             UserRepository userRepository,
             SecureWavePaymentProvider secureWavePaymentProvider,
+            RubiesGateway rubiesGateway,
             RegistrationCacheService registrationCacheService
     ) {
         this.kycProfileRepository = kycProfileRepository;
         this.userRepository = userRepository;
         this.secureWavePaymentProvider = secureWavePaymentProvider;
+        this.rubiesGateway = rubiesGateway;
         this.registrationCacheService = registrationCacheService;
     }
 
@@ -75,6 +88,14 @@ public class KycService {
      * @throws RuntimeException         if SecureWave rejects the BVN
      */
     public BvnVerificationResultDto preVerifyBvn(String phone, String bvn) {
+        return preVerifyBvn(phone, bvn, null, null, null);
+    }
+
+    public BvnVerificationResultDto preVerifyBvn(String phone,
+                                                 String bvn,
+                                                 String firstName,
+                                                 String lastName,
+                                                 String dob) {
         // 1. Guard: must have a pending registration — proves phone was submitted
         //    during /auth/signup and prevents anonymous BVN enumeration
         PendingRegistrationData pending = registrationCacheService
@@ -94,8 +115,9 @@ public class KycService {
 
         String email = pending.getEmail();
 
-        // 2. Call SecureWave
-        BvnVerificationResultDto result = secureWavePaymentProvider.verifyBvn(email, phone, bvn);
+        // 2. Call SecureWave first; Rubies is only an outage fallback.
+        BvnVerificationResultDto result = verifyBvnWithSecureWaveFallback(
+                email, phone, bvn, firstName, lastName, dob);
 
         // 3. Persist BVN data back into the Redis pending record so it is
         //    available when the OTP is verified and the User is created
@@ -160,9 +182,15 @@ public class KycService {
                     "If you believe this is an error, please contact support.");
         }
 
-        // Delegate to SecureWave — email + phone come from the user's record
-        BvnVerificationResultDto result = secureWavePaymentProvider.verifyBvn(
-                user.getEmail(), user.getPhone(), bvn);
+        // Delegate to SecureWave first. Rubies fallback needs name details, so
+        // pass whatever verified/profile identity data we already have.
+        BvnVerificationResultDto result = verifyBvnWithSecureWaveFallback(
+                user.getEmail(),
+                user.getPhone(),
+                bvn,
+                identityFirstName(user, existing.orElse(null)),
+                identityLastName(user, existing.orElse(null)),
+                identityDob(user, existing.orElse(null)));
 
         // ── Upsert: update existing row if one exists, never insert a second one ──
         KycProfile profile = existing.orElse(new KycProfile());
@@ -238,6 +266,154 @@ public class KycService {
             profile.setKycStatus(KycProfile.KycStatus.REJECTED);
             kycProfileRepository.save(profile);
         });
+    }
+
+    // ── Provider fallback ────────────────────────────────────────────────────
+
+    private BvnVerificationResultDto verifyBvnWithSecureWaveFallback(String email,
+                                                                     String phone,
+                                                                     String bvn,
+                                                                     String firstName,
+                                                                     String lastName,
+                                                                     String dob) {
+        try {
+            return secureWavePaymentProvider.verifyBvn(email, phone, bvn);
+        } catch (RuntimeException primaryError) {
+            if (!isSecureWaveUnavailable(primaryError)) {
+                throw primaryError;
+            }
+
+            log.warn("[KYC] SecureWave BVN verification appears unavailable; trying Rubies fallback. reason={}",
+                    primaryError.getMessage());
+
+            // Emergency off-switch: comment out this single invocation and
+            // uncomment the throw below to return to SecureWave-only behaviour.
+            return verifyBvnWithRubiesFallback(bvn, firstName, lastName, dob, primaryError);
+            // throw primaryError;
+        }
+    }
+
+    private BvnVerificationResultDto verifyBvnWithRubiesFallback(String bvn,
+                                                                 String firstName,
+                                                                 String lastName,
+                                                                 String dob,
+                                                                 RuntimeException primaryError) {
+        if (!rubiesBvnFallbackEnabled) {
+            throw primaryError;
+        }
+
+        String cleanFirstName = clean(firstName);
+        String cleanLastName = clean(lastName);
+        String cleanDob = clean(dob);
+
+        if (cleanFirstName == null || cleanLastName == null) {
+            log.warn("[KYC] Rubies BVN fallback skipped because first/last name was not available.");
+            throw primaryError;
+        }
+
+        try {
+            String reference = rubiesBvnReference();
+            BvnVerificationResultDto result = rubiesGateway.verifyBvn(
+                    bvn,
+                    cleanFirstName,
+                    cleanLastName,
+                    cleanDob,
+                    reference);
+            log.info("[KYC] Rubies BVN fallback succeeded for reference={}", reference);
+            return result;
+        } catch (IllegalArgumentException rubiesRejection) {
+            throw rubiesRejection;
+        } catch (RuntimeException fallbackError) {
+            primaryError.addSuppressed(fallbackError);
+            log.error("[KYC] Rubies BVN fallback also failed: {}", fallbackError.getMessage());
+            throw primaryError;
+        }
+    }
+
+    private boolean isSecureWaveUnavailable(Throwable error) {
+        Throwable current = error;
+        while (current != null) {
+            if (current instanceof ResourceAccessException) {
+                return true;
+            }
+            if (current instanceof RestClientResponseException) {
+                int status = ((RestClientResponseException) current).getRawStatusCode();
+                return status == 429 || status >= 500;
+            }
+            current = current.getCause();
+        }
+
+        String message = error.getMessage() != null
+                ? error.getMessage().toLowerCase(Locale.ROOT)
+                : "";
+        return message.contains("timed out")
+                || message.contains("timeout")
+                || message.contains("connection refused")
+                || message.contains("i/o error")
+                || message.contains("service unavailable")
+                || message.contains("bad gateway")
+                || message.contains("gateway timeout")
+                || message.contains("503")
+                || message.contains("502")
+                || message.contains("504");
+    }
+
+    private String identityFirstName(User user, KycProfile profile) {
+        return firstNonBlank(
+                profile != null ? profile.getFirstName() : null,
+                profileValue(user, "bvnFirstName", "bvnFirst", "firstName"));
+    }
+
+    private String identityLastName(User user, KycProfile profile) {
+        return firstNonBlank(
+                profile != null ? profile.getLastName() : null,
+                profileValue(user, "bvnLastName", "bvnLast", "lastName"));
+    }
+
+    private String identityDob(User user, KycProfile profile) {
+        return firstNonBlank(
+                profile != null ? profile.getDateOfBirth() : null,
+                profileValue(user, "dateOfBirth", "dob"));
+    }
+
+    private String profileValue(User user, String... keys) {
+        Map<String, Object> profile = user != null ? user.getProfileData() : null;
+        if (profile == null || profile.isEmpty()) {
+            return null;
+        }
+        for (String key : keys) {
+            Object value = profile.get(key);
+            if (value == null) {
+                continue;
+            }
+            String text = clean(value.toString());
+            if (text != null) {
+                return text;
+            }
+        }
+        return null;
+    }
+
+    private String firstNonBlank(String... values) {
+        for (String value : values) {
+            String clean = clean(value);
+            if (clean != null) {
+                return clean;
+            }
+        }
+        return null;
+    }
+
+    private String clean(String value) {
+        if (value == null) {
+            return null;
+        }
+        String text = value.trim();
+        return text.isBlank() ? null : text;
+    }
+
+    private String rubiesBvnReference() {
+        return "MW-BVN-" + System.currentTimeMillis() + "-" + UUID.randomUUID().toString().substring(0, 8);
     }
 
     // ── Mappers ───────────────────────────────────────────────────────────────

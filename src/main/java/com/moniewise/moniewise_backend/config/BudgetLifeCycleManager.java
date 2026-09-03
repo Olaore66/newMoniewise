@@ -3,12 +3,16 @@ package com.moniewise.moniewise_backend.config;
 import com.moniewise.moniewise_backend.entity.*;
 import com.moniewise.moniewise_backend.enums.BudgetStatus;
 import com.moniewise.moniewise_backend.enums.NotificationType;
+import com.moniewise.moniewise_backend.enums.SavingsStatus;
 import com.moniewise.moniewise_backend.enums.TransactionStatus;
 import com.moniewise.moniewise_backend.enums.TransactionType;
 import com.moniewise.moniewise_backend.repository.*;
+import com.moniewise.moniewise_backend.service.BadgeAwardService;
+import com.moniewise.moniewise_backend.service.EnvelopeAutoTransferService;
 import com.moniewise.moniewise_backend.service.EnvelopeService;
 import com.moniewise.moniewise_backend.service.MonnieCacheInvalidationService;
 import com.moniewise.moniewise_backend.service.NotificationService;
+import com.moniewise.moniewise_backend.service.SavingsService;
 import com.moniewise.moniewise_backend.service.WalletService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -52,6 +56,10 @@ public class BudgetLifeCycleManager {
     private final PendingDisbursementRepository pendingDisbursementRepository;
     private final EnvelopeService envelopeService;
     private final MonnieCacheInvalidationService monnieCacheInvalidationService;
+    private final EnvelopeAutoTransferService envelopeAutoTransferService;
+    private final SavingsGoalRepository savingsGoalRepository;
+    private final SavingsService savingsService;
+    private final BadgeAwardService badgeAwardService;
 
     private final OutboxEventRepository outboxEventRepository;
 
@@ -72,7 +80,11 @@ public class BudgetLifeCycleManager {
             PendingDisbursementRepository pendingDisbursementRepository,
             @Lazy EnvelopeService envelopeService,
             MonnieCacheInvalidationService monnieCacheInvalidationService,
-            OutboxEventRepository outboxEventRepository, ApplicationEventPublisher eventPublisher) {
+            OutboxEventRepository outboxEventRepository, ApplicationEventPublisher eventPublisher,
+            @Lazy EnvelopeAutoTransferService envelopeAutoTransferService,
+            SavingsGoalRepository savingsGoalRepository,
+            SavingsService savingsService,
+            BadgeAwardService badgeAwardService) {
         this.budgetRepository = budgetRepository;
         this.envelopeRepository = envelopeRepository;
         this.scheduledTaskRepository = scheduledTaskRepository;
@@ -86,6 +98,10 @@ public class BudgetLifeCycleManager {
         this.monnieCacheInvalidationService = monnieCacheInvalidationService;
         this.outboxEventRepository = outboxEventRepository;
         this.eventPublisher = eventPublisher;
+        this.envelopeAutoTransferService = envelopeAutoTransferService;
+        this.savingsGoalRepository = savingsGoalRepository;
+        this.savingsService = savingsService;
+        this.badgeAwardService = badgeAwardService;
     }
 
     @PostConstruct
@@ -172,7 +188,354 @@ public class BudgetLifeCycleManager {
         scheduledTaskRepository.save(mainTask);
         logger.info("Scheduled next disbursement for envelope {} at {}", envelope.getId(), triggerTime);
     }
-    @Transactional(timeout = 120)
+
+    @Scheduled(cron = "${moniewise.scheduler.scheduled-budget-activation.cron:0 */10 * * * ?}", zone = "Africa/Lagos")
+    public void activateDueScheduledBudgets() {
+        LocalDate today = fetchCurrentDateTimeFromDatabase().toLocalDate();
+
+        int batchSize = 100;
+        int currentLoop = 0;
+        int maxLoops = 50;
+        boolean hasMore = true;
+
+        while (hasMore && currentLoop < maxLoops) {
+            currentLoop++;
+
+            Pageable pageable = PageRequest.of(0, batchSize);
+            Page<Budget> page = budgetRepository.findByStatusAndStartDateLessThanEqual(
+                    BudgetStatus.SCHEDULED,
+                    today,
+                    pageable
+            );
+
+            if (page.isEmpty()) {
+                hasMore = false;
+                continue;
+            }
+
+            for (Budget budget : page.getContent()) {
+                try {
+                    transactionTemplate.execute(status -> {
+                        activateScheduledBudget(budget.getId());
+                        return null;
+                    });
+                } catch (Exception e) {
+                    logger.error("Failed to activate scheduled budget {}", budget.getId(), e);
+                }
+            }
+
+            hasMore = page.getNumberOfElements() == batchSize;
+        }
+    }
+
+    @Transactional
+    public Budget activateScheduledBudget(Long budgetId) {
+        Budget budget = budgetRepository.findByIdForUpdate(budgetId)
+                .orElseThrow(() -> new IllegalArgumentException("Budget not found with ID: " + budgetId));
+
+        if (budget.getStatus() == BudgetStatus.ACTIVE
+                || budget.getStatus() == BudgetStatus.COMPLETED
+                || budget.getStatus() == BudgetStatus.CANCELLED) {
+            return budget;
+        }
+        if (budget.getStatus() != BudgetStatus.SCHEDULED) {
+            throw new IllegalStateException("Budget " + budgetId + " is not scheduled");
+        }
+
+        LocalDateTime now = fetchCurrentDateTimeFromDatabase();
+        LocalDate today = now.toLocalDate();
+        if (budget.getStartDate() != null && budget.getStartDate().isAfter(today)) {
+            throw new IllegalStateException("Budget " + budgetId + " starts on " + budget.getStartDate());
+        }
+
+        budget.setStatus(BudgetStatus.ACTIVE);
+
+        if (isBudgetPastEndDate(budget, now)) {
+            List<Budget> budgetsToUpdate = new ArrayList<>();
+            List<Envelope> envelopesToUpdate = new ArrayList<>();
+            List<TransactionLog> logsToSave = new ArrayList<>();
+            processBudgetExpiry(budget, budgetsToUpdate, envelopesToUpdate, logsToSave);
+            budgetRepository.saveAll(budgetsToUpdate);
+            envelopeRepository.saveAll(envelopesToUpdate);
+            transactionLogRepository.saveAll(logsToSave);
+            monnieCacheInvalidationService.evictUserAfterCommit(budget.getUser().getId());
+            return budget;
+        }
+
+        budgetRepository.save(budget);
+
+        List<Envelope> envelopes = envelopeRepository.findByBudgetId(budget.getId());
+        List<Envelope> envelopesToSave = new ArrayList<>();
+        List<ScheduledTask> tasksToSave = new ArrayList<>();
+        List<OutboxEvent> outboxEventsToSave = new ArrayList<>();
+
+        for (Envelope envelope : envelopes) {
+            scheduledTaskRepository.deleteByEnvelopeId(envelope.getId());
+            activateScheduledEnvelope(budget, envelope, now, tasksToSave, outboxEventsToSave);
+            envelopesToSave.add(envelope);
+        }
+
+        BigDecimal remainingInBudget = envelopesToSave.stream()
+                .map(envelope -> safeAmount(envelope.getTotalRemainingAmount()))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        budget.setRemainingAmount(remainingInBudget);
+        budgetRepository.save(budget);
+
+        if (!envelopesToSave.isEmpty()) {
+            envelopeRepository.saveAll(envelopesToSave);
+        }
+        if (!tasksToSave.isEmpty()) {
+            scheduledTaskRepository.saveAll(tasksToSave);
+        }
+
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("budgetName", budget.getName() != null ? budget.getName() : "your");
+        payload.put("startDate", budget.getStartDate() != null ? budget.getStartDate().toString() : today.toString());
+        outboxEventsToSave.add(buildOutboxEvent(
+                NotificationType.BUDGET_ACTIVATED,
+                budget.getUser().getId(),
+                budget.getId(),
+                null,
+                payload
+        ));
+
+        if (!outboxEventsToSave.isEmpty()) {
+            outboxEventRepository.saveAll(outboxEventsToSave);
+        }
+
+        monnieCacheInvalidationService.evictUserAfterCommit(budget.getUser().getId());
+        logger.info("Activated scheduled budget {} for user {}", budget.getId(), budget.getUser().getId());
+        return budget;
+    }
+
+    private void activateScheduledEnvelope(
+            Budget budget,
+            Envelope envelope,
+            LocalDateTime now,
+            List<ScheduledTask> tasksToSave,
+            List<OutboxEvent> outboxEventsToSave
+    ) {
+        Map<String, Object> conditions = mutableConditions(envelope);
+        String type = conditions.getOrDefault("type", "").toString().toLowerCase();
+
+        if ("savings_sweep".equals(type)) {
+            activateScheduledSavingsSweep(budget, envelope, conditions, now, outboxEventsToSave);
+            return;
+        }
+
+        if ("emergency".equals(type)) {
+            envelope.setRemainingAmount(availableVaultBalance(envelope));
+            envelope.setNextDisbursementAt(null);
+            envelope.setHasMatured(false);
+            return;
+        }
+
+        if ("safe_lock".equals(type) || "strict_lock".equals(type)) {
+            LocalDateTime nextDisbursement = calculateNextDisbursementTime(envelope);
+            if (nextDisbursement == null) {
+                envelope.setRemainingAmount(availableVaultBalance(envelope));
+                envelope.setHasMatured(true);
+            } else {
+                envelope.setRemainingAmount(BigDecimal.ZERO);
+                tasksToSave.add(new ScheduledTask(envelope.getId(), "DISBURSEMENT", nextDisbursement));
+            }
+            envelope.setNextDisbursementAt(nextDisbursement);
+            return;
+        }
+
+        if (isTimeReleasedEnvelope(type)) {
+            try {
+                envelopeService.triggerRecalculation(envelope);
+            } catch (Exception e) {
+                logger.error("Failed to recalculate scheduled envelope {} on activation", envelope.getId(), e);
+            }
+
+            LocalDateTime nextDisbursement = calculateNextDisbursementTime(envelope);
+            boolean disbursesLaterToday = nextDisbursement != null
+                    && nextDisbursement.toLocalDate().isEqual(now.toLocalDate());
+
+            if (disbursesLaterToday) {
+                envelope.setRemainingAmount(BigDecimal.ZERO);
+            } else {
+                BigDecimal startingPocket = getPeriodLimit(envelope).min(availableVaultBalance(envelope));
+                envelope.setRemainingAmount(startingPocket);
+                if (startingPocket.compareTo(BigDecimal.ZERO) > 0) {
+                    envelope.setLastDisbursedAt(now);
+                    nextDisbursement = calculateNextDisbursementTime(envelope);
+                }
+            }
+
+            envelope.setNextDisbursementAt(nextDisbursement);
+            if (nextDisbursement != null) {
+                tasksToSave.add(new ScheduledTask(envelope.getId(), "DISBURSEMENT", nextDisbursement));
+            }
+            return;
+        }
+
+        BigDecimal startingPocket = getPeriodLimit(envelope).min(availableVaultBalance(envelope));
+        envelope.setRemainingAmount(startingPocket);
+        envelope.setNextDisbursementAt(null);
+    }
+
+    private void activateScheduledSavingsSweep(
+            Budget budget,
+            Envelope envelope,
+            Map<String, Object> conditions,
+            LocalDateTime now,
+            List<OutboxEvent> outboxEventsToSave
+    ) {
+        BigDecimal amount = availableVaultBalance(envelope);
+        if (amount.compareTo(BigDecimal.ZERO) <= 0) {
+            conditions.put("savingsSweepStatus", "COMPLETED");
+            envelope.setConditions(conditions);
+            envelope.setRemainingAmount(BigDecimal.ZERO);
+            envelope.setNextDisbursementAt(null);
+            envelope.setHasMatured(true);
+            return;
+        }
+
+        Long targetSavingsGoalId = parseLong(conditions.get("targetSavingsGoalId"));
+        String skipReason = savingsSweepSkipReason(targetSavingsGoalId, budget.getUser().getId(), now.toLocalDate());
+        if (skipReason != null) {
+            markScheduledSavingsSweepSkipped(budget, envelope, conditions, amount, skipReason, outboxEventsToSave);
+            return;
+        }
+
+        try {
+            savingsService.sweepEnvelopeToSavings(
+                    budget.getUser().getId(),
+                    targetSavingsGoalId,
+                    amount,
+                    envelope.getName(),
+                    budget.getId(),
+                    envelope.getId()
+            );
+
+            conditions.put("savingsSweepStatus", "COMPLETED");
+            conditions.remove("savingsSweepFailureReason");
+            envelope.setConditions(conditions);
+            envelope.setRemainingAmount(BigDecimal.ZERO);
+            envelope.setTotalRemainingAmount(BigDecimal.ZERO);
+            envelope.setHeldAmount(BigDecimal.ZERO);
+            envelope.setNextDisbursementAt(null);
+            envelope.setHasMatured(true);
+        } catch (Exception e) {
+            logger.error("Failed to sweep scheduled envelope {} to savings goal {}", envelope.getId(), targetSavingsGoalId, e);
+            markScheduledSavingsSweepSkipped(
+                    budget,
+                    envelope,
+                    conditions,
+                    amount,
+                    "we could not move it to the selected savings pot",
+                    outboxEventsToSave
+            );
+        }
+    }
+
+    private void markScheduledSavingsSweepSkipped(
+            Budget budget,
+            Envelope envelope,
+            Map<String, Object> conditions,
+            BigDecimal amount,
+            String reason,
+            List<OutboxEvent> outboxEventsToSave
+    ) {
+        conditions.put("savingsSweepStatus", "SKIPPED");
+        conditions.put("savingsSweepFailureReason", reason);
+        conditions.put("limit", amount);
+        envelope.setConditions(conditions);
+        envelope.setRemainingAmount(amount);
+        envelope.setNextDisbursementAt(null);
+        envelope.setHasMatured(false);
+
+        Map<String, Object> payload = new HashMap<>();
+        String envelopeName = envelope.getName() != null ? envelope.getName() : "Savings";
+        String budgetName = budget.getName() != null ? budget.getName() : "your";
+        payload.put("budgetName", budgetName);
+        payload.put("envelopeName", envelopeName);
+        payload.put("amount", String.format("%,.2f", amount));
+        payload.put("reason", reason);
+        payload.put("__message", "Your '" + budgetName + "' budget is active, but '" + envelopeName
+                + "' was not moved to savings because " + reason
+                + ". The money is still protected in that envelope.");
+
+        outboxEventsToSave.add(buildOutboxEvent(
+                NotificationType.BUDGET_UPDATED,
+                budget.getUser().getId(),
+                budget.getId(),
+                envelope.getId(),
+                payload
+        ));
+    }
+
+    private String savingsSweepSkipReason(Long savingsGoalId, Long userId, LocalDate today) {
+        if (savingsGoalId == null) {
+            return "no savings pot was selected";
+        }
+
+        Optional<SavingsGoal> goalOpt = savingsGoalRepository.findByIdForUpdate(savingsGoalId);
+        if (goalOpt.isEmpty()) {
+            return "the selected savings pot could not be found";
+        }
+
+        SavingsGoal goal = goalOpt.get();
+        if (goal.getUser() == null || goal.getUser().getId() == null || !goal.getUser().getId().equals(userId)) {
+            return "the selected savings pot no longer belongs to this account";
+        }
+        if (goal.getStatus() != SavingsStatus.ACTIVE) {
+            return "the selected savings pot is no longer active";
+        }
+        if (goal.getMaturityDate() == null || !today.isBefore(goal.getMaturityDate())) {
+            return "the selected savings pot has already matured";
+        }
+
+        return null;
+    }
+
+    private Map<String, Object> mutableConditions(Envelope envelope) {
+        Map<String, Object> copy = new LinkedHashMap<>();
+        if (envelope.getConditions() != null) {
+            copy.putAll(envelope.getConditions());
+        }
+        envelope.setConditions(copy);
+        return copy;
+    }
+
+    private boolean isTimeReleasedEnvelope(String type) {
+        return "daily".equals(type) || "weekly".equals(type) || "dynamic".equals(type);
+    }
+
+    private BigDecimal getPeriodLimit(Envelope envelope) {
+        Map<String, Object> conditions = envelope.getConditions();
+        if (conditions == null || !conditions.containsKey("limit")) {
+            return BigDecimal.ZERO;
+        }
+        try {
+            return new BigDecimal(conditions.get("limit").toString());
+        } catch (Exception e) {
+            return BigDecimal.ZERO;
+        }
+    }
+
+    private BigDecimal availableVaultBalance(Envelope envelope) {
+        return safeAmount(envelope.getTotalRemainingAmount()).subtract(safeAmount(envelope.getHeldAmount())).max(BigDecimal.ZERO);
+    }
+
+    private BigDecimal safeAmount(BigDecimal amount) {
+        return amount != null ? amount : BigDecimal.ZERO;
+    }
+
+    private Long parseLong(Object value) {
+        if (value == null) {
+            return null;
+        }
+        try {
+            return Long.valueOf(value.toString());
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
     @Scheduled(cron = "0 */15 * * * ?", zone = "Africa/Lagos")
     public void processBudgets() {
         LocalDateTime now = fetchCurrentDateTimeFromDatabase();
@@ -201,14 +564,22 @@ public class BudgetLifeCycleManager {
             }
 
             for (Budget budget : page.getContent()) {
+                Long budgetId = budget.getId();
                 try {
                     // 2. Process EACH budget in its own isolated transaction
                     transactionTemplate.execute(status -> {
+                        Budget budgetToExpire = budgetRepository.findByIdForUpdate(budgetId).orElse(null);
+                        if (budgetToExpire == null
+                                || budgetToExpire.getStatus() != BudgetStatus.ACTIVE
+                                || !isBudgetPastEndDate(budgetToExpire, now)) {
+                            return null;
+                        }
+
                         List<Budget> bUpdate = new ArrayList<>();
                         List<Envelope> eUpdate = new ArrayList<>();
                         List<TransactionLog> lSave = new ArrayList<>();
 
-                        processBudgetExpiry(budget, bUpdate, eUpdate, lSave);
+                        processBudgetExpiry(budgetToExpire, bUpdate, eUpdate, lSave);
 
                         budgetRepository.saveAll(bUpdate);
                         envelopeRepository.saveAll(eUpdate);
@@ -216,11 +587,11 @@ public class BudgetLifeCycleManager {
                         return null;
                     });
                 } catch (Exception e) {
-                    logger.error("🚨 Failed to expire Budget ID {}. Quarantining.", budget.getId(), e);
+                    logger.error("🚨 Failed to expire Budget ID {}. Quarantining.", budgetId, e);
 
                     // 3. Save Quarantine state in a NEW transaction so it doesn't roll back
                     transactionTemplate.execute(status -> {
-                        Budget failedBudget = budgetRepository.findById(budget.getId()).orElse(null);
+                        Budget failedBudget = budgetRepository.findByIdForUpdate(budgetId).orElse(null);
                         if (failedBudget != null) {
                             failedBudget.setStatus(BudgetStatus.FAILED_PROCESSING);
                             budgetRepository.save(failedBudget);
@@ -230,8 +601,9 @@ public class BudgetLifeCycleManager {
                 }
             }
 
-            // 🧹 RAM CLEANUP
-            entityManager.flush();
+            // The per-budget TransactionTemplate above commits writes. Keep only
+            // the persistence-context cleanup here so this scheduled method never
+            // requires an outer transaction.
             entityManager.clear();
 
             hasMore = page.hasNext();
@@ -446,6 +818,41 @@ public class BudgetLifeCycleManager {
                 // 🛑 THE FIX: Update the frontend UI date so it doesn't get stuck in the past!
                 envelope.setNextDisbursementAt(calculateNextDisbursementTime(envelope));
                 envelopesToUpdate.add(envelope);
+
+                if (Boolean.TRUE.equals(envelope.getIsAutomated())) {
+                    ScheduledTask autoTask = new ScheduledTask();
+                    autoTask.setEnvelopeId(envelope.getId());
+                    autoTask.setTaskType("AUTO_TRANSFER");
+                    autoTask.setTriggerTime(now);
+                    autoTask.setCreatedAt(now);
+                    autoTask.setStatus("PENDING");
+                    autoTask.setRetryCount(0);
+                    scheduledTaskRepository.save(autoTask);
+                    logger.info("Scheduled auto-transfer for envelope {} after disbursement", envelope.getId());
+                }
+                break;
+            case "AUTO_TRANSFER":
+                try {
+                    envelopeAutoTransferService.executeAutoTransfer(envelope.getId());
+                } catch (Exception e) {
+                    logger.error("Auto-transfer failed for envelope {}: {}", envelope.getId(), e.getMessage());
+                    if (task.getRetryCount() < 2) {
+                        ScheduledTask retry = new ScheduledTask();
+                        retry.setEnvelopeId(envelope.getId());
+                        retry.setTaskType("AUTO_TRANSFER");
+                        retry.setTriggerTime(now.plusMinutes(30));
+                        retry.setStatus("PENDING");
+                        retry.setRetryCount(task.getRetryCount() + 1);
+                        retry.setCreatedAt(now);
+                        scheduledTaskRepository.save(retry);
+                        logger.info("Scheduled auto-transfer retry #{} for envelope {} at {}",
+                                task.getRetryCount() + 1, envelope.getId(), now.plusMinutes(30));
+                    } else {
+                        envelopeAutoTransferService.notifyAutoTransferExhausted(envelope);
+                        logger.error("Auto-transfer exhausted all retries for envelope {}", envelope.getId());
+                    }
+                }
+                taskIdsToComplete.add(task.getId());
                 break;
             default:
                 logger.warn("Unknown task type {} for envelope {}", task.getTaskType(), envelope.getId());
@@ -648,6 +1055,7 @@ public class BudgetLifeCycleManager {
         budget.setStatus(BudgetStatus.COMPLETED);
         budget.setRemainingAmount(BigDecimal.ZERO);
         budgetsToUpdate.add(budget);
+        badgeAwardService.awardBudgetCompletionBadgeAfterCommit(user, budget, totalRefunded);
 
         logger.info(
                 "Budget {} completed. Refundable total ₦{} sent to user {}.",
@@ -691,6 +1099,9 @@ public class BudgetLifeCycleManager {
             // The Scheduler already checked the time. Trust the Scheduler.
             case "daily":
             case "weekly":
+            case "monthly":
+            case "quarterly":
+            case "biannual":
             case "dynamic":
 //                // 🛑 2. SAFETY CHECK FOR NEW ENVELOPES
 //                // If lastDisbursedAt is NULL (The Bug), assume it was created "Just Now" and fix the date
@@ -739,6 +1150,10 @@ public class BudgetLifeCycleManager {
                 // 3. PROCEED TO DISBURSE
                 disburseEnvelope(envelope, now, envelopesToUpdate, logsToSave, outboxEventsToSave);
                 break;
+            case "safe_lock":
+            case "strict_lock":
+                releaseLockedEnvelope(envelope, now, envelopesToUpdate, logsToSave, outboxEventsToSave);
+                break;
             case "emergency":
                 // No automatic disbursement; handled by user action
                 break;
@@ -752,6 +1167,44 @@ public class BudgetLifeCycleManager {
         // are now created as outbox events inside disburseEnvelope() and processed
         // reliably by NotificationOutboxWorker. The `message` variable above is always
         // null in every active code path — this block was dead code and has been removed.
+    }
+
+    private void releaseLockedEnvelope(Envelope envelope, LocalDateTime now, List<Envelope> envelopesToUpdate,
+                                       List<TransactionLog> logsToSave, List<OutboxEvent> outboxEventsToSave) {
+        BigDecimal amountToRelease = availableVaultBalance(envelope);
+        envelope.setRemainingAmount(amountToRelease);
+        envelope.setLastDisbursedAt(now);
+        envelope.setNextDisbursementAt(null);
+        envelope.setHasMatured(true);
+        envelopesToUpdate.add(envelope);
+
+        if (amountToRelease.compareTo(BigDecimal.ZERO) <= 0) {
+            return;
+        }
+
+        TransactionLog log = new TransactionLog();
+        log.setUserId(envelope.getBudget().getUser().getId());
+        log.setBudgetId(envelope.getBudget().getId());
+        log.setSourceEnvelopeId(envelope.getId());
+        log.setAmount(amountToRelease);
+        log.setTransactionType(TransactionType.ENVELOPE_DISBURSEMENT);
+        log.setDescription("Locked envelope released");
+        log.setStatus(TransactionStatus.COMPLETED);
+        log.setReference("LOCK-REL-" + envelope.getId() + "-" + System.currentTimeMillis());
+        log.setCreatedAt(now);
+        logsToSave.add(log);
+
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("amount", String.format("%,.2f", amountToRelease));
+        payload.put("envelopeName", envelope.getName() != null ? envelope.getName() : "Envelope");
+
+        outboxEventsToSave.add(buildOutboxEvent(
+                NotificationType.DISBURSEMENT_SUCCESS,
+                envelope.getBudget().getUser().getId(),
+                envelope.getBudget().getId(),
+                envelope.getId(),
+                payload
+        ));
     }
 
     private void disburseEnvelope(Envelope envelope, LocalDateTime now, List<Envelope> envelopesToUpdate,
@@ -938,6 +1391,22 @@ public class BudgetLifeCycleManager {
                 LocalDate lastWeekStart = lastRunDate.minusDays(lastRunDate.getDayOfWeek().getValue() - 1);
 
                 return thisWeekStart.isEqual(lastWeekStart);
+
+            case "monthly":
+                return today.getYear() == lastRunDate.getYear()
+                        && today.getMonthValue() == lastRunDate.getMonthValue();
+
+            case "quarterly": {
+                int thisQ = (today.getMonthValue() - 1) / 3;
+                int lastQ = (lastRunDate.getMonthValue() - 1) / 3;
+                return today.getYear() == lastRunDate.getYear() && thisQ == lastQ;
+            }
+
+            case "biannual": {
+                int thisH = today.getMonthValue() <= 6 ? 1 : 2;
+                int lastH = lastRunDate.getMonthValue() <= 6 ? 1 : 2;
+                return today.getYear() == lastRunDate.getYear() && thisH == lastH;
+            }
 
             default:
                 return false; // Default to "Run It" if type is unknown
@@ -1224,6 +1693,12 @@ public class BudgetLifeCycleManager {
                 while (!targetTime1.isAfter(now)) {
                     targetTime1 = targetTime1.plusWeeks(1);
                 }
+                if (budgetStart != null && targetTime1.toLocalDate().isBefore(budgetStart)) {
+                    targetTime1 = budgetStart.with(TemporalAdjusters.nextOrSame(DayOfWeek.MONDAY)).atStartOfDay();
+                    while (!targetTime1.isAfter(now)) {
+                        targetTime1 = targetTime1.plusWeeks(1);
+                    }
+                }
 
                 if (targetTime1.isAfter(budgetEnd.atTime(23, 59, 59))) {
                     return null;
@@ -1243,7 +1718,11 @@ public class BudgetLifeCycleManager {
                             .map(String::toUpperCase)
                             .toList();
 
-                    LocalDateTime candidate = now.toLocalDate().atTime(targetTime);
+                    LocalDate searchDate = now.toLocalDate();
+                    if (budgetStart != null && searchDate.isBefore(budgetStart)) {
+                        searchDate = budgetStart;
+                    }
+                    LocalDateTime candidate = searchDate.atTime(targetTime);
 
                     // ✅ CHANGED TO !candidate.isAfter(now)
                     if (!candidate.isAfter(now)) {
@@ -1266,6 +1745,45 @@ public class BudgetLifeCycleManager {
                     logger.error("Error calculating dynamic time for envelope {}", envelope.getId(), e);
                 }
                 return null;
+
+            case "monthly": {
+                LocalDate nextMonth = last.toLocalDate().plusMonths(1).withDayOfMonth(1);
+                LocalDateTime target = nextMonth.atStartOfDay();
+                while (!target.isAfter(now)) {
+                    target = target.plusMonths(1).withDayOfMonth(1);
+                }
+                if (budgetStart != null && target.toLocalDate().isBefore(budgetStart)) {
+                    target = budgetStart.withDayOfMonth(1).atStartOfDay();
+                    if (!target.isAfter(now)) target = target.plusMonths(1).withDayOfMonth(1);
+                }
+                if (target.isAfter(budgetEnd.atTime(23, 59, 59))) return null;
+                return target;
+            }
+
+            case "quarterly": {
+                LocalDate lastDate = last.toLocalDate();
+                int qMonth = ((lastDate.getMonthValue() - 1) / 3) * 3 + 1;
+                LocalDate nextQ = LocalDate.of(lastDate.getYear(), qMonth, 1).plusMonths(3);
+                LocalDateTime target = nextQ.atStartOfDay();
+                while (!target.isAfter(now)) {
+                    target = target.plusMonths(3);
+                }
+                if (target.isAfter(budgetEnd.atTime(23, 59, 59))) return null;
+                return target;
+            }
+
+            case "biannual": {
+                LocalDate lastDate = last.toLocalDate();
+                int hStart = lastDate.getMonthValue() <= 6 ? 7 : 1;
+                int hYear = lastDate.getMonthValue() <= 6 ? lastDate.getYear() : lastDate.getYear() + 1;
+                LocalDateTime target = LocalDate.of(hYear, hStart, 1).atStartOfDay();
+                while (!target.isAfter(now)) {
+                    target = target.plusMonths(6);
+                }
+                if (target.isAfter(budgetEnd.atTime(23, 59, 59))) return null;
+                return target;
+            }
+
         case "safe_lock":
             case "strict_lock":
                 if (conditions.containsKey("lockStartDate") && conditions.containsKey("lockDurationDays")) {
@@ -1334,7 +1852,8 @@ public class BudgetLifeCycleManager {
             case DISBURSEMENT_SUCCESS, DISBURSEMENT_READY, DISBURSEMENT,
                  WALLET_FUNDED, WALLET_DEPOSIT, EXTERNAL_TRANSFER,
                  ENVELOPE_TRANSFER, REFUND_ISSUED, DISBURSEMENT_REFUNDED,
-                 BUDGET_UNALLOCATED_REFUNDED -> 259_200L; // 72 h
+                 BUDGET_UNALLOCATED_REFUNDED, BUDGET_SCHEDULED,
+                 BUDGET_ACTIVATED -> 259_200L; // 72 h
 
             // Important but not financial — 24 h
             case EXPIRED_DISBURSEMENT, DISBURSEMENT_FAILED,
@@ -1343,6 +1862,10 @@ public class BudgetLifeCycleManager {
 
             // Low-balance alerts — still useful within a few hours
             case LOW_BALANCE_WARNING, ENVELOPE_LOW_BALANCE -> 21_600L; // 6 h
+
+            // Auto-transfer results — financial; hold for 72 h
+            case AUTO_TRANSFER_SUCCESS -> 259_200L; // 72 h
+            case AUTO_TRANSFER_FAILED, AUTO_TRANSFER_INSUFFICIENT_FUNDS -> 86_400L; // 24 h
 
             default -> 86_400L; // 24 h safe fallback
         };

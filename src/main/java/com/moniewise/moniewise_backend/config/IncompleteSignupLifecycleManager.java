@@ -231,7 +231,7 @@ public class IncompleteSignupLifecycleManager {
                 : "Complete your profile to start using Wisemonie";
         String body = urgent
                 ? "Finish setting up your profile now to keep your Wisemonie account."
-                : "You're almost there! Complete your profile to unlock your wallet and start budgeting.";
+                : "You're almost there. Complete your profile to unlock your wallet and give your money a plan.";
         notificationService.enqueuePushOnlyNotification(
                 user.getId(),
                 NotificationType.ONBOARDING_REMINDER,

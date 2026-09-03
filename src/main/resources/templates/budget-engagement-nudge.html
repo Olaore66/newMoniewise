@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Wisemonie budget reminder</title>
+  <title>Wisemonie money plan reminder</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -260,7 +260,7 @@
   </div>
 
   <div class="outer-footer">
-    &copy; 2025 Wisemonie. All rights reserved.
+    &copy; <span th:text="${T(java.time.Year).now().getValue()}">2025</span> Wisemonie. All rights reserved.
   </div>
 
 </div>

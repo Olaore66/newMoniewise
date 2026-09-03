@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>You Are Valued</title>
+  <title>Before You Go</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -38,17 +38,44 @@
       font-style: italic;
       margin-bottom: 22px;
     }
-    .comeback-box {
+    .scenario-box {
       background: #F0FAF5;
       border: 1px solid #D3F8DF;
       border-radius: 8px;
+      padding: 18px 20px;
+      margin-bottom: 22px;
+      color: #0F4C4C;
+      line-height: 1.65;
+    }
+    .scenario-box strong {
+      display: block;
+      color: #101828;
+      font-size: 16px;
+      margin-bottom: 8px;
+    }
+    .scenario-box p {
+      font-size: 14px;
+      margin: 0;
+    }
+    .option-list {
+      margin: 0 0 22px 18px;
+      padding: 0;
+      color: #475467;
+      font-size: 14px;
+      line-height: 1.7;
+    }
+    .option-list li { margin-bottom: 6px; }
+    .comeback-box {
+      background: #F9FAFB;
+      border: 1px solid #EAECF0;
+      border-radius: 8px;
       padding: 16px 18px;
       font-size: 14px;
-      color: #0F4C4C;
+      color: #475467;
       line-height: 1.6;
       margin-bottom: 20px;
     }
-    .comeback-box strong { display: block; margin-bottom: 4px; }
+    .comeback-box strong { display: block; margin-bottom: 4px; color: #101828; }
     .support-line {
       font-size: 14px;
       color: #475467;
@@ -108,26 +135,34 @@
 
       <p class="body-text">
         Hello <strong th:text="${userName}">there</strong>,<br><br>
-        We noticed that you've closed your Wisemonie account. Before you go, we just
-        want to say thank you for the time you spent building money discipline with us.
-        It genuinely means a lot.
+        Your Wisemonie account is now closed. Thank you for trying us with something
+        as personal as money. We know that kind of trust is not small.
       </p>
+
+      <div class="scenario-box">
+        <strong th:text="${scenarioTitle}">It looks like something got in the way</strong>
+        <p th:text="${scenarioBody}">
+          We want to understand the exact point where Wisemonie stopped feeling useful.
+        </p>
+      </div>
 
       <div class="reason-box" th:if="${!#strings.isEmpty(reason)}">
         &ldquo;<span th:text="${reason}">Reason</span>&rdquo; (the reason you shared with us).
       </div>
 
-      <p class="body-text">
-        We'd greatly appreciate it if you could tell us a little more about what led to
-        this decision, what didn't meet your expectations, or what we could have
-        done better. <strong>Just hit reply</strong>. A human reads every message,
-        and your feedback directly shapes what we build next.
+      <p class="body-text" th:text="${feedbackPrompt}">
+        Reply with one line if you can. A human reads it, and it helps us fix the part that made people leave.
       </p>
 
+      <ul class="option-list">
+        <li th:each="option : ${reasonOptions}" th:text="${option}">Something felt unclear</li>
+      </ul>
+
       <div class="comeback-box">
-        <strong>Changed your mind?</strong>
-        You're always welcome back. Simply sign in again with your registered email
-        and your account will be reactivated.
+        <strong>No pressure to return.</strong>
+        <span th:text="${closingNote}">
+          If you ever come back, your account can be reactivated by signing in with your registered email.
+        </span>
       </div>
 
       <p class="support-line">
@@ -141,7 +176,7 @@
     <div class="card-footer">
       <div class="footer-brand">Wisemonie</div>
       <p class="footer-text">
-        Sent with gratitude from the Wisemonie team<br>
+        Sent with care from the Wisemonie team<br>
         <a href="mailto:wisemoniehelpdesk@gmail.com">wisemoniehelpdesk@gmail.com</a>
       </p>
       <div class="social-row">
@@ -155,7 +190,7 @@
   </div>
 
   <div class="outer-footer">
-    &copy; 2025 Wisemonie. All rights reserved.
+    &copy; <span th:text="${T(java.time.Year).now().getValue()}">2025</span> Wisemonie. All rights reserved.
   </div>
 
 </div>

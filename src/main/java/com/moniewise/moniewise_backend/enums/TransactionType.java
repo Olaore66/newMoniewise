@@ -57,6 +57,14 @@ public enum TransactionType {
     VAS_PAYMENT_COLLECTION,
 
     /**
+     * Internal Rubies-to-Rubies P2P used to physically move budget creation fees
+     * from the user's Rubies wallet into the Moniewise revenue wallet.
+     * Platform-internal — keep it out of user-facing transaction history.
+     * Reference pattern: REV-{budgetFeeReference}
+     */
+    BUDGET_FEE_COLLECTION,
+
+    /**
      * User-facing airtime/data (VAS) purchase — the debit that left the funding
      * envelope. Unlike {@link #VAS_PAYMENT_COLLECTION} (platform-internal), this IS
      * shown in the user's Activity and the envelope's history.

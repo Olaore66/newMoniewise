@@ -17,6 +17,7 @@ public class WalletResponse {
     String currency;
     String accountNumber;
     String bankName;
+    String accountName;
     String status;
     LocalDateTime updatedAt;
     /**

@@ -1,0 +1,2 @@
+# HikariCP pool tuning lives in application.properties.
+# This file is kept for Spring profile overrides only.

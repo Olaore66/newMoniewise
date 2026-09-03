@@ -68,17 +68,50 @@ public class UserResponse { // Renamed to UserResponse to avoid confusion
             this.wallet = new WalletInfo(
                 walletEntity.getAccountNumber(),
                 walletEntity.getBankName(),
+                resolveFundingAccountName(walletEntity, user),
                 // Safety check: ensure .toString() is never called on null balance
                 walletEntity.getBalance() != null ? walletEntity.getBalance().toString() : "0.00"
             );
         } else {
             // ✅ Default State for Google Users
-            this.wallet = new WalletInfo("PENDING_SETUP", "PENDING_SETUP", "0.00");
+            this.wallet = new WalletInfo("PENDING_SETUP", "PENDING_SETUP", "PENDING_SETUP", "0.00");
         }
     }
 
     private static boolean isBlank(String value) {
         return value == null || value.trim().isEmpty();
+    }
+
+    private static String resolveFundingAccountName(Wallet wallet, User user) {
+        if (wallet != null && !isBlank(wallet.getAccountName())) {
+            return wallet.getAccountName();
+        }
+        if (wallet != null && wallet.getProviderMetadata() != null) {
+            Object metadataAccountName = wallet.getProviderMetadata().get("accountName");
+            if (metadataAccountName == null) {
+                metadataAccountName = wallet.getProviderMetadata().get("account_name");
+            }
+            if (metadataAccountName != null && !isBlank(metadataAccountName.toString())) {
+                return metadataAccountName.toString().trim();
+            }
+        }
+        Map<String, Object> profile = user.getProfileData() != null ? user.getProfileData() : Map.of();
+        String first = stringFromProfile(profile, "bvnFirstName", "bvnFirst", "firstName");
+        String last = stringFromProfile(profile, "bvnLastName", "bvnLast", "lastName");
+        if (!isBlank(first) && !isBlank(last)) return (first + " " + last).toUpperCase();
+        if (!isBlank(last)) return last.toUpperCase();
+        String email = user.getEmail();
+        return email != null ? email.split("@")[0].toUpperCase() : "ACCOUNT HOLDER";
+    }
+
+    private static String stringFromProfile(Map<String, Object> profile, String... keys) {
+        for (String key : keys) {
+            Object value = profile.get(key);
+            if (value != null && !isBlank(value.toString())) {
+                return value.toString().trim();
+            }
+        }
+        return null;
     }
 
     @Getter
@@ -87,6 +120,7 @@ public class UserResponse { // Renamed to UserResponse to avoid confusion
     public static class WalletInfo {
         private String accountNumber;
         private String bankName;
+        private String accountName;
         private String balance;
     }
 }

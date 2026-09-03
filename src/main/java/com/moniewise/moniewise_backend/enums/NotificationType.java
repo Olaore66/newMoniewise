@@ -16,6 +16,8 @@ public enum NotificationType {
     BUDGET_CREATION_FEE,
     WALLET_FUNDED,
     BUDGET_CREATION,
+    BUDGET_SCHEDULED,
+    BUDGET_ACTIVATED,
     ENVELOPE_CREATED,
     ENVELOPE_UPDATED,
     ENVELOPE_DELETED,
@@ -44,6 +46,9 @@ public enum NotificationType {
     HOW_TO_USE_WISEMONIE,
     SIGNUP_RETURN_NUDGE,
     SYSTEM,
+    SERVICE_OUTAGE,
+    SCHEDULED_MAINTENANCE,
+    SPECIAL_ANNOUNCEMENT,
     BUDGET_CREATION_SUCCESS,
     WALLET_DEPOSIT,
     DISBURSEMENT_READY,
@@ -64,6 +69,11 @@ public enum NotificationType {
 
     // ── Onboarding recovery ────────────────────────────────────────────────
     ONBOARDING_REMINDER,
+
+    // ── Envelope auto-transfer ────────────────────────────────────────────
+    AUTO_TRANSFER_SUCCESS,
+    AUTO_TRANSFER_FAILED,
+    AUTO_TRANSFER_INSUFFICIENT_FUNDS,
 
     // ── Admin / ops alerts ──────────────────────────────────────────────────
     ADMIN_PAYEELORD_LOW_BALANCE,

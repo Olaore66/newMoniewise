@@ -2,6 +2,7 @@ package com.moniewise.moniewise_backend.psp.rubies;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.moniewise.moniewise_backend.dto.response.BvnVerificationResultDto;
 import com.moniewise.moniewise_backend.entity.User;
 import com.moniewise.moniewise_backend.exception.WalletProvisioningException;
 import com.moniewise.moniewise_backend.psp.PaymentGateway;
@@ -122,6 +123,124 @@ public class RubiesGateway implements PaymentGateway {
     @Override
     public String getProviderName() {
         return PROVIDER_NAME;
+    }
+
+    /**
+     * Verifies BVN via Rubies and maps the flat Rubies response into the same
+     * DTO shape SecureWave already feeds into the rest of the KYC flow.
+     */
+    public BvnVerificationResultDto verifyBvn(String bvn,
+                                              String firstName,
+                                              String lastName,
+                                              String dob,
+                                              String reference) {
+        String cleanBvn = bvn != null ? bvn.trim() : "";
+        String cleanFirstName = normalizePersonName(firstName);
+        String cleanLastName = normalizePersonName(lastName);
+        String cleanDob = dob != null ? dob.trim() : "";
+        String cleanReference = reference != null ? reference.trim() : "";
+
+        if (isBlank(cleanBvn) || isBlank(cleanFirstName) || isBlank(cleanLastName) || isBlank(cleanReference)) {
+            throw new IllegalArgumentException("Rubies BVN validation requires bvn, firstName, lastName and reference.");
+        }
+
+        Map<String, Object> payload = new LinkedHashMap<>();
+        if (isIsoDate(cleanDob)) {
+            payload.put("dob", cleanDob);
+        } else if (!isBlank(cleanDob)) {
+            logger.info("[Rubies] Skipping non-ISO DOB for BVN validation fallback: reference={}", cleanReference);
+        }
+        payload.put("firstName", cleanFirstName);
+        payload.put("lastName", cleanLastName);
+        payload.put("bvn", cleanBvn);
+        payload.put("reference", cleanReference);
+
+        String url = baseUrl + "/" + stage() + "/baas-kyc/bvn-validation";
+        logger.info("[Rubies] Verifying BVN via Rubies: reference={} bvn={}***",
+                cleanReference, cleanBvn.substring(0, Math.min(4, cleanBvn.length())));
+
+        try {
+            return doBvnValidation(url, payload, cleanBvn, cleanReference, false);
+        } catch (IllegalArgumentException e) {
+            throw e;
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Exception e) {
+            logger.error("[Rubies] BVN validation exception: reference={} error={}",
+                    cleanReference, e.getMessage(), e);
+            throw new RuntimeException("Rubies BVN validation error: " + e.getMessage(), e);
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private BvnVerificationResultDto doBvnValidation(String url,
+                                                     Map<String, Object> payload,
+                                                     String bvn,
+                                                     String reference,
+                                                     boolean isRetry) {
+        ResponseEntity<Map> response = restTemplate.exchange(
+                url,
+                HttpMethod.POST,
+                new HttpEntity<>(payload, authHeaders()),
+                Map.class);
+
+        Map<String, Object> body = response.getBody();
+        if (body == null) {
+            throw new RuntimeException("Rubies BVN validation returned null response for reference=" + reference);
+        }
+
+        String responseCode = str(body, "responseCode", "");
+        String responseMessage = str(body, "responseMessage", "BVN verification failed");
+
+        // Code 22 = JWT expired. Reuse the same auto-refresh behaviour as transfers.
+        if (!isRetry && "22".equals(responseCode)) {
+            logger.warn("[Rubies] JWT expired (code 22) on BVN validation reference={}. Attempting token refresh.",
+                    reference);
+            if (tryRefreshToken()) {
+                logger.info("[Rubies] Retrying BVN validation after JWT refresh: reference={}", reference);
+                return doBvnValidation(url, payload, bvn, reference, true);
+            }
+        }
+
+        if (!"00".equals(responseCode)) {
+            logger.warn("[Rubies] BVN validation failed: reference={} code={} message={}",
+                    reference, responseCode, responseMessage);
+            throw new IllegalArgumentException("BVN verification failed: " + responseMessage);
+        }
+
+        logger.info("[Rubies] BVN validation successful: reference={}", reference);
+        return mapRubiesBvnResult(body, bvn);
+    }
+
+    private BvnVerificationResultDto mapRubiesBvnResult(Map<String, Object> body, String fallbackBvn) {
+        BvnVerificationResultDto dto = new BvnVerificationResultDto();
+
+        dto.setBvnNumber(firstNonBlank(body, "bvn", "idNumber") != null
+                ? firstNonBlank(body, "bvn", "idNumber")
+                : fallbackBvn);
+        dto.setNameOnCard(firstNonBlank(body, "nameOnCard", "fullName"));
+        dto.setEnrolmentBank(firstNonBlank(body, "enrolmentBank", "enrollmentBank"));
+        dto.setEnrolmentBranch(firstNonBlank(body, "enrolmentBranch", "enrollmentBranch"));
+        dto.setFormattedRegistrationDate(firstNonBlank(body, "formattedRegistrationDate", "registrationDate"));
+        dto.setLevelOfAccount(firstNonBlank(body, "levelOfAccount"));
+        dto.setWatchlisted(firstNonBlank(body, "watchlisted", "watchListed"));
+        dto.setVerificationStatus("VERIFIED");
+
+        dto.setFirstName(firstNonBlank(body, "firstName", "firstname"));
+        dto.setMiddleName(firstNonBlank(body, "middleName", "middlename"));
+        dto.setLastName(firstNonBlank(body, "lastName", "lastname"));
+        dto.setFullName(firstNonBlank(body, "fullName"));
+        dto.setGender(firstNonBlank(body, "gender"));
+        dto.setDateOfBirth(firstNonBlank(body, "dateOfBirth", "dob"));
+        dto.setStateOfOrigin(firstNonBlank(body, "stateOfOrigin"));
+        dto.setLgaOfOrigin(firstNonBlank(body, "lgaOfOrigin"));
+        dto.setNationality(firstNonBlank(body, "nationality"));
+        dto.setMaritalStatus(firstNonBlank(body, "maritalStatus"));
+        dto.setStateOfResidence(firstNonBlank(body, "stateOfResidence"));
+        dto.setLgaOfResidence(firstNonBlank(body, "lgaOfResidence"));
+        dto.setResidentialAddress(firstNonBlank(body, "residentialAddress"));
+
+        return dto;
     }
 
     // ── Wallet creation ───────────────────────────────────────────────────────
@@ -825,6 +944,10 @@ public class RubiesGateway implements PaymentGateway {
 
     private boolean isBlank(String s) {
         return s == null || s.isBlank();
+    }
+
+    private boolean isIsoDate(String value) {
+        return value != null && value.matches("\\d{4}-\\d{2}-\\d{2}");
     }
 
     private boolean isKycIdentityMismatch(String message) {

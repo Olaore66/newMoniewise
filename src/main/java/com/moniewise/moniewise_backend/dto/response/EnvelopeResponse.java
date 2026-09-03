@@ -57,6 +57,8 @@ public class EnvelopeResponse {
 
     private BigDecimal heldAmount;
 
+    private boolean isAutomated;
+
     private Map<String, Object> conditions;
     private LocalDateTime createdAt;
     private LocalDateTime lastDisbursedAt;
