@@ -195,6 +195,7 @@ public class NotificationService {
 
             Long userId = Long.valueOf(event.getUserId());
             List<String> fcmTokens = pushEligible ? authSessionService.getActiveFcmTokens(userId) : List.of();
+            Long inboxNotificationId = null;
 
             // 1. Save to App Inbox (If important)
             if (shouldSaveToDatabase) {
@@ -207,10 +208,10 @@ public class NotificationService {
                 notification.setEnvelopeId(event.getContextId2());
                 notification.setRedirectUrl(event.getActionUrl());
                 notification.setRead(false);
-                // No active token right now (e.g. mid logout/re-login) — flag so
-                // redeliverMissedPushes() can catch up once a fresh token registers.
-                notification.setPushSent(!pushEligible || !fcmTokens.isEmpty());
-                notificationRepository.save(notification);
+                // Keep push-eligible inbox rows pending until Firebase accepts a token.
+                notification.setPushSent(!pushEligible);
+                notification = notificationRepository.save(notification);
+                inboxNotificationId = notification.getId();
             }
 
             // 2. Send FCM Push (Only for HIGH or MEDIUM priority)
@@ -221,9 +222,19 @@ public class NotificationService {
                     if (firebaseMessaging != null) {
                         String dynamicTitle = getNotificationTitle(event.getType());
                         for (String fcmToken : fcmTokens) {
-                            sendFCMMessage(fcmToken, dynamicTitle, message, null,
-                                    event.getActionUrl(), event.getType(), userId,
-                                    event.getContextId1(), event.getContextId2(), null, null);
+                            try {
+                                sendFCMMessage(fcmToken, dynamicTitle, message, null,
+                                        event.getActionUrl(), event.getType(), userId,
+                                        event.getContextId1(), event.getContextId2(), null, null);
+                                if (inboxNotificationId != null) {
+                                    notificationRepository.markPushSent(inboxNotificationId);
+                                }
+                            } catch (DeadTokenException ignored) {
+                                // Token was permanently invalid and has already been cleared.
+                            } catch (RuntimeException fcmError) {
+                                logger.warn("[FCM] Notification event push failed for user {} type={}",
+                                        userId, event.getType(), fcmError);
+                            }
                         }
                     } else {
                         logger.warn("âš ï¸ FCM is not initialized. Cannot send push.");
@@ -2074,7 +2085,7 @@ public class NotificationService {
         }
 
         try {
-            self.finalizeDelivery(eventId, delivered, transientError);
+            self.finalizeDelivery(eventId, plan.notificationId, delivered, transientError);
         } catch (Exception e) {
             logger.error("[OUTBOX] Failed to finalize event {}", eventId, e);
         }
@@ -2098,7 +2109,10 @@ public class NotificationService {
         }
 
         NotificationType type = NotificationType.valueOf(event.getEventType());
-        Map<String, Object> params = event.getPayload() != null ? event.getPayload() : Map.of();
+        Map<String, Object> params = event.getPayload() != null
+                ? new java.util.HashMap<>(event.getPayload())
+                : new java.util.HashMap<>();
+        Long notificationId = paramLong(params, "__notificationId");
 
         // Deleted-user guard — never deliver notifications to a closed account.
         if (type != NotificationType.ADMIN_RECONCILIATION_ALERT) {
@@ -2158,10 +2172,14 @@ public class NotificationService {
             notification.setActionType(actionType);
             notification.setRedirectUrl(redirectUrl);
             notification.setRead(false);
-            // No active token right now (e.g. mid logout/re-login) — flag so
-            // redeliverMissedPushes() catches up once a fresh token registers.
-            notification.setPushSent(!pushEligible || !pushTargets.isEmpty());
-            notificationRepository.save(notification);
+            // Keep push-eligible inbox rows pending until Firebase accepts a token.
+            notification.setPushSent(!pushEligible);
+            notification = notificationRepository.save(notification);
+            notificationId = notification.getId();
+            if (notificationId != null) {
+                params.put("__notificationId", notificationId);
+                event.setPayload(params);
+            }
             event.setInboxSaved(true);
         }
 
@@ -2214,6 +2232,7 @@ public class NotificationService {
         plan.type = type;
         plan.userId = event.getUserId();
         plan.eventId = event.getId();
+        plan.notificationId = notificationId;
         plan.budgetId = event.getBudgetId();
         plan.envelopeId = event.getEnvelopeId();
         plan.tokensToPush = tokensToPush;
@@ -2226,12 +2245,15 @@ public class NotificationService {
      * PROCESSED, or schedules a retry when a transient FCM error interrupted the push.
      */
     @Transactional
-    public void finalizeDelivery(Long eventId, Set<String> deliveredTokens, String transientError) {
+    public void finalizeDelivery(Long eventId, Long notificationId, Set<String> deliveredTokens, String transientError) {
         OutboxEvent event = outboxEventRepository.findById(eventId).orElse(null);
         if (event == null) {
             return;
         }
         event.setDeliveredTokens(joinTokens(deliveredTokens));
+        if (notificationId != null && deliveredTokens != null && !deliveredTokens.isEmpty()) {
+            notificationRepository.markPushSent(notificationId);
+        }
         if (transientError != null) {
             scheduleRetry(event, transientError);
         } else {
@@ -2254,6 +2276,7 @@ public class NotificationService {
         NotificationType type;
         Long userId;
         Long eventId;
+        Long notificationId;
         Long budgetId;
         Long envelopeId;
         List<AuthSessionService.PushTarget> tokensToPush;
@@ -2422,6 +2445,28 @@ public class NotificationService {
         }
         String s = v.toString();
         return s.isBlank() ? null : s;
+    }
+
+    private static Long paramLong(Map<String, Object> params, String key) {
+        if (params == null) {
+            return null;
+        }
+        Object v = params.get(key);
+        if (v instanceof Number) {
+            return ((Number) v).longValue();
+        }
+        if (v == null) {
+            return null;
+        }
+        String s = v.toString();
+        if (s.isBlank()) {
+            return null;
+        }
+        try {
+            return Long.valueOf(s);
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
     }
 
     private boolean isExternalPushAction(String actionType) {

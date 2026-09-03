@@ -49,12 +49,10 @@ public class Notification {
     private String redirectUrl; // e.g., "/budgets/60/envelopes/543", "/disbursements/34164"
 
     /**
-     * True once a push attempt actually had a device to send to (an active FCM
-     * token). False means the notification was saved to the inbox but no push
-     * went out — e.g. the user was mid-logout/re-login when this fired. Rows
-     * with pushSent=false are swept and redelivered by
-     * {@code NotificationService#redeliverMissedPushes} the next time the user
-     * registers a fresh FCM token.
+     * True once Firebase accepts a push for at least one active FCM token.
+     * False means the notification was saved to the inbox but no push went out,
+     * so it can be swept by {@code NotificationService#redeliverMissedPushes}
+     * after the user registers a fresh FCM token.
      */
     @Column(name = "push_sent", nullable = false, columnDefinition = "boolean default false")
     private boolean pushSent = false;

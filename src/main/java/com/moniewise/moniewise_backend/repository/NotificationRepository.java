@@ -54,4 +54,9 @@ public interface NotificationRepository extends JpaRepository<Notification, Long
     @Transactional
     @Query("UPDATE Notification n SET n.isRead = true WHERE n.userId = :userId AND n.isRead = false")
     int markAllAsReadForUser(@Param("userId") Long userId);
+
+    @Modifying
+    @Transactional
+    @Query("UPDATE Notification n SET n.pushSent = true WHERE n.id = :id")
+    int markPushSent(@Param("id") Long id);
 }
