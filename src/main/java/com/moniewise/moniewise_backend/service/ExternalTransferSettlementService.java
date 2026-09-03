@@ -40,6 +40,7 @@ public class ExternalTransferSettlementService {
     private final MarkupCalculatorService markupCalculatorService;
     private final MonnieCacheInvalidationService monnieCacheInvalidationService;
     private final NotificationService notificationService;
+    private final ActivationJourneyNudgeService activationJourneyNudgeService;
 
     public ExternalTransferSettlementService(
             TransactionLogRepository transactionLogRepository,
@@ -50,7 +51,8 @@ public class ExternalTransferSettlementService {
             @Lazy WalletService walletService,
             MarkupCalculatorService markupCalculatorService,
             MonnieCacheInvalidationService monnieCacheInvalidationService,
-            NotificationService notificationService
+            NotificationService notificationService,
+            ActivationJourneyNudgeService activationJourneyNudgeService
     ) {
         this.transactionLogRepository = transactionLogRepository;
         this.envelopeRepository = envelopeRepository;
@@ -61,6 +63,7 @@ public class ExternalTransferSettlementService {
         this.markupCalculatorService = markupCalculatorService;
         this.monnieCacheInvalidationService = monnieCacheInvalidationService;
         this.notificationService = notificationService;
+        this.activationJourneyNudgeService = activationJourneyNudgeService;
     }
 
     @Transactional
@@ -154,6 +157,13 @@ public class ExternalTransferSettlementService {
 
             if (isAutoTransfer(txn)) {
                 notifyAutoTransferCompleted(txn, source, transferAmount);
+            }
+
+            if (source.getBudget() != null) {
+                activationJourneyNudgeService.nudgeAfterFirstDirectSpend(
+                        txn.getUserId(),
+                        source.getBudget().getId(),
+                        source.getId());
             }
 
         } else if (isFailed(status)) {

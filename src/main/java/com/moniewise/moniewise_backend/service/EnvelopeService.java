@@ -74,6 +74,7 @@ public class EnvelopeService {
     private final MonnieCacheInvalidationService monnieCacheInvalidationService;
     private final ProcessingTransferRecoveryScheduler transferRecoveryScheduler;
     private final PayeelordVasTransactionRepository vasTransactionRepository;
+    private final ActivationJourneyNudgeService activationJourneyNudgeService;
 
     @Value("${moniewise.revenue.wallet.user-id}")
     private Long revenueWalletUserId;
@@ -94,7 +95,8 @@ public class EnvelopeService {
             TransferFeeService transferFeeService,
             MonnieCacheInvalidationService monnieCacheInvalidationService,
             @Lazy ProcessingTransferRecoveryScheduler transferRecoveryScheduler,
-            PayeelordVasTransactionRepository vasTransactionRepository) {
+            PayeelordVasTransactionRepository vasTransactionRepository,
+            ActivationJourneyNudgeService activationJourneyNudgeService) {
         this.envelopeRepository = envelopeRepository;
         this.budgetRepository = budgetRepository;
         this.revenueLogRepository = revenueLogRepository;
@@ -116,6 +118,7 @@ public class EnvelopeService {
         this.monnieCacheInvalidationService = monnieCacheInvalidationService;
         this.transferRecoveryScheduler = transferRecoveryScheduler;
         this.vasTransactionRepository = vasTransactionRepository;
+        this.activationJourneyNudgeService = activationJourneyNudgeService;
     }
 
     @PostConstruct
@@ -531,6 +534,13 @@ public class EnvelopeService {
                 sourceEnvelope.getId(),
                 "/envelopes/" + sourceEnvelope.getId()
         ));
+
+        // Activation journey off-switch: comment out this one invocation to
+        // stop the first direct-spend completion push/email.
+        activationJourneyNudgeService.nudgeAfterFirstDirectSpend(
+                sender.getId(),
+                sourceEnvelope.getBudget().getId(),
+                sourceEnvelope.getId());
 
         // Ã¢Å“â€¦ ADD NEW EVENT: Recipient Notification
         if (!providerBackedP2p) {
@@ -2291,6 +2301,15 @@ public class EnvelopeService {
             feeTxn.setDescription(appendDescription(feeTxn.getDescription(), "Confirmed by SecureWave accepted response"));
             transactionLogRepository.save(feeTxn);
         });
+
+        if (source.getBudget() != null && source.getBudget().getUser() != null) {
+            // Activation journey off-switch: comment out this one invocation to
+            // stop the first direct-spend completion push/email.
+            activationJourneyNudgeService.nudgeAfterFirstDirectSpend(
+                    source.getBudget().getUser().getId(),
+                    source.getBudget().getId(),
+                    source.getId());
+        }
 
         logger.info(
                 "SecureWave external transfer auto-settled. envelopeId={}, reference={}, providerReference={}, totalDebit={}",

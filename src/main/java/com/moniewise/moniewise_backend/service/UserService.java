@@ -67,6 +67,7 @@ public class UserService implements UserDetailsService {
 
     // Add to class dependencies
     private final NotificationService notificationService;
+    private final ActivationJourneyNudgeService activationJourneyNudgeService;
 
     private final BudgetRepository budgetRepository;
     private final SavingsGoalRepository savingsGoalRepository;
@@ -78,7 +79,7 @@ public class UserService implements UserDetailsService {
     private final StringRedisTemplate redisTemplate;
     private final ObjectMapper objectMapper;
 
-    public UserService(UserRepository userRepository, PasswordEncoder passwordEncoder, WalletService walletService, WalletRepository walletRepository, WalletService walletService1, OtpService otpService, PasswordResetTokenRepository passwordResetTokenRepository, NotificationService notificationService, BudgetRepository budgetRepository, RegistrationCacheService registrationCacheService, ProvidusExpressGateway providusExpressGateway, KycProfileRepository kycProfileRepository, StringRedisTemplate redisTemplate, ObjectMapper objectMapper, SavingsGoalRepository savingsGoalRepository, KycService kycService) {
+    public UserService(UserRepository userRepository, PasswordEncoder passwordEncoder, WalletService walletService, WalletRepository walletRepository, WalletService walletService1, OtpService otpService, PasswordResetTokenRepository passwordResetTokenRepository, NotificationService notificationService, ActivationJourneyNudgeService activationJourneyNudgeService, BudgetRepository budgetRepository, RegistrationCacheService registrationCacheService, ProvidusExpressGateway providusExpressGateway, KycProfileRepository kycProfileRepository, StringRedisTemplate redisTemplate, ObjectMapper objectMapper, SavingsGoalRepository savingsGoalRepository, KycService kycService) {
         this.userRepository = userRepository;
         this.passwordEncoder = passwordEncoder; // No link to SecurityConfig
         this.walletRepository = walletRepository;
@@ -86,6 +87,7 @@ public class UserService implements UserDetailsService {
         this.otpService = otpService;
         this.passwordResetTokenRepository = passwordResetTokenRepository;
         this.notificationService = notificationService;
+        this.activationJourneyNudgeService = activationJourneyNudgeService;
         this.budgetRepository = budgetRepository;
         this.savingsGoalRepository = savingsGoalRepository;
         this.registrationCacheService = registrationCacheService;
@@ -834,6 +836,10 @@ public class UserService implements UserDetailsService {
 
             // We do this synchronously. If SecureWave fails, it throws an error to the frontend!
             Wallet newWallet = walletService.createWalletForUser(savedUser);
+
+            // Activation journey off-switch: comment out this one invocation to
+            // stop the post-wallet-created fund-wallet push/email.
+            activationJourneyNudgeService.nudgeAfterWalletCreated(savedUser.getId());
 
             // We can keep the EMAIL sending asynchronous, because we don't want the user
             // to wait on an SMTP server to finish loading.

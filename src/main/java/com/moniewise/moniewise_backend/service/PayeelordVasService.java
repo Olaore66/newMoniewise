@@ -97,6 +97,7 @@ public class PayeelordVasService {
     private final TransactionLogRepository transactionLogRepository;
     private final NotificationService notificationService;
     private final MonnieCacheInvalidationService monnieCacheInvalidationService;
+    private final ActivationJourneyNudgeService activationJourneyNudgeService;
     private final ObjectMapper objectMapper;
 
     public PayeelordVasService(UserRepository userRepository,
@@ -111,6 +112,7 @@ public class PayeelordVasService {
                                TransactionLogRepository transactionLogRepository,
                                NotificationService notificationService,
                                MonnieCacheInvalidationService monnieCacheInvalidationService,
+                               ActivationJourneyNudgeService activationJourneyNudgeService,
                                ObjectMapper objectMapper) {
         this.userRepository = userRepository;
         this.walletRepository = walletRepository;
@@ -124,6 +126,7 @@ public class PayeelordVasService {
         this.transactionLogRepository = transactionLogRepository;
         this.notificationService = notificationService;
         this.monnieCacheInvalidationService = monnieCacheInvalidationService;
+        this.activationJourneyNudgeService = activationJourneyNudgeService;
         this.objectMapper = objectMapper;
     }
 
@@ -374,6 +377,9 @@ public class PayeelordVasService {
                             "₦%,.2f airtime sent to %s on %s. Reference: %s",
                             txn.getFaceAmount(), txn.getMobileNumber(), txn.getNetwork(), txn.getReference()),
                     NotificationType.AIRTIME_PURCHASE_SUCCESS);
+            // Activation journey off-switch: comment out this one invocation to
+            // stop the first direct-spend completion push/email.
+            activationJourneyNudgeService.nudgeAfterFirstDirectSpend(txn.getUserId(), null, txn.getEnvelopeId());
             return txn;
         }
 
@@ -430,6 +436,9 @@ public class PayeelordVasService {
                             "₦%,.2f data (%s) sent to %s on %s. Reference: %s",
                             txn.getSellingAmount(), planLabel, txn.getMobileNumber(), txn.getNetwork(), txn.getReference()),
                     NotificationType.DATA_PURCHASE_SUCCESS);
+            // Activation journey off-switch: comment out this one invocation to
+            // stop the first direct-spend completion push/email.
+            activationJourneyNudgeService.nudgeAfterFirstDirectSpend(txn.getUserId(), null, txn.getEnvelopeId());
             return txn;
         }
 

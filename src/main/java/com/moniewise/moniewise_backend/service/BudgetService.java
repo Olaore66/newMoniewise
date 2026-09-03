@@ -53,6 +53,7 @@ public class BudgetService {
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final TransactionLogRepository transactionLogRepository;
     private final NotificationService notificationService;
+    private final ActivationJourneyNudgeService activationJourneyNudgeService;
     private final WalletService walletService;
 
     private final ScheduledTaskRepository scheduledTaskRepository;
@@ -84,6 +85,7 @@ public class BudgetService {
             WalletRepository walletRepository, UserService userService,
             TransactionLogRepository transactionLogRepository,
             NotificationService notificationService,
+            ActivationJourneyNudgeService activationJourneyNudgeService,
             WalletService walletService, ScheduledTaskRepository scheduledTaskRepository,
             @Lazy EnvelopeService envelopeService, BudgetLifeCycleManager budgetLifeCycleManager,
             ApplicationEventPublisher eventPublisher, SavingsService savingsService,
@@ -98,6 +100,7 @@ public class BudgetService {
         this.userService = userService;
         this.transactionLogRepository = transactionLogRepository;
         this.notificationService = notificationService;
+        this.activationJourneyNudgeService = activationJourneyNudgeService;
         this.walletService = walletService;
         this.scheduledTaskRepository = scheduledTaskRepository;
         this.envelopeService = envelopeService;
@@ -879,6 +882,10 @@ public class BudgetService {
                         : NotificationType.BUDGET_CREATION,
                 params, savedBudget.getId(), null, "/budgets/" + savedBudget.getId()
         ));
+
+        // Activation journey off-switch: comment out this one invocation to
+        // stop the post-first-budget review push/email.
+        activationJourneyNudgeService.nudgeAfterBudgetCreated(user.getId(), savedBudget.getId());
 
         monnieCacheInvalidationService.evictUserAfterCommit(user.getId());
         return mapToResponse(savedBudget);

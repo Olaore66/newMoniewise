@@ -7,6 +7,7 @@ import com.moniewise.moniewise_backend.enums.SavingsStatus;
 import com.moniewise.moniewise_backend.enums.TransactionStatus;
 import com.moniewise.moniewise_backend.enums.TransactionType;
 import com.moniewise.moniewise_backend.repository.*;
+import com.moniewise.moniewise_backend.service.ActivationJourneyNudgeService;
 import com.moniewise.moniewise_backend.service.BadgeAwardService;
 import com.moniewise.moniewise_backend.service.EnvelopeAutoTransferService;
 import com.moniewise.moniewise_backend.service.EnvelopeService;
@@ -60,6 +61,7 @@ public class BudgetLifeCycleManager {
     private final SavingsGoalRepository savingsGoalRepository;
     private final SavingsService savingsService;
     private final BadgeAwardService badgeAwardService;
+    private final ActivationJourneyNudgeService activationJourneyNudgeService;
 
     private final OutboxEventRepository outboxEventRepository;
 
@@ -84,7 +86,8 @@ public class BudgetLifeCycleManager {
             @Lazy EnvelopeAutoTransferService envelopeAutoTransferService,
             SavingsGoalRepository savingsGoalRepository,
             SavingsService savingsService,
-            BadgeAwardService badgeAwardService) {
+            BadgeAwardService badgeAwardService,
+            ActivationJourneyNudgeService activationJourneyNudgeService) {
         this.budgetRepository = budgetRepository;
         this.envelopeRepository = envelopeRepository;
         this.scheduledTaskRepository = scheduledTaskRepository;
@@ -102,6 +105,7 @@ public class BudgetLifeCycleManager {
         this.savingsGoalRepository = savingsGoalRepository;
         this.savingsService = savingsService;
         this.badgeAwardService = badgeAwardService;
+        this.activationJourneyNudgeService = activationJourneyNudgeService;
     }
 
     @PostConstruct
@@ -1205,6 +1209,13 @@ public class BudgetLifeCycleManager {
                 envelope.getId(),
                 payload
         ));
+
+        // Activation journey off-switch: comment out this one invocation to
+        // stop the first spend-from-envelope push/email.
+        activationJourneyNudgeService.nudgeAfterEnvelopeUnlocked(
+                envelope.getBudget().getUser().getId(),
+                envelope.getBudget().getId(),
+                envelope.getId());
     }
 
     private void disburseEnvelope(Envelope envelope, LocalDateTime now, List<Envelope> envelopesToUpdate,
@@ -1284,6 +1295,13 @@ public class BudgetLifeCycleManager {
                     envelope.getId(),
                     payload
             ));
+
+            // Activation journey off-switch: comment out this one invocation to
+            // stop the first spend-from-envelope push/email.
+            activationJourneyNudgeService.nudgeAfterEnvelopeUnlocked(
+                    envelope.getBudget().getUser().getId(),
+                    envelope.getBudget().getId(),
+                    envelope.getId());
 
                         logger.info("Auto-disbursed ₦{} to envelope {}", amountToDisburse, envelope.getId());
 

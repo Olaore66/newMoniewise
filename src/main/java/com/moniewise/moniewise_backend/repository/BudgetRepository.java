@@ -21,6 +21,10 @@ import java.util.Optional;
 public interface BudgetRepository extends JpaRepository<Budget, Long> {
     List<Budget> findByUserId(Long userId);
 
+    boolean existsByUserId(Long userId);
+
+    long countByUserId(Long userId);
+
     List<Budget> findByUserIdAndStatus(Long userId, BudgetStatus status);
 
     boolean existsByUserIdAndStatus(Long userId, BudgetStatus status);

@@ -227,11 +227,11 @@ public class IncompleteSignupLifecycleManager {
             return false;
         }
         String title = urgent
-                ? "Your account will be removed soon"
-                : "Complete your profile to start using Wisemonie";
+                ? "Account setup expires soon ⏳"
+                : "Finish your Wisemonie setup 📝";
         String body = urgent
-                ? "Finish setting up your profile now to keep your Wisemonie account."
-                : "You're almost there. Complete your profile to unlock your wallet and give your money a plan.";
+                ? "Complete your profile now to keep your Wisemonie account and wallet slot."
+                : "You're almost there. Complete your profile to unlock your wallet and start your first plan 💚.";
         notificationService.enqueuePushOnlyNotification(
                 user.getId(),
                 NotificationType.ONBOARDING_REMINDER,

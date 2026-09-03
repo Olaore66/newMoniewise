@@ -57,6 +57,7 @@ public class WalletService {
     private final WalletRepository walletRepository;
     private final TransactionLogRepository transactionLogRepository;
     private final NotificationService notificationService;
+    private final ActivationJourneyNudgeService activationJourneyNudgeService;
     private final UserRepository userRepository;
     private final PaymentGatewayResolver paymentGatewayResolver;
     private final ProvidusExpressGateway providusExpressGateway;
@@ -103,6 +104,7 @@ public class WalletService {
             WalletRepository walletRepository,
             TransactionLogRepository transactionLogRepository,
             NotificationService notificationService,
+            ActivationJourneyNudgeService activationJourneyNudgeService,
             UserRepository userRepository,
             PaymentGatewayResolver paymentGatewayResolver,
             ProvidusExpressGateway providusExpressGateway,
@@ -120,6 +122,7 @@ public class WalletService {
         this.walletRepository = walletRepository;
         this.transactionLogRepository = transactionLogRepository;
         this.notificationService = notificationService;
+        this.activationJourneyNudgeService = activationJourneyNudgeService;
         this.userRepository = userRepository;
         this.paymentGatewayResolver = paymentGatewayResolver;
         this.providusExpressGateway = providusExpressGateway;
@@ -1094,6 +1097,10 @@ public class WalletService {
                     logger.error("Failed to send credit alert", e);
                 }
             });
+
+            // Activation journey off-switch: comment out this one invocation to
+            // stop the post-funding create-budget push/email.
+            activationJourneyNudgeService.nudgeAfterWalletFunded(user.getId());
         }
     }
 
