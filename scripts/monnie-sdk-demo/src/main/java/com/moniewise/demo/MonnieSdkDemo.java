@@ -49,10 +49,10 @@ public final class MonnieSdkDemo {
             liveTurn();
             return;
         }
-        fixtureTurns();
+        fixtureTurns(flags);
     }
 
-    private static void fixtureTurns() throws Exception {
+    private static void fixtureTurns(List<String> flags) throws Exception {
         MonnieChatModel model = modelFromEnv();
         FakePlanReadPort plan = FakePlanReadPort.withSampleBudget();
         InMemoryPreparedActionStore actions = new InMemoryPreparedActionStore();
@@ -61,16 +61,28 @@ public final class MonnieSdkDemo {
                 .ports(FakeHostPorts.sample())
                 .build())) {
             UserRef user = UserRef.of("demo@moniewise.local");
-            String thread = runPrinted(monnie, user, null, "How much can I spend on food today?");
+            String thread = runPrinted(monnie, user, null,
+                    "How much can I spend on food today?", null);
+            String instructions = flagValue(flags, "--instructions");
+            if (instructions == null) {
+                instructions = "You are helping a new user. After they name an envelope, "
+                        + "ask for cadence and limit, then prepare it.";
+            }
             runPrinted(monnie, user, thread,
-                    "Prepare a new envelope called Treats with 5000 naira in my active budget.");
+                    "Prepare a new envelope called Treats with 5000 naira in my active budget.",
+                    instructions);
         }
     }
 
-    private static String runPrinted(Monnie monnie, UserRef user, String threadId, String text)
+    private static String runPrinted(Monnie monnie, UserRef user, String threadId, String text,
+                                     String instructions)
             throws Exception {
         TurnEventSink.Collecting sink = new TurnEventSink.Collecting();
-        TurnResult result = monnie.run(TurnRequest.of(user, threadId, text), sink);
+        TurnRequest request = TurnRequest.of(user, threadId, text);
+        if (instructions != null && !instructions.isBlank()) {
+            request = request.withInstructions(instructions);
+        }
+        TurnResult result = monnie.run(request, sink);
         System.out.println("=== turn " + result.turnId() + " reason=" + result.finishReason() + " ===");
         System.out.println(result.text());
         System.out.println("--- frames ---");

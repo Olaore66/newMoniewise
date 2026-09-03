@@ -20,6 +20,12 @@ public class AiConversationThread {
     private String userEmail;
     private String surface;
     private String title;
+    @Column(columnDefinition = "TEXT")
+    private String instructions;
     @Column(name = "created_at")
     private Instant createdAt = Instant.now();
+    @Column(name = "updated_at")
+    private Instant updatedAt = Instant.now();
+    @Column(name = "deleted_at")
+    private Instant deletedAt;
 }

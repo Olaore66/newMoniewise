@@ -1,6 +1,7 @@
 # Resolve and run the monnieSDK demo consumer (GitHub Packages or local SNAPSHOT).
 #
 #   .\scripts\Run-MonnieSdk.ps1
+#   .\scripts\Run-MonnieSdk.ps1 --instructions "Guide a new user through their first budget."
 #   .\scripts\Run-MonnieSdk.ps1 --live-api
 #   .\scripts\Run-MonnieSdk.ps1 --confirm --action-id <id>
 #

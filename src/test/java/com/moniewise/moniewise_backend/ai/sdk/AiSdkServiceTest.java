@@ -16,6 +16,7 @@ import com.moniewise.moniewise_backend.service.UserService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.math.BigDecimal;
@@ -26,8 +27,12 @@ import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class AiSdkServiceTest {
@@ -46,7 +51,8 @@ class AiSdkServiceTest {
         ObjectProvider<Monnie> provider = mock(ObjectProvider.class);
         when(provider.getIfAvailable()).thenReturn(null);
         when(abuse.buildKey(any(), any())).thenReturn("user|ip");
-        service = new AiSdkService(provider, mock(ActionExecutor.class), store, users, abuse);
+        service = new AiSdkService(provider, mock(ActionExecutor.class), store,
+                mock(JpaConversationStore.class), users, abuse);
     }
 
     @Test
@@ -88,6 +94,42 @@ class AiSdkServiceTest {
         assertEquals("1500.00", view.balance().raw());
         assertEquals("0123456789", view.settlementAccountNumber());
         assertEquals("058", view.settlementBankCode());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void getThreadWrongUserLooksLikeNotFound() {
+        JpaConversationStore conversations = mock(JpaConversationStore.class);
+        when(conversations.requireOwned("thread-x", "ada@example.com"))
+                .thenThrow(new ResponseStatusException(HttpStatus.NOT_FOUND, "Thread not found."));
+        ObjectProvider<Monnie> provider = mock(ObjectProvider.class);
+        when(provider.getIfAvailable()).thenReturn(null);
+        AiSdkService chat = new AiSdkService(provider, mock(ActionExecutor.class), store,
+                conversations, users, abuse);
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                () -> chat.getThread("ada@example.com", "thread-x"));
+        assertEquals(404, ex.getStatus().value());
+    }
+
+    @Test
+    void listThreadsIsOwnerScoped() {
+        JpaConversationStore conversations = mock(JpaConversationStore.class);
+        when(conversations.listOwned(eq("ada@example.com"), isNull(), isNull(), eq(20)))
+                .thenReturn(List.of());
+        when(conversations.lastVisibleBodies(any())).thenReturn(Map.of());
+        ObjectProvider<Monnie> provider = mock(ObjectProvider.class);
+        AiSdkService chat = new AiSdkService(provider, mock(ActionExecutor.class), store,
+                conversations, users, abuse);
+        assertTrue(chat.listThreads("ada@example.com", null, null, null, "1.1.1.1").isEmpty());
+        verify(conversations).listOwned("ada@example.com", null, null, 20);
+    }
+
+    @Test
+    void turnRejectsOversizeInstructions() {
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                () -> service.turn("ada@example.com", null, "hello", "CHAT",
+                        "x".repeat(InstructionPolicy.MAX_LENGTH + 1), "1.1.1.1"));
+        assertEquals(400, ex.getStatus().value());
     }
 
     private static PreparedAction action(UserRef user, ActionKind kind, boolean pin) {

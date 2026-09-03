@@ -78,6 +78,7 @@ public class AbuseProtectionService {
      * never triggers a lockout.  Keeps the 1-hour window but raises the cap to 120.
      */
     public static final String AI_DASHBOARD_ACTION = "ai.dashboard_action";
+    public static final String AI_CHAT_READ = "ai.chat_read";
 
     // ── Beneficiaries ─────────────────────────────────────────────────────────
     public static final String BENEFICIARY_ADD = "beneficiary.add";
@@ -232,6 +233,7 @@ public class AbuseProtectionService {
             case "ai.action_prepare" -> new AttemptPolicy(30, Duration.ofHours(1), Duration.ofMinutes(15));
             case "ai.action_confirm" -> new AttemptPolicy(20, Duration.ofHours(1), Duration.ofMinutes(15));
             case "ai.recipient_resolve" -> new AttemptPolicy(60, Duration.ofHours(1), Duration.ofMinutes(10));
+            case "ai.chat_read" -> new AttemptPolicy(240, Duration.ofHours(1), Duration.ofMinutes(5));
 
             // Beneficiaries
             case BENEFICIARY_ADD -> new AttemptPolicy(10, Duration.ofHours(1), Duration.ofMinutes(30));
