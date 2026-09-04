@@ -33,15 +33,17 @@ public class SdkHostReads {
     private final BeneficiaryRepository beneficiaries;
     private final NotificationRepository notifications;
     private final PayeelordVasService vas;
+    private final SdkSubscriptionReads subscriptions;
 
     public SdkHostReads(UserService users, WalletRepository wallets,
                         BeneficiaryRepository beneficiaries, NotificationRepository notifications,
-                        PayeelordVasService vas) {
+                        PayeelordVasService vas, SdkSubscriptionReads subscriptions) {
         this.users = users;
         this.wallets = wallets;
         this.beneficiaries = beneficiaries;
         this.notifications = notifications;
         this.vas = vas;
+        this.subscriptions = subscriptions;
     }
 
     public HostPorts ports() {
@@ -105,7 +107,7 @@ public class SdkHostReads {
 
             @Override
             public Optional<SubscriptionView> subscription(UserRef user) {
-                return Optional.empty();
+                return subscriptions.forUser(user.principal());
             }
 
             @Override
@@ -128,9 +130,23 @@ public class SdkHostReads {
                 return Optional.of(amount);
             }
 
+            /**
+             * @param network the agent passes a display name such as {@code MTN}, while
+             *     the catalogue also keys plans by the provider's own network id. Match
+             *     either, because a caller cannot know which one it holds - and returning
+             *     every network for a request about one is how a user ends up offered a
+             *     Glo bundle for their MTN line
+             */
             @Override
             public List<VasPlanView> dataPlans(String network) {
-                return vas.getActiveDataPlans().stream()
+                List<PayeelordDataPlan> active = vas.getActiveDataPlans();
+                if (network == null || network.isBlank()) {
+                    return active.stream().map(this::plan).toList();
+                }
+                String wanted = network.trim();
+                return active.stream()
+                        .filter(p -> wanted.equalsIgnoreCase(p.getNetworkName())
+                                || wanted.equalsIgnoreCase(p.getNetworkId()))
                         .map(this::plan)
                         .toList();
             }

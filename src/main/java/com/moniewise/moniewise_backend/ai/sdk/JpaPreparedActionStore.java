@@ -94,6 +94,35 @@ public class JpaPreparedActionStore implements PreparedActionStore {
                 .toList();
     }
 
+    /**
+     * Owner-scoped action listing for the REST layer.
+     *
+     * <p>Not part of {@code PreparedActionStore}: the SDK's own port is thread-scoped
+     * because that is all the turn engine needs. A user asking "what am I waiting to
+     * confirm?" spans threads, and filtering in memory after loading every action would
+     * scale with the user's whole history rather than with the answer.
+     *
+     * @param threadId optional extra narrowing; null means every thread
+     */
+    @Transactional(readOnly = true)
+    public List<PreparedAction> findByUserAndStatus(String email, ActionStatus status,
+                                                    String threadId, int limit) {
+        StringBuilder jpql = new StringBuilder(
+                "SELECT e FROM AiPreparedActionEntity e WHERE e.userEmail = :email AND e.status = :status");
+        if (threadId != null && !threadId.isBlank()) {
+            jpql.append(" AND e.threadId = :threadId");
+        }
+        jpql.append(" ORDER BY e.createdAt DESC");
+        var query = em.createQuery(jpql.toString(), AiPreparedActionEntity.class)
+                .setParameter("email", email)
+                .setParameter("status", status.name())
+                .setMaxResults(limit);
+        if (threadId != null && !threadId.isBlank()) {
+            query.setParameter("threadId", threadId);
+        }
+        return query.getResultList().stream().map(this::fromEntity).toList();
+    }
+
     @Override
     @Transactional
     public int supersedePending(String threadId, ActionKind kind, String exceptActionId) {

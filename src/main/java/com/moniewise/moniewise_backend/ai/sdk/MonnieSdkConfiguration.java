@@ -33,22 +33,37 @@ public class MonnieSdkConfiguration {
 
     private static final Logger log = LoggerFactory.getLogger(MonnieSdkConfiguration.class);
 
+    static final String PROVIDER_GEMINI = "gemini";
+    static final String PROVIDER_GROQ = "groq";
+    static final String PROVIDER_OPENAI = "openai";
+
     @Bean
     public ClockPort monnieClockPort() {
         return ClockPort.systemLagos();
     }
 
+    /**
+     * The selected chat model, shared by the agent and the status endpoint.
+     *
+     * <p>Separate from the {@link Monnie} bean so both consume one instance: each adapter
+     * owns an HTTP client, and resolving twice would quietly double them.
+     */
+    @Bean
+    @Conditional(MonnieSdkEnabledCondition.class)
+    public ResolvedModel monnieChatModel(MonnieSdkProperties properties, GeminiProperties gemini) {
+        return resolveModel(properties, gemini);
+    }
+
     @Bean(destroyMethod = "close")
     @Conditional(MonnieSdkEnabledCondition.class)
-    public Monnie monnie(MonnieSdkProperties properties, GeminiProperties gemini,
+    public Monnie monnie(MonnieSdkProperties properties, ResolvedModel resolved,
                          PlanReadPort plan, ConversationStore conversations,
                          PreparedActionStore preparedActions, SdkHostReads reads,
                          RateLimiterPort limiter, ClockPort clock) {
-        MonnieChatModel model = resolveModel(properties, gemini);
         Set<ActionKind> kinds = parseKinds(properties);
-        log.info("Starting in-process Monnie agent provider={} kinds={}", describe(model),
-                kinds.size());
-        return Monnie.create(MonnieConfig.builder(model, plan, preparedActions)
+        log.info("Starting in-process Monnie agent provider={} model={} kinds={}",
+                resolved.provider(), resolved.modelId(), kinds.size());
+        return Monnie.create(MonnieConfig.builder(resolved.model(), plan, preparedActions)
                 .conversations(conversations)
                 .ports(reads.ports())
                 .clock(clock)
@@ -59,6 +74,17 @@ public class MonnieSdkConfiguration {
                         Duration.ofSeconds(properties.getTurnBudgetSeconds()),
                         true))
                 .build());
+    }
+
+    @Bean
+    @Conditional(MonnieSdkEnabledCondition.class)
+    public SdkRuntimeInfo monnieRuntimeInfo(MonnieSdkProperties properties, ResolvedModel resolved) {
+        return new SdkRuntimeInfo(
+                resolved.provider(),
+                resolved.modelId(),
+                properties.getHistoryLimit(),
+                properties.getTurnBudgetSeconds(),
+                parseKinds(properties));
     }
 
     private static Set<ActionKind> parseKinds(MonnieSdkProperties properties) {
@@ -72,7 +98,7 @@ public class MonnieSdkConfiguration {
         return kinds;
     }
 
-    private static MonnieChatModel resolveModel(MonnieSdkProperties properties, GeminiProperties gemini) {
+    private static ResolvedModel resolveModel(MonnieSdkProperties properties, GeminiProperties gemini) {
         String requested = trim(properties.getProvider());
         if (requested == null) {
             if (hasText(gemini.getApiKey())) {
@@ -90,42 +116,41 @@ public class MonnieSdkConfiguration {
                     "ai.sdk.enabled is true but no Gemini, Groq, or OpenAI API key is configured.");
         }
         return switch (requested.toLowerCase(Locale.ROOT)) {
-            case "gemini" -> geminiModel(gemini, properties.getModel());
-            case "groq" -> groqModel(first(properties.getGroqApiKey(), System.getenv("GROQ_API_KEY")),
+            case PROVIDER_GEMINI -> geminiModel(gemini, properties.getModel());
+            case PROVIDER_GROQ -> groqModel(first(properties.getGroqApiKey(), System.getenv("GROQ_API_KEY")),
                     properties.getModel());
-            case "openai" -> openaiModel(first(properties.getOpenaiApiKey(), System.getenv("OPENAI_API_KEY")),
+            case PROVIDER_OPENAI -> openaiModel(first(properties.getOpenaiApiKey(), System.getenv("OPENAI_API_KEY")),
                     properties.getModel());
             default -> throw new IllegalStateException("Unknown ai.sdk.provider: " + requested);
         };
     }
 
-    private static MonnieChatModel geminiModel(GeminiProperties gemini, String override) {
+    private static ResolvedModel geminiModel(GeminiProperties gemini, String override) {
         String key = first(gemini.getApiKey(), System.getenv("GEMINI_API_KEY"));
         if (!hasText(key)) {
             throw new IllegalStateException("Gemini API key is missing for the Monnie SDK.");
         }
         String model = hasText(override) ? override : gemini.getModel();
-        return new GeminiChatModel(GeminiConfig.of(key, model));
+        MonnieChatModel chat = new GeminiChatModel(GeminiConfig.of(key, model));
+        return new ResolvedModel(chat, PROVIDER_GEMINI, model);
     }
 
-    private static MonnieChatModel groqModel(String key, String override) {
+    private static ResolvedModel groqModel(String key, String override) {
         if (!hasText(key)) {
             throw new IllegalStateException("GROQ API key is missing for the Monnie SDK.");
         }
         String model = hasText(override) ? override : OpenAiCompatibleConfig.GROQ_DEFAULT_MODEL;
-        return new OpenAiChatModel(OpenAiCompatibleConfig.groq(key, model));
+        MonnieChatModel chat = new OpenAiChatModel(OpenAiCompatibleConfig.groq(key, model));
+        return new ResolvedModel(chat, PROVIDER_GROQ, model);
     }
 
-    private static MonnieChatModel openaiModel(String key, String override) {
+    private static ResolvedModel openaiModel(String key, String override) {
         if (!hasText(key)) {
             throw new IllegalStateException("OpenAI API key is missing for the Monnie SDK.");
         }
         String model = hasText(override) ? override : OpenAiCompatibleConfig.OPENAI_DEFAULT_MODEL;
-        return new OpenAiChatModel(OpenAiCompatibleConfig.openai(key, model));
-    }
-
-    private static String describe(MonnieChatModel model) {
-        return model.getClass().getSimpleName();
+        MonnieChatModel chat = new OpenAiChatModel(OpenAiCompatibleConfig.openai(key, model));
+        return new ResolvedModel(chat, PROVIDER_OPENAI, model);
     }
 
     private static String trim(String value) {

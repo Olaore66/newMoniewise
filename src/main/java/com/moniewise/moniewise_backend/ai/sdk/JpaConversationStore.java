@@ -22,17 +22,29 @@ public class JpaConversationStore implements ConversationStore {
     @PersistenceContext
     private EntityManager em;
 
+    /**
+     * {@inheritDoc}
+     *
+     * <p>Every REST path calls {@link #ensureForTurn} first, which resolves or creates the
+     * thread and 404s on someone else's id, so by the time the engine calls this the id is
+     * always owned and live. An unresolvable id here therefore means the turn engine was
+     * handed something the service layer never validated: fail loudly rather than silently
+     * forking a second conversation the user will never find.
+     */
     @Override
     @Transactional
     public ThreadRef ensureThread(UserRef user, String threadId, String surface) {
-        if (threadId != null) {
+        if (threadId != null && !threadId.isBlank()) {
             AiConversationThread existing = em.find(AiConversationThread.class, threadId);
-            if (existing != null && existing.getUserEmail().equals(user.principal())
-                    && existing.getDeletedAt() == null) {
-                return new ThreadRef(existing.getId(), existing.getTitle(), false);
+            if (existing == null || !existing.getUserEmail().equals(user.principal())
+                    || existing.getDeletedAt() != null) {
+                throw new IllegalStateException(
+                        "turn referenced a thread that is not owned or is deleted: " + threadId);
             }
+            return new ThreadRef(existing.getId(), existing.getTitle(), false);
         }
-        AiConversationThread created = newThread(user.principal(), surface, surface, null);
+        AiConversationThread created = newThread(user.principal(),
+                SurfaceGuidance.normalise(surface), null, null);
         em.persist(created);
         return new ThreadRef(created.getId(), created.getTitle(), true);
     }
@@ -80,7 +92,9 @@ public class JpaConversationStore implements ConversationStore {
     @Transactional
     public AiConversationThread createOwned(String email, String surface, String title,
                                             String instructions) {
-        String resolvedSurface = surface == null || surface.isBlank() ? "CHAT" : surface.trim();
+        // Canonical upper-case, so a client sending "onboarding" gets the onboarding
+        // starter and still matches its own ?surface=ONBOARDING listing filter.
+        String resolvedSurface = SurfaceGuidance.normalise(surface);
         String resolvedTitle = title == null || title.isBlank() ? resolvedSurface : title.trim();
         AiConversationThread created = newThread(email, resolvedSurface, resolvedTitle, instructions);
         em.persist(created);
@@ -179,7 +193,8 @@ public class JpaConversationStore implements ConversationStore {
         if (instructions != null) {
             if (thread.getInstructions() != null && !thread.getInstructions().isBlank()) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                        "instructions can only be set while empty");
+                        "This thread already has instructions and they cannot be changed. "
+                                + "Create a new thread to use different guidance.");
             }
             thread.setInstructions(instructions);
         }

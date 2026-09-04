@@ -82,6 +82,21 @@ if (pm.response.code === 200) {
 }
 """.strip()
 
+# A confirm is rejected unless it carries the hash of the card the user actually saw, so
+# grabbing the id without the hash leaves the next request failing for a reason that
+# reads like a bug. Both come from the same listing.
+SAVE_ACTION_FROM_LIST = """
+if (pm.response.code === 200) {
+  try {
+    const rows = pm.response.json();
+    if (Array.isArray(rows) && rows.length) {
+      pm.collectionVariables.set("actionId", rows[0].id);
+      if (rows[0].paramsHash) pm.collectionVariables.set("paramsHash", rows[0].paramsHash);
+    }
+  } catch (e) {}
+}
+""".strip()
+
 
 def req(
     name: str,
@@ -790,8 +805,20 @@ def main() -> None:
         ),
         folder(
             "16 Monnie SDK chat (/ai/sdk)",
-            "Session JWT. Wrong-user thread/action → 404. Instructions persist on the thread; later turns cannot swap them. PIN confirm does not execute from the SDK itself.",
+            "Session JWT. Wrong-user thread/action → 404. Instructions are write-once per thread: later turns and PATCH cannot swap them, so different guidance means a new thread. The agent only ever proposes a mutation; nothing moves until /confirm succeeds with the PIN. Start at Status and Capabilities. Note that /turn/async pushes its frames over STOMP (/user/queue/ai), which Postman cannot show — use /turn here and see docs/ai-sdk.md for the socket flow.",
             [
+                req(
+                    "Status",
+                    "GET",
+                    "/ai/sdk/status",
+                    desc="Availability and limits. Answers even when the agent is switched off, so a client can hide the assistant rather than meet a 503 when a user taps it.",
+                ),
+                req(
+                    "Capabilities",
+                    "GET",
+                    "/ai/sdk/capabilities",
+                    desc="Reads the agent can perform, mutations it may propose, and the rules instructions are held to. 503 while the agent is off.",
+                ),
                 req(
                     "Create thread",
                     "POST",
@@ -819,7 +846,7 @@ def main() -> None:
                     "PATCH",
                     "/ai/sdk/threads/{{threadId}}",
                     json_body={"title": "Onboarding", "instructions": "Keep answers short."},
-                    desc="Instructions only apply while the thread currently has none.",
+                    desc="Renames the thread. Instructions are accepted only while the thread has none; sending them for a thread that already has guidance is a 400.",
                 ),
                 req("Soft-delete thread", "DELETE", "/ai/sdk/threads/{{threadId}}"),
                 req(
@@ -827,8 +854,14 @@ def main() -> None:
                     "GET",
                     "/ai/sdk/threads/{{threadId}}/messages",
                     query=[{"key": "after", "value": "0", "disabled": True}, {"key": "limit", "value": "50"}],
+                    desc="Pass the highest id you have seen as ?after= to page forward. This is also how a client that dropped its socket mid-turn recovers the answer.",
                 ),
-                req("Pending actions", "GET", "/ai/sdk/threads/{{threadId}}/actions"),
+                req(
+                    "Pending actions in thread",
+                    "GET",
+                    "/ai/sdk/threads/{{threadId}}/actions",
+                    tests=SAVE_ACTION_FROM_LIST,
+                ),
                 req(
                     "Turn (creates thread if threadId omitted)",
                     "POST",
@@ -838,14 +871,43 @@ def main() -> None:
                         "text": "Help me create my first budget.",
                         "surface": "ONBOARDING",
                         "instructions": "Guide a new user. Do not push withdrawals.",
+                        "clientRequestId": "{{$guid}}",
                     },
+                    desc="Waits for the whole answer and returns it with every frame the turn produced.",
                     tests=SAVE_THREAD + "\n" + SAVE_ACTION,
                 ),
+                req(
+                    "Turn (async, frames over STOMP)",
+                    "POST",
+                    "/ai/sdk/turn/async",
+                    json_body={
+                        "threadId": "{{threadId}}",
+                        "text": "Help me create my first budget.",
+                        "surface": "ONBOARDING",
+                        "clientRequestId": "{{$guid}}",
+                    },
+                    desc="202 immediately; frames stream to /user/queue/ai on the STOMP broker at /ws. Subscribe BEFORE posting — frames are pushed live, not replayed. Postman shows only the 202 acknowledgement.",
+                    tests=SAVE_THREAD,
+                ),
+                req(
+                    "My actions",
+                    "GET",
+                    "/ai/sdk/actions",
+                    query=[
+                        {"key": "status", "value": "PENDING"},
+                        {"key": "threadId", "value": "{{threadId}}", "disabled": True},
+                        {"key": "limit", "value": "20"},
+                    ],
+                    desc="Prepared actions across every thread. An unknown status is a 400 rather than an empty list.",
+                    tests=SAVE_ACTION_FROM_LIST,
+                ),
+                req("Get action", "GET", "/ai/sdk/actions/{{actionId}}"),
                 req(
                     "Confirm prepared action",
                     "POST",
                     "/ai/sdk/actions/{{actionId}}/confirm",
                     json_body={"pin": "{{pin}}", "paramsHash": "{{paramsHash}}", "edits": {}},
+                    desc="paramsHash must be the one from the card that was shown, which binds the confirmation to those exact figures. edits may only touch keys listed in the action's editableFields. 409 means it was already claimed or is still running — do not retry.",
                 ),
                 req("Cancel prepared action", "POST", "/ai/sdk/actions/{{actionId}}/cancel"),
             ],

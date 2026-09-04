@@ -1,0 +1,46 @@
+# Builds and tests the backend against the SDK resolved from GitHub Packages.
+#
+# This is the one place a clean, machine-independent resolve is proven. Locally the
+# SDK usually comes from ~/.m2 because the sibling repo was `mvn install`ed, which
+# hides a broken remote setup until a deploy fails.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [test, Agentic-AI]
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+
+      # GH_PACKAGES_TOKEN is a repository secret holding a classic PAT with
+      # read:packages. The built-in GITHUB_TOKEN only reads another repository's
+      # packages if that package grants this repo Actions access, so it is used as a
+      # fallback rather than the default.
+      # MoniewiseBackendApplicationTests.contextLoads is excluded because it boots the
+      # whole application and needs a Postgres URL from application.properties, which is
+      # gitignored and has no CI equivalent - it fails on a clean checkout regardless of
+      # the change under test. Give it a Postgres service container and test datasource
+      # properties and this exclusion should go.
+      - name: Build and test
+        run: >
+          mvn -B -ntp -s .mvn/settings.xml -U verify
+          -Dtest='!MoniewiseBackendApplicationTests'
+          -DfailIfNoSpecifiedTests=false
+        env:
+          GH_PACKAGES_USER: ${{ github.actor }}
+          GH_PACKAGES_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}

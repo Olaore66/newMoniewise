@@ -18,6 +18,7 @@ public class MonnieSdkProperties {
     private int historyLimit = 24;
     private int turnBudgetSeconds = 90;
     private List<String> enabledKinds = new ArrayList<>();
+    private Push push = new Push();
 
     public boolean isEnabled() {
         return enabled;
@@ -81,5 +82,32 @@ public class MonnieSdkProperties {
 
     public void setEnabledKinds(List<String> enabledKinds) {
         this.enabledKinds = enabledKinds == null ? new ArrayList<>() : enabledKinds;
+    }
+
+    public Push getPush() {
+        return push;
+    }
+
+    public void setPush(Push push) {
+        this.push = push == null ? new Push() : push;
+    }
+
+    /** Where live turn frames are pushed. */
+    public static class Push {
+
+        /**
+         * Broker destination, before Spring's user prefix. Clients subscribe to
+         * {@code /user} + this value.
+         */
+        private String destination = "/queue/ai";
+
+        public String getDestination() {
+            return destination;
+        }
+
+        public void setDestination(String destination) {
+            this.destination = destination == null || destination.isBlank()
+                    ? "/queue/ai" : destination;
+        }
     }
 }

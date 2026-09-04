@@ -1,6 +1,6 @@
 {
   "info": {
-    "_postman_id": "004f3f99-3503-4d22-b98a-f9eae7836ea6",
+    "_postman_id": "55c4a3b4-e258-49fe-8b12-d4defcb2bd25",
     "name": "Moniewise Backend",
     "description": "Session-authenticated REST for the Moniewise Spring Boot API.\n\n**Import both** this collection and `Moniewise-Local.postman_environment.json`.\n\n1. Set `baseUrl` (local `http://localhost:8080` or your Render host).\n2. Fill `email` / `password` (and `pin` for money moves).\n3. Run **Login** \u2014 tests write `accessToken` onto the collection and environment.\n4. Remaining folders inherit `Authorization: Bearer {{accessToken}}`.\n\nPublic folders disable auth. `/admin/**` needs an admin JWT. Wrong-user AI thread/action lookups return **404**, not 403.\n\nEmpty controller stubs (`GamificationController`, `InsightsController`, `GoalController`) have no mappings and are omitted.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
@@ -4761,8 +4761,58 @@
     },
     {
       "name": "16 Monnie SDK chat (/ai/sdk)",
-      "description": "Session JWT. Wrong-user thread/action \u2192 404. Instructions persist on the thread; later turns cannot swap them. PIN confirm does not execute from the SDK itself.",
+      "description": "Session JWT. Wrong-user thread/action \u2192 404. Instructions are write-once per thread: later turns and PATCH cannot swap them, so different guidance means a new thread. The agent only ever proposes a mutation; nothing moves until /confirm succeeds with the PIN. Start at Status and Capabilities. Note that /turn/async pushes its frames over STOMP (/user/queue/ai), which Postman cannot show \u2014 use /turn here and see docs/ai-sdk.md for the socket flow.",
       "item": [
+        {
+          "name": "Status",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/ai/sdk/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "ai",
+                "sdk",
+                "status"
+              ]
+            },
+            "description": "Availability and limits. Answers even when the agent is switched off, so a client can hide the assistant rather than meet a 503 when a user taps it."
+          },
+          "response": []
+        },
+        {
+          "name": "Capabilities",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/ai/sdk/capabilities",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "ai",
+                "sdk",
+                "capabilities"
+              ]
+            },
+            "description": "Reads the agent can perform, mutations it may propose, and the rules instructions are held to. 503 while the agent is off."
+          },
+          "response": []
+        },
         {
           "name": "Create thread",
           "request": {
@@ -4911,7 +4961,7 @@
                 "{{threadId}}"
               ]
             },
-            "description": "Instructions only apply while the thread currently has none.",
+            "description": "Renames the thread. Instructions are accepted only while the thread has none; sending them for a thread that already has guidance is a 400.",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"title\": \"Onboarding\",\n  \"instructions\": \"Keep answers short.\"\n}",
@@ -4984,12 +5034,12 @@
                 }
               ]
             },
-            "description": ""
+            "description": "Pass the highest id you have seen as ?after= to page forward. This is also how a client that dropped its socket mid-turn recovers the answer."
           },
           "response": []
         },
         {
-          "name": "Pending actions",
+          "name": "Pending actions in thread",
           "request": {
             "method": "GET",
             "header": [
@@ -5013,7 +5063,26 @@
             },
             "description": ""
           },
-          "response": []
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "  try {",
+                  "    const rows = pm.response.json();",
+                  "    if (Array.isArray(rows) && rows.length) {",
+                  "      pm.collectionVariables.set(\"actionId\", rows[0].id);",
+                  "      if (rows[0].paramsHash) pm.collectionVariables.set(\"paramsHash\", rows[0].paramsHash);",
+                  "    }",
+                  "  } catch (e) {}",
+                  "}"
+                ]
+              }
+            }
+          ]
         },
         {
           "name": "Turn (creates thread if threadId omitted)",
@@ -5040,10 +5109,10 @@
                 "turn"
               ]
             },
-            "description": "",
+            "description": "Waits for the whole answer and returns it with every frame the turn produced.",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"threadId\": \"{{threadId}}\",\n  \"text\": \"Help me create my first budget.\",\n  \"surface\": \"ONBOARDING\",\n  \"instructions\": \"Guide a new user. Do not push withdrawals.\"\n}",
+              "raw": "{\n  \"threadId\": \"{{threadId}}\",\n  \"text\": \"Help me create my first budget.\",\n  \"surface\": \"ONBOARDING\",\n  \"instructions\": \"Guide a new user. Do not push withdrawals.\",\n  \"clientRequestId\": \"{{$guid}}\"\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -5085,6 +5154,147 @@
           ]
         },
         {
+          "name": "Turn (async, frames over STOMP)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/ai/sdk/turn/async",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "ai",
+                "sdk",
+                "turn",
+                "async"
+              ]
+            },
+            "description": "202 immediately; frames stream to /user/queue/ai on the STOMP broker at /ws. Subscribe BEFORE posting \u2014 frames are pushed live, not replayed. Postman shows only the 202 acknowledgement.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"threadId\": \"{{threadId}}\",\n  \"text\": \"Help me create my first budget.\",\n  \"surface\": \"ONBOARDING\",\n  \"clientRequestId\": \"{{$guid}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "  try {",
+                  "    const j = pm.response.json();",
+                  "    if (j.threadId) pm.collectionVariables.set(\"threadId\", j.threadId);",
+                  "    if (j.id) pm.collectionVariables.set(\"threadId\", j.id);",
+                  "  } catch (e) {}",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "My actions",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/ai/sdk/actions?status=PENDING&limit=20",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "ai",
+                "sdk",
+                "actions"
+              ],
+              "query": [
+                {
+                  "key": "status",
+                  "value": "PENDING"
+                },
+                {
+                  "key": "threadId",
+                  "value": "{{threadId}}",
+                  "disabled": true
+                },
+                {
+                  "key": "limit",
+                  "value": "20"
+                }
+              ]
+            },
+            "description": "Prepared actions across every thread. An unknown status is a 400 rather than an empty list."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "  try {",
+                  "    const rows = pm.response.json();",
+                  "    if (Array.isArray(rows) && rows.length) {",
+                  "      pm.collectionVariables.set(\"actionId\", rows[0].id);",
+                  "      if (rows[0].paramsHash) pm.collectionVariables.set(\"paramsHash\", rows[0].paramsHash);",
+                  "    }",
+                  "  } catch (e) {}",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get action",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/ai/sdk/actions/{{actionId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "ai",
+                "sdk",
+                "actions",
+                "{{actionId}}"
+              ]
+            },
+            "description": ""
+          },
+          "response": []
+        },
+        {
           "name": "Confirm prepared action",
           "request": {
             "method": "POST",
@@ -5111,7 +5321,7 @@
                 "confirm"
               ]
             },
-            "description": "",
+            "description": "paramsHash must be the one from the card that was shown, which binds the confirmation to those exact figures. edits may only touch keys listed in the action's editableFields. 409 means it was already claimed or is still running \u2014 do not retry.",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"pin\": \"{{pin}}\",\n  \"paramsHash\": \"{{paramsHash}}\",\n  \"edits\": {}\n}",
