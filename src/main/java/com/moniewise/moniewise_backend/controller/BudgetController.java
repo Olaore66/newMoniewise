@@ -85,12 +85,9 @@ public class BudgetController {
             return new ResponseEntity<>(response, HttpStatus.CREATED);
         } catch (InsufficientFundsException e) {
             logger.warn("Budget creation blocked for user {} due to insufficient funds: {}", email, e.getMessage());
+            Map<String, Object> body = insufficientBudgetCreationFundsBody(e);
             return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                    .body(Map.of(
-                            "error", "Insufficient Funds",
-                            "code", "INSUFFICIENT_BUDGET_CREATION_FUNDS",
-                            "message", e.getMessage()
-                    ));
+                    .body(body);
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         } catch (Exception e) {
@@ -101,6 +98,15 @@ public class BudgetController {
                             "code", "BUDGET_CREATION_FAILED"
                     ));
         }
+    }
+
+    private Map<String, Object> insufficientBudgetCreationFundsBody(InsufficientFundsException e) {
+        Map<String, Object> body = new HashMap<>();
+        body.put("error", "Insufficient Funds");
+        body.put("code", "INSUFFICIENT_BUDGET_CREATION_FUNDS");
+        body.put("message", e.getMessage());
+        body.putAll(e.getDetails());
+        return body;
     }
 
     // New: List all Budgets for the user
@@ -493,4 +499,3 @@ public class BudgetController {
     }
 
 }
-

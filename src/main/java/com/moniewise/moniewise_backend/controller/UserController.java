@@ -238,7 +238,10 @@ public class UserController {
     }
 
     @PostMapping("/fcm-token")
-    public ResponseEntity<?> updateFcmToken(@RequestBody Map<String, String> payload, Authentication authentication, @RequestHeader("Authorization") String authHeader) {
+    public ResponseEntity<?> updateFcmToken(@RequestBody Map<String, String> payload,
+                                            Authentication authentication,
+                                            @RequestHeader("Authorization") String authHeader,
+                                            @RequestHeader(value = "X-Device-Id", required = false) String headerDeviceId) {
         try {
             String token = payload.get("token");
             if (token == null || token.isEmpty()) {
@@ -250,7 +253,11 @@ public class UserController {
             if ((platform == null || platform.isBlank())) {
                 platform = payload.get("devicePlatform");
             }
-            authSessionService.attachFcmToken(email, sessionId, token, platform);
+            String deviceId = payload.get("deviceId");
+            if (deviceId == null || deviceId.isBlank()) {
+                deviceId = headerDeviceId;
+            }
+            authSessionService.attachFcmToken(email, sessionId, token, platform, deviceId);
             userService.updateFcmToken(email, token);
 
             // This device just became reachable — catch up on anything that was
@@ -276,8 +283,8 @@ public class UserController {
             String email = authentication.getName();
             String sessionId = extractSessionId(authHeader);
             String token = payload != null ? payload.get("token") : null;
-            authSessionService.clearSessionFcmTokenByValue(email, sessionId, token);
-            userService.updateFcmToken(email, null);
+            String removedToken = authSessionService.clearSessionFcmTokenByValue(email, sessionId, token);
+            userService.clearFcmTokenIfMatches(email, removedToken);
             return ResponseEntity.ok(Map.of("message", "FCM token removed successfully"));
         } catch (IllegalArgumentException | IllegalStateException e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));

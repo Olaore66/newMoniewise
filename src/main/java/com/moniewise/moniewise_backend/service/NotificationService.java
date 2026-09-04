@@ -2517,15 +2517,6 @@ public class NotificationService {
             logger.warn("Failed to fetch active FCM targets for user {}", userId, e);
         }
 
-        try {
-            String fallbackToken = userRepository.findFcmTokenById(userId);
-            if (fallbackToken != null && !fallbackToken.isBlank()) {
-                targets.putIfAbsent(fallbackToken, new AuthSessionService.PushTarget(fallbackToken, null));
-            }
-        } catch (Exception e) {
-            logger.warn("Failed to fetch fallback FCM token for user {}", userId, e);
-        }
-
         return List.copyOf(targets.values());
     }
 

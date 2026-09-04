@@ -14,6 +14,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -109,12 +110,9 @@ public class BudgetTemplateController {
             BudgetResponse response = templateService.createBudgetFromTemplate(id, request, email);
             return new ResponseEntity<>(response, HttpStatus.CREATED);
         } catch (InsufficientFundsException e) {
+            Map<String, Object> body = insufficientBudgetCreationFundsBody(e);
             return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                    .body(Map.of(
-                            "error", "Insufficient Funds",
-                            "code", "INSUFFICIENT_BUDGET_CREATION_FUNDS",
-                            "message", e.getMessage()
-                    ));
+                    .body(body);
         } catch (IllegalArgumentException | IllegalStateException e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         } catch (Exception e) {
@@ -122,5 +120,14 @@ public class BudgetTemplateController {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(Map.of("error", "Failed to create budget from template"));
         }
+    }
+
+    private Map<String, Object> insufficientBudgetCreationFundsBody(InsufficientFundsException e) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("error", "Insufficient Funds");
+        body.put("code", "INSUFFICIENT_BUDGET_CREATION_FUNDS");
+        body.put("message", e.getMessage());
+        body.putAll(e.getDetails());
+        return body;
     }
 }

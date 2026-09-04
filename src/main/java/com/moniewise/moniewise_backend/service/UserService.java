@@ -467,8 +467,28 @@ public class UserService implements UserDetailsService {
     @Transactional
     public void updateFcmToken(String email, String token) {
         User user = findByEmail(email);
-        user.setFcmToken(token);
+        String normalizedToken = normalizeFcmToken(token);
+        if (normalizedToken != null) {
+            userRepository.clearFcmTokenByToken(normalizedToken);
+        }
+        user.setFcmToken(normalizedToken);
         userRepository.save(user);
+    }
+
+    @Transactional
+    public void clearFcmTokenIfMatches(String email, String token) {
+        String normalizedToken = normalizeFcmToken(token);
+        if (normalizedToken == null) {
+            return;
+        }
+        userRepository.clearFcmTokenByEmailAndToken(email, normalizedToken);
+    }
+
+    private String normalizeFcmToken(String token) {
+        if (token == null || token.isBlank()) {
+            return null;
+        }
+        return token.trim();
     }
     //==============================================================
 

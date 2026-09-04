@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.context.request.WebRequest;
 
 import java.time.LocalDateTime;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
 
@@ -96,12 +97,13 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(InsufficientFundsException.class)
     public ResponseEntity<Map<String, Object>> handleInsufficientFunds(InsufficientFundsException ex) {
-        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of(
-                "error", "Insufficient Funds",
-                "code", "INSUFFICIENT_BUDGET_CREATION_FUNDS",
-                "message", ex.getMessage(),
-                "timestamp", LocalDateTime.now()
-        ));
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("error", "Insufficient Funds");
+        body.put("code", "INSUFFICIENT_BUDGET_CREATION_FUNDS");
+        body.put("message", ex.getMessage());
+        body.put("timestamp", LocalDateTime.now());
+        body.putAll(ex.getDetails());
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(body);
     }
 
     @ExceptionHandler(WalletProvisioningException.class)

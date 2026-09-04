@@ -724,10 +724,28 @@ public class BudgetService {
         BigDecimal walletBalance = walletService.checkBalance(user.getId());
 
         if (walletBalance.compareTo(totalRequired) < 0) {
+            BigDecimal envelopeTotal = allocationSum.setScale(2, RoundingMode.HALF_UP);
+            BigDecimal creationFee = fee.setScale(2, RoundingMode.HALF_UP);
+            BigDecimal totalNeeded = totalRequired.setScale(2, RoundingMode.HALF_UP);
+            BigDecimal availableBalance = walletBalance.setScale(2, RoundingMode.HALF_UP);
+            BigDecimal shortfall = totalRequired.subtract(walletBalance)
+                    .max(BigDecimal.ZERO)
+                    .setScale(2, RoundingMode.HALF_UP);
+
+            Map<String, Object> details = new LinkedHashMap<>();
+            details.put("envelopeTotal", envelopeTotal);
+            details.put("creationFee", creationFee);
+            details.put("totalNeeded", totalNeeded);
+            details.put("walletBalance", availableBalance);
+            details.put("shortfall", shortfall);
+
             throw new InsufficientFundsException(
-                    String.format("Insufficient funds to create budget. " +
-                            "Required: ₦%.2f (envelopes) + ₦%.2f (creation fee) = ₦%.2f total. " +
-                            "Available: ₦%.2f", allocationSum, fee, totalRequired, walletBalance)
+                    String.format(Locale.US,
+                            "Insufficient funds to create budget. Envelopes: ₦%,.2f. " +
+                                    "Budget creation fee: ₦%,.2f. Total needed: ₦%,.2f. " +
+                                    "Wallet balance: ₦%,.2f. Add at least ₦%,.2f to continue.",
+                            envelopeTotal, creationFee, totalNeeded, availableBalance, shortfall),
+                    details
             );
         }
 
