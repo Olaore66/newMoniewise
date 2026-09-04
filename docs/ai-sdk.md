@@ -1,5 +1,13 @@
 # Monnie assistant API (`/ai/sdk`)
 
+> **Building a web or mobile client? Read
+> [ai-assistant-frontend-guide.md](ai-assistant-frontend-guide.md) instead.** It covers
+> the same API from the client side, with worked code, the frame reducer, card
+> rendering, recovery handling and a pre-ship checklist.
+>
+> This document is the API and operations reference: endpoint contracts, configuration,
+> and how the SDK is built and published.
+
 The in-process agent, exposed entirely over HTTP and STOMP. Nothing in a client, and
 nothing outside `com.moniewise.moniewise_backend.ai.sdk`, constructs or calls the SDK
 directly.

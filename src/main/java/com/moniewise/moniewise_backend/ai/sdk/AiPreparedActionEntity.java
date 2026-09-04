@@ -7,6 +7,7 @@ import org.hibernate.annotations.Type;
 import org.hibernate.annotations.TypeDef;
 
 import javax.persistence.Column;
+import javax.persistence.Convert;
 import javax.persistence.Entity;
 import javax.persistence.Id;
 import javax.persistence.Table;
@@ -27,11 +28,17 @@ public class AiPreparedActionEntity {
     @Column(name = "user_email", nullable = false)
     private String userEmail;
     private String kind;
+    // MapToJsonConverter is @Converter(autoApply = true) over Map<String, Object>, so
+    // every jsonb map in this project has to opt out of it explicitly or Hibernate
+    // refuses to build the entity manager at all. Same fix as User.profileData,
+    // Wallet.providerMetadata and OutboxEvent.payload.
+    @Convert(disableConversion = true)
     @Type(type = "jsonb")
     @Column(columnDefinition = "jsonb")
     private Map<String, Object> params;
     @Column(name = "params_hash", nullable = false)
     private String paramsHash;
+    @Convert(disableConversion = true)
     @Type(type = "jsonb")
     @Column(columnDefinition = "jsonb")
     private Map<String, Object> render;
@@ -46,6 +53,7 @@ public class AiPreparedActionEntity {
     private String idempotencyKey;
     @Column(name = "prepared_by_agent")
     private String preparedByAgent;
+    @Convert(disableConversion = true)
     @Type(type = "jsonb")
     @Column(columnDefinition = "jsonb")
     private Map<String, Object> evidence;

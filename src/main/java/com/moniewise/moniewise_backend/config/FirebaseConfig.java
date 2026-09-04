@@ -6,6 +6,7 @@ import com.google.firebase.FirebaseOptions;
 import com.google.firebase.messaging.FirebaseMessaging;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -41,10 +42,21 @@ public class FirebaseConfig {
         }
     }
 
+    /**
+     * Takes an {@link ObjectProvider} rather than the bean itself because
+     * {@link #firebaseApp()} returns null when credentials are absent, and Spring will
+     * not inject a null bean into a required parameter - it fails the whole context
+     * instead, which contradicted the "features will be disabled" warning above and
+     * meant nobody without a Firebase service account could start the application.
+     *
+     * <p>{@code NotificationService} already declares this bean
+     * {@code @Autowired(required = false)}, so a null here is expected and handled.
+     */
     @Bean
-    public FirebaseMessaging firebaseMessaging(FirebaseApp firebaseApp) {
-        if (firebaseApp == null) return null;
-        return FirebaseMessaging.getInstance(firebaseApp);
+    public FirebaseMessaging firebaseMessaging(ObjectProvider<FirebaseApp> firebaseApp) {
+        FirebaseApp app = firebaseApp.getIfAvailable();
+        if (app == null) return null;
+        return FirebaseMessaging.getInstance(app);
     }
 
     private InputStream resolveCredentials() {
