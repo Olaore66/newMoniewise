@@ -165,6 +165,186 @@ public class BudgetService {
         return status == BudgetStatus.ACTIVE || status == BudgetStatus.SCHEDULED;
     }
 
+    @Transactional(readOnly = true)
+    public Map<String, Object> previewBudgetFunding(BudgetRequest request, String email) {
+        User user = userService.findByEmail(email);
+        LocalDateTime now = fetchCurrentDateTimeFromDatabase();
+
+        normalizeAndValidateBudgetDates(request, now.toLocalDate());
+        validateSavingsSweepTargets(request, user);
+        validatePositiveBudgetTotal(request);
+        validateMinimumBudgetAmount(request);
+
+        long durationDays = calculateBudgetDurationDays(request);
+        validateBudgetDuration(durationDays);
+        validateEnvelopeCount(request);
+
+        BigDecimal originalAmount = request.getTotalAmount();
+        BigDecimal creationFee = calculateBudgetCreationFee(durationDays).setScale(2, RoundingMode.HALF_UP);
+        Map<EnvelopeRequest, BigDecimal> finalAmounts = calculateFinalEnvelopeAmounts(request, originalAmount);
+        validateEnvelopePercentages(request);
+
+        BigDecimal envelopeTotal = finalAmounts.values().stream()
+                .reduce(BigDecimal.ZERO, BigDecimal::add)
+                .setScale(2, RoundingMode.HALF_UP);
+        BigDecimal totalNeeded = envelopeTotal.add(creationFee).setScale(2, RoundingMode.HALF_UP);
+        BigDecimal walletBalance = walletService.checkBalance(user.getId()).setScale(2, RoundingMode.HALF_UP);
+        BigDecimal shortfall = totalNeeded.subtract(walletBalance)
+                .max(BigDecimal.ZERO)
+                .setScale(2, RoundingMode.HALF_UP);
+
+        Map<String, Object> details = budgetFundingDetails(
+                envelopeTotal,
+                creationFee,
+                totalNeeded,
+                walletBalance,
+                shortfall,
+                durationDays
+        );
+        details.put("budgetAmount", originalAmount.setScale(2, RoundingMode.HALF_UP));
+        details.put("canCreateBudget", walletBalance.compareTo(totalNeeded) >= 0);
+        return details;
+    }
+
+    private void validatePositiveBudgetTotal(BudgetRequest request) {
+        if (request.getTotalAmount() == null || request.getTotalAmount().compareTo(BigDecimal.ZERO) <= 0) {
+            throw new IllegalArgumentException("Budget amount must be positive");
+        }
+    }
+
+    private void validateMinimumBudgetAmount(BudgetRequest request) {
+        BigDecimal minAmount = systemConfig.getBudgetMinAmount();
+        if (request.getTotalAmount().compareTo(minAmount) < 0) {
+            throw new IllegalArgumentException(
+                    String.format(Locale.US, "Minimum budget amount is ₦%,.2f", minAmount));
+        }
+    }
+
+    private long calculateBudgetDurationDays(BudgetRequest request) {
+        long durationDays = ChronoUnit.DAYS.between(request.getStartDate(), request.getEndDate()) + 1;
+        return durationDays <= 0 ? 1 : durationDays;
+    }
+
+    private void validateBudgetDuration(long durationDays) {
+        int maxDurationDays = systemConfig.getInt(SystemConfigService.BUDGET_MAX_DURATION_DAYS, 730);
+        if (durationDays > maxDurationDays) {
+            throw new IllegalArgumentException(
+                    "Budget duration cannot exceed " + maxDurationDays + " days");
+        }
+    }
+
+    private void validateEnvelopeCount(BudgetRequest request) {
+        int minEnvelopes = systemConfig.getInt(SystemConfigService.BUDGET_MIN_ENVELOPES, 1);
+        int maxEnvelopes = systemConfig.getInt(SystemConfigService.BUDGET_MAX_ENVELOPES, 15);
+        int envelopeCount = request.getEnvelopes() == null ? 0 : request.getEnvelopes().size();
+
+        if (envelopeCount < minEnvelopes) {
+            throw new IllegalArgumentException(
+                    "A budget needs at least " + minEnvelopes + " envelopes to be meaningful.");
+        }
+        if (envelopeCount > maxEnvelopes) {
+            throw new IllegalArgumentException(
+                    "Maximum " + maxEnvelopes + " envelopes per budget. " +
+                            "More than that makes budgets harder to stick to.");
+        }
+    }
+
+    private BigDecimal calculateBudgetCreationFee(long durationDays) {
+        BigDecimal baseFee = systemConfig.getBigDecimal(SystemConfigService.BUDGET_CREATION_FEE, BigDecimal.ZERO);
+        if (baseFee.compareTo(BigDecimal.ZERO) <= 0) {
+            return BigDecimal.ZERO;
+        }
+        return baseFee.multiply(BigDecimal.valueOf(calculateBudgetCreationFeeIntervals(durationDays)));
+    }
+
+    private int calculateBudgetCreationFeeIntervals(long durationDays) {
+        return (int) Math.ceil((double) Math.max(1, durationDays) / 30);
+    }
+
+    private Map<EnvelopeRequest, BigDecimal> calculateFinalEnvelopeAmounts(
+            BudgetRequest request,
+            BigDecimal originalAmount) {
+        List<EnvelopeRequest> envelopeRequests = request.getEnvelopes();
+        Map<EnvelopeRequest, BigDecimal> finalAmounts = new LinkedHashMap<>();
+        BigDecimal sumOfRoundedAmounts = BigDecimal.ZERO;
+
+        long emergencyCount = envelopeRequests.stream()
+                .filter(e -> {
+                    Map<String, Object> conditions = e.getConditions();
+                    Object type = conditions != null ? conditions.get("type") : null;
+                    return "emergency".equalsIgnoreCase(type != null ? type.toString() : "");
+                })
+                .count();
+
+        if (emergencyCount > 1) {
+            throw new IllegalArgumentException("You can only have ONE 'Emergency' envelope per budget.");
+        }
+
+        for (EnvelopeRequest env : envelopeRequests) {
+            BigDecimal rounded;
+            BigDecimal exact = env.getExactAmount();
+            if (exact != null && exact.compareTo(BigDecimal.ZERO) > 0) {
+                rounded = exact.setScale(2, RoundingMode.HALF_UP);
+            } else {
+                BigDecimal calculated = originalAmount
+                        .multiply(env.getPercentage())
+                        .divide(new BigDecimal("100"), 10, RoundingMode.HALF_UP);
+                rounded = calculated.setScale(2, RoundingMode.HALF_UP);
+            }
+            finalAmounts.put(env, rounded);
+            sumOfRoundedAmounts = sumOfRoundedAmounts.add(rounded);
+        }
+
+        BigDecimal roundingError = originalAmount.subtract(sumOfRoundedAmounts);
+        if (roundingError.compareTo(BigDecimal.ZERO) != 0) {
+            EnvelopeRequest largest = envelopeRequests.stream()
+                    .max(Comparator.comparing(EnvelopeRequest::getPercentage))
+                    .orElse(envelopeRequests.get(0));
+
+            BigDecimal oldAmount = finalAmounts.get(largest);
+            finalAmounts.put(largest, oldAmount.add(roundingError));
+        }
+        return finalAmounts;
+    }
+
+    private void validateEnvelopePercentages(BudgetRequest request) {
+        BigDecimal totalPercentage = request.getEnvelopes().stream()
+                .map(EnvelopeRequest::getPercentage)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        if (totalPercentage.compareTo(new BigDecimal("50")) < 0) {
+            throw new IllegalArgumentException("Envelope percentages must sum to at least 50%");
+        }
+        if (totalPercentage.compareTo(new BigDecimal("100")) > 0) {
+            throw new IllegalArgumentException("Envelope percentages cannot exceed 100%");
+        }
+    }
+
+    private Map<String, Object> budgetFundingDetails(
+            BigDecimal envelopeTotal,
+            BigDecimal creationFee,
+            BigDecimal totalNeeded,
+            BigDecimal walletBalance,
+            BigDecimal shortfall,
+            long durationDays) {
+        Map<String, Object> details = new LinkedHashMap<>();
+        details.put("currency", "NGN");
+        details.put("durationDays", durationDays);
+        details.put("feeIntervals", calculateBudgetCreationFeeIntervals(durationDays));
+        details.put("envelopeTotal", envelopeTotal);
+        details.put("allocationTotal", envelopeTotal);
+        details.put("creationFee", creationFee);
+        details.put("budgetCreationFee", creationFee);
+        details.put("feeAmount", creationFee);
+        details.put("totalNeeded", totalNeeded);
+        details.put("totalRequired", totalNeeded);
+        details.put("requiredAmount", totalNeeded);
+        details.put("walletBalance", walletBalance);
+        details.put("shortfall", shortfall);
+        details.put("amountToFund", shortfall);
+        return details;
+    }
+
     private void validateSavingsSweepTargets(BudgetRequest request, User user) {
         if (request.getEnvelopes() == null) {
             return;
@@ -613,6 +793,7 @@ public class BudgetService {
         validateSavingsSweepTargets(request, user);
 
         // Minimum budget amount is product-configurable via system_config.
+        validatePositiveBudgetTotal(request);
         BigDecimal minAmount = systemConfig.getBudgetMinAmount();
         if (request.getTotalAmount().compareTo(minAmount) < 0) {
             throw new IllegalArgumentException(
@@ -650,59 +831,12 @@ public class BudgetService {
 
         // === CALCULATE FEE (read from system_config — never hardcoded) ===
         // budget.creation.fee = 0 means no fee charged. Positive value = fee per 30-day interval.
-        BigDecimal baseFee = systemConfig.getBigDecimal(SystemConfigService.BUDGET_CREATION_FEE, BigDecimal.ZERO);
-        BigDecimal fee;
-        if (baseFee.compareTo(BigDecimal.ZERO) > 0) {
-            int feeIntervals = (int) Math.ceil((double) durationDays / 30);
-            fee = baseFee.multiply(BigDecimal.valueOf(feeIntervals));
-        } else {
-            fee = BigDecimal.ZERO;
-        }
+        BigDecimal fee = calculateBudgetCreationFee(durationDays);
         BigDecimal originalAmount = request.getTotalAmount();   // This is what goes to envelopes
 
         // === ENVELOPE PROCESSING & ROUNDING (unchanged logic) ===
         List<EnvelopeRequest> envelopeRequests = request.getEnvelopes();
-        Map<EnvelopeRequest, BigDecimal> finalAmounts = new LinkedHashMap<>();
-        BigDecimal sumOfRoundedAmounts = BigDecimal.ZERO;
-
-        long emergencyCount = request.getEnvelopes().stream()
-                .filter(e -> "emergency".equalsIgnoreCase((String) e.getConditions().getOrDefault("type", "")))
-                .count();
-
-        if (emergencyCount > 1) {
-            throw new IllegalArgumentException("You can only have ONE 'Emergency' envelope per budget.");
-        }
-
-        for (EnvelopeRequest env : envelopeRequests) {
-            BigDecimal rounded;
-            BigDecimal exact = env.getExactAmount();
-            if (exact != null && exact.compareTo(BigDecimal.ZERO) > 0) {
-                // Honor the exact amount the user allocated. Percentages are
-                // derived and lossy — recomputing the amount from a rounded
-                // percentage turned a 4,000 allocation into 4,002. The
-                // percentage is still validated below; it's just no longer the
-                // source of truth for the amount.
-                rounded = exact.setScale(2, RoundingMode.HALF_UP);
-            } else {
-                BigDecimal calculated = originalAmount
-                        .multiply(env.getPercentage())
-                        .divide(new BigDecimal("100"), 10, RoundingMode.HALF_UP);
-                rounded = calculated.setScale(2, RoundingMode.HALF_UP);
-            }
-            finalAmounts.put(env, rounded);
-            sumOfRoundedAmounts = sumOfRoundedAmounts.add(rounded);
-        }
-
-        // Fix rounding error
-        BigDecimal roundingError = originalAmount.subtract(sumOfRoundedAmounts);
-        if (roundingError.compareTo(BigDecimal.ZERO) != 0) {
-            EnvelopeRequest largest = envelopeRequests.stream()
-                    .max(Comparator.comparing(EnvelopeRequest::getPercentage))
-                    .orElse(envelopeRequests.get(0));
-
-            BigDecimal oldAmount = finalAmounts.get(largest);
-            finalAmounts.put(largest, oldAmount.add(roundingError));
-        }
+        Map<EnvelopeRequest, BigDecimal> finalAmounts = calculateFinalEnvelopeAmounts(request, originalAmount);
 
         // Validate percentages
         BigDecimal totalPercentage = request.getEnvelopes().stream()
@@ -732,12 +866,15 @@ public class BudgetService {
                     .max(BigDecimal.ZERO)
                     .setScale(2, RoundingMode.HALF_UP);
 
-            Map<String, Object> details = new LinkedHashMap<>();
-            details.put("envelopeTotal", envelopeTotal);
-            details.put("creationFee", creationFee);
-            details.put("totalNeeded", totalNeeded);
-            details.put("walletBalance", availableBalance);
-            details.put("shortfall", shortfall);
+            Map<String, Object> details = budgetFundingDetails(
+                    envelopeTotal,
+                    creationFee,
+                    totalNeeded,
+                    availableBalance,
+                    shortfall,
+                    durationDays
+            );
+            details.put("canCreateBudget", false);
 
             throw new InsufficientFundsException(
                     String.format(Locale.US,

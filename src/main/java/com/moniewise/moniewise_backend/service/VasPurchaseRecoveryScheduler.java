@@ -5,11 +5,15 @@ import com.moniewise.moniewise_backend.enums.VasTransactionStatus;
 import com.moniewise.moniewise_backend.repository.PayeelordVasTransactionRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.event.ContextClosedEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Locale;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Scheduled safety net that recovers airtime/data purchases stuck in {@code PENDING}.
@@ -43,6 +47,7 @@ public class VasPurchaseRecoveryScheduler {
 
     private final PayeelordVasTransactionRepository transactionRepository;
     private final PayeelordVasService vasService;
+    private final AtomicBoolean shuttingDown = new AtomicBoolean(false);
 
     public VasPurchaseRecoveryScheduler(PayeelordVasTransactionRepository transactionRepository,
                                         PayeelordVasService vasService) {
@@ -50,15 +55,35 @@ public class VasPurchaseRecoveryScheduler {
         this.vasService = vasService;
     }
 
+    @EventListener(ContextClosedEvent.class)
+    public void onContextClosed() {
+        shuttingDown.set(true);
+        logger.info("[VasRecovery] Application shutdown detected; stale purchase recovery will stop accepting work.");
+    }
+
     /**
      * {@code fixedDelay} (not {@code fixedRate}) so a slow batch never overlaps itself.
      */
     @Scheduled(fixedDelay = POLL_INTERVAL_MS)
     public void recoverStalePurchases() {
+        if (isShutdownInProgress()) {
+            return;
+        }
+
         LocalDateTime cutoff = LocalDateTime.now().minusMinutes(STALE_AFTER_MINUTES);
 
-        List<PayeelordVasTransaction> stale =
-                transactionRepository.findByStatusAndCreatedAtBefore(VasTransactionStatus.PENDING, cutoff);
+        List<PayeelordVasTransaction> stale;
+        try {
+            stale = transactionRepository.findByStatusAndCreatedAtBefore(VasTransactionStatus.PENDING, cutoff);
+        } catch (Exception e) {
+            if (isShutdownRelated(e)) {
+                logger.warn("[VasRecovery] Skipping stale purchase recovery during shutdown: {}",
+                        rootCauseMessage(e));
+                restoreInterruptIfNeeded(e);
+                return;
+            }
+            throw e;
+        }
 
         if (stale.isEmpty()) {
             return; // nothing to do — keep quiet servers quiet
@@ -68,13 +93,87 @@ public class VasPurchaseRecoveryScheduler {
                 stale.size(), STALE_AFTER_MINUTES);
 
         for (PayeelordVasTransaction txn : stale) {
+            if (isShutdownInProgress()) {
+                logger.warn("[VasRecovery] Stopped stale purchase recovery because application is shutting down");
+                return;
+            }
+
             try {
                 vasService.recoverStalePurchase(txn.getId());
             } catch (Exception e) {
+                if (isShutdownRelated(e)) {
+                    logger.warn("[VasRecovery] Stopped stale purchase recovery during shutdown after ref={}: {}",
+                            txn.getReference(), rootCauseMessage(e));
+                    restoreInterruptIfNeeded(e);
+                    return;
+                }
+
                 // One bad record must not abort the whole batch.
                 logger.warn("[VasRecovery] Error recovering ref={}: {}",
                         txn.getReference(), e.getMessage(), e);
             }
         }
+    }
+
+    private boolean isShutdownInProgress() {
+        return shuttingDown.get() || Thread.currentThread().isInterrupted();
+    }
+
+    private boolean isShutdownRelated(Throwable throwable) {
+        if (isShutdownInProgress()) {
+            return true;
+        }
+
+        Throwable current = throwable;
+        while (current != null) {
+            String className = current.getClass().getName();
+            String message = current.getMessage();
+            if (className.contains("RedisCommandInterruptedException")
+                    || className.contains("TaskRejectedException")
+                    || containsIgnoreCase(message, "LettuceConnectionFactory was destroyed")
+                    || containsIgnoreCase(message, "BeanFactory not initialized or already closed")
+                    || containsIgnoreCase(message, "ApplicationContext has been closed")
+                    || containsIgnoreCase(message, "ApplicationContext is closed")
+                    || containsIgnoreCase(message, "Connection pool shut down")
+                    || containsIgnoreCase(message, "Connection is closed")
+                    || containsIgnoreCase(message, "This connection has been closed")) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
+    }
+
+    private void restoreInterruptIfNeeded(Throwable throwable) {
+        Throwable current = throwable;
+        while (current != null) {
+            if (current instanceof InterruptedException
+                    || current.getClass().getName().contains("RedisCommandInterruptedException")) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+            current = current.getCause();
+        }
+    }
+
+    private boolean containsIgnoreCase(String value, String needle) {
+        return value != null
+                && needle != null
+                && value.toLowerCase(Locale.ROOT).contains(needle.toLowerCase(Locale.ROOT));
+    }
+
+    private String rootCauseMessage(Throwable throwable) {
+        Throwable root = throwable;
+        while (root != null && root.getCause() != null) {
+            root = root.getCause();
+        }
+        if (root == null) {
+            return "unknown";
+        }
+        String message = root.getMessage();
+        if (message == null || message.isBlank()) {
+            return root.getClass().getSimpleName();
+        }
+        return message;
     }
 }

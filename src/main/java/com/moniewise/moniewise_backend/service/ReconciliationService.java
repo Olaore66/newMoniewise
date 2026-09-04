@@ -27,8 +27,12 @@ import com.moniewise.moniewise_backend.repository.WalletRepository;
 import com.moniewise.moniewise_backend.repository.WithdrawalRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.event.ContextClosedEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
@@ -42,9 +46,11 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 
 @Service
@@ -72,7 +78,9 @@ public class ReconciliationService {
     private final PaymentGatewayResolver paymentGatewayResolver;
     private final WalletService walletService;
     private final MonnieCacheInvalidationService monnieCacheInvalidationService;
+    private final ObjectProvider<ReconciliationService> selfProvider;
     private final ObjectMapper objectMapper;
+    private final AtomicBoolean shuttingDown = new AtomicBoolean(false);
 
     @Value("${moniewise.reconciliation.auto-heal-max:50000}")
     private BigDecimal autoHealMax;
@@ -90,6 +98,7 @@ public class ReconciliationService {
             PaymentGatewayResolver paymentGatewayResolver,
             WalletService walletService,
             MonnieCacheInvalidationService monnieCacheInvalidationService,
+            ObjectProvider<ReconciliationService> selfProvider,
             ObjectMapper objectMapper
     ) {
         this.reconciliationRunRepository = reconciliationRunRepository;
@@ -104,7 +113,15 @@ public class ReconciliationService {
         this.paymentGatewayResolver = paymentGatewayResolver;
         this.walletService = walletService;
         this.monnieCacheInvalidationService = monnieCacheInvalidationService;
+        this.selfProvider = selfProvider;
         this.objectMapper = objectMapper;
+    }
+
+    @EventListener(ContextClosedEvent.class)
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    public void onContextClosed() {
+        shuttingDown.set(true);
+        logger.info("[Recon] Application shutdown detected; reconciliation runs will stop accepting work.");
     }
 
     @Transactional
@@ -183,8 +200,14 @@ public class ReconciliationService {
         ReconciliationRun run = getRunOrThrow(runId);
         int checked = 0;
         int mismatches = 0;
+        boolean interrupted = false;
 
         for (Withdrawal withdrawal : withdrawalRepository.findAll()) {
+            if (isShutdownInProgress()) {
+                interrupted = true;
+                break;
+            }
+
             checked++;
             Wallet wallet = walletRepository.findById(withdrawal.getWalletId()).orElse(null);
             PaymentGateway gateway = resolveGatewayForRun(wallet, run);
@@ -241,6 +264,9 @@ public class ReconciliationService {
         summary.put("scope", "withdrawals");
         summary.put("checked", checked);
         summary.put("mismatches", mismatches);
+        if (interrupted) {
+            summary.put("interrupted", true);
+        }
         return summary;
     }
 
@@ -249,8 +275,14 @@ public class ReconciliationService {
         ReconciliationRun run = getRunOrThrow(runId);
         int checked = 0;
         int mismatches = 0;
+        boolean interrupted = false;
 
         for (TransactionRequest request : transactionRequestRepository.findAll()) {
+            if (isShutdownInProgress()) {
+                interrupted = true;
+                break;
+            }
+
             checked++;
 
             if (request.getStatus() == TransactionRequest.Status.PENDING_PROVIDER
@@ -274,6 +306,9 @@ public class ReconciliationService {
         summary.put("scope", "transactionRequests");
         summary.put("checked", checked);
         summary.put("mismatches", mismatches);
+        if (interrupted) {
+            summary.put("interrupted", true);
+        }
         return summary;
     }
 
@@ -284,8 +319,14 @@ public class ReconciliationService {
         int mismatches = 0;
         int autoResolved = 0;
         int manualReview = 0;
+        boolean interrupted = false;
 
         for (Wallet wallet : walletRepository.findAll()) {
+            if (isShutdownInProgress()) {
+                interrupted = true;
+                break;
+            }
+
             if (wallet.isRevenueWallet()) {
                 continue;
             }
@@ -354,6 +395,9 @@ public class ReconciliationService {
         summary.put("mismatches", mismatches);
         summary.put("autoResolved", autoResolved);
         summary.put("manualReview", manualReview);
+        if (interrupted) {
+            summary.put("interrupted", true);
+        }
         return summary;
     }
 
@@ -817,15 +861,38 @@ public class ReconciliationService {
         reconciliationRunRepository.save(run);
     }
 
-    @Transactional
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
     public void runDailyReconciliation(String providerName) {
-        ReconciliationRun run = startRun(providerName, ReconciliationRun.RUN_TYPE_INCREMENTAL);
+        if (isShutdownInProgress()) {
+            logger.info("[Recon] Daily reconciliation skipped for provider={} because application is shutting down",
+                    providerName);
+            return;
+        }
 
+        ReconciliationRun run = null;
         try {
-            Map<String, Object> walletSummary = reconcileWalletBalances(run.getId());
-            Map<String, Object> holdingsSummary = reconcileTotalHoldings(run.getId());
-            Map<String, Object> withdrawalSummary = reconcileWithdrawals(run.getId());
-            Map<String, Object> transactionSummary = reconcileTransactionRequests(run.getId());
+            ReconciliationService tx = txSelf();
+            run = tx.startRun(providerName, ReconciliationRun.RUN_TYPE_INCREMENTAL);
+
+            Map<String, Object> walletSummary = tx.reconcileWalletBalances(run.getId());
+            if (stopDailyRunIfInterrupted(run, "wallet balances", walletSummary)) {
+                return;
+            }
+
+            Map<String, Object> holdingsSummary = tx.reconcileTotalHoldings(run.getId());
+            if (stopDailyRunIfInterrupted(run, "total holdings", holdingsSummary)) {
+                return;
+            }
+
+            Map<String, Object> withdrawalSummary = tx.reconcileWithdrawals(run.getId());
+            if (stopDailyRunIfInterrupted(run, "withdrawals", withdrawalSummary)) {
+                return;
+            }
+
+            Map<String, Object> transactionSummary = tx.reconcileTransactionRequests(run.getId());
+            if (stopDailyRunIfInterrupted(run, "transaction requests", transactionSummary)) {
+                return;
+            }
 
             Map<String, Object> finalSummary = new LinkedHashMap<>();
             finalSummary.put("providerName", providerName);
@@ -851,12 +918,125 @@ public class ReconciliationService {
             finalSummary.put("autoResolvedItems", autoResolvedItems.size());
 
             String summaryJson = toSummaryJson(finalSummary);
-            completeRun(run.getId(), summaryJson);
+            tx.completeRun(run.getId(), summaryJson);
             enqueueAdminAlertIfNeeded(run, reviewItems, finalSummary, summaryJson);
         } catch (Exception ex) {
-            logger.error("Reconciliation run {} failed", run.getId(), ex);
-            failRun(run.getId(), ex.getMessage());
+            Long runId = run != null ? run.getId() : null;
+            if (isShutdownRelated(ex)) {
+                logger.warn("[Recon] Reconciliation run {} interrupted during application shutdown: {}",
+                        runId, rootCauseMessage(ex));
+                failRunQuietly(runId, "Interrupted by application shutdown: " + rootCauseMessage(ex));
+                restoreInterruptIfNeeded(ex);
+                return;
+            }
+
+            logger.error("Reconciliation run {} failed", runId, ex);
+            failRunQuietly(runId, ex.getMessage());
         }
+    }
+
+    private ReconciliationService txSelf() {
+        return selfProvider.getObject();
+    }
+
+    private boolean stopDailyRunIfInterrupted(
+            ReconciliationRun run,
+            String scope,
+            Map<String, Object> summary) {
+        if (!isShutdownInProgress()
+                && (summary == null || !Boolean.TRUE.equals(summary.get("interrupted")))) {
+            return false;
+        }
+
+        Long runId = run != null ? run.getId() : null;
+        logger.warn("[Recon] Reconciliation run {} stopped during {} because application is shutting down",
+                runId, scope);
+        failRunQuietly(runId, "Interrupted by application shutdown during " + scope + ".");
+        return true;
+    }
+
+    private void failRunQuietly(Long runId, String errorMessage) {
+        if (runId == null) {
+            return;
+        }
+
+        try {
+            txSelf().failRun(runId, safeErrorMessage(errorMessage));
+        } catch (Exception failEx) {
+            if (isShutdownRelated(failEx)) {
+                logger.warn("[Recon] Could not mark reconciliation run {} failed during shutdown: {}",
+                        runId, rootCauseMessage(failEx));
+                return;
+            }
+            logger.error("[Recon] Could not mark reconciliation run {} failed", runId, failEx);
+        }
+    }
+
+    private boolean isShutdownInProgress() {
+        return shuttingDown.get() || Thread.currentThread().isInterrupted();
+    }
+
+    private boolean isShutdownRelated(Throwable throwable) {
+        if (isShutdownInProgress()) {
+            return true;
+        }
+
+        Throwable current = throwable;
+        while (current != null) {
+            String className = current.getClass().getName();
+            String message = current.getMessage();
+            if (className.contains("RedisCommandInterruptedException")
+                    || className.contains("TaskRejectedException")
+                    || containsIgnoreCase(message, "LettuceConnectionFactory was destroyed")
+                    || containsIgnoreCase(message, "BeanFactory not initialized or already closed")
+                    || containsIgnoreCase(message, "ApplicationContext has been closed")
+                    || containsIgnoreCase(message, "ApplicationContext is closed")
+                    || containsIgnoreCase(message, "Connection pool shut down")) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
+    }
+
+    private void restoreInterruptIfNeeded(Throwable throwable) {
+        Throwable current = throwable;
+        while (current != null) {
+            if (current instanceof InterruptedException
+                    || current.getClass().getName().contains("RedisCommandInterruptedException")) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+            current = current.getCause();
+        }
+    }
+
+    private boolean containsIgnoreCase(String value, String needle) {
+        return value != null
+                && needle != null
+                && value.toLowerCase(Locale.ROOT).contains(needle.toLowerCase(Locale.ROOT));
+    }
+
+    private String rootCauseMessage(Throwable throwable) {
+        Throwable root = throwable;
+        while (root != null && root.getCause() != null) {
+            root = root.getCause();
+        }
+        if (root == null) {
+            return "unknown";
+        }
+        String message = root.getMessage();
+        if (message == null || message.isBlank()) {
+            return root.getClass().getSimpleName();
+        }
+        return message;
+    }
+
+    private String safeErrorMessage(String errorMessage) {
+        if (errorMessage == null || errorMessage.isBlank()) {
+            return "Unknown reconciliation error";
+        }
+        return errorMessage.length() <= 1000 ? errorMessage : errorMessage.substring(0, 1000);
     }
 
     private boolean isCreditTransaction(Map<String, Object> transaction) {

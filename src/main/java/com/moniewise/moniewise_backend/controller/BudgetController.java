@@ -62,6 +62,24 @@ public class BudgetController {
 
     private static final Logger logger = LoggerFactory.getLogger(BudgetController.class);
 
+    @PostMapping("/funding-preview")
+    public ResponseEntity<?> previewBudgetFunding(@Valid @RequestBody BudgetRequest request,
+                                                  Authentication authentication) {
+        String email = authentication.getName();
+        try {
+            return ResponseEntity.ok(budgetService.previewBudgetFunding(request, email));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        } catch (Exception e) {
+            logger.error("Error previewing budget funding for user {}", email, e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of(
+                            "error", "Failed to preview budget funding",
+                            "code", "BUDGET_FUNDING_PREVIEW_FAILED"
+                    ));
+        }
+    }
+
     @PostMapping
     public ResponseEntity<?> createBudget(@Valid @RequestBody BudgetRequest request, Authentication authentication) {
         String email = authentication.getName();
