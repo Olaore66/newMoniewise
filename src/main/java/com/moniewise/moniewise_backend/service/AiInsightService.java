@@ -39,8 +39,6 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
@@ -294,39 +292,17 @@ public class AiInsightService {
         User user = userService.findByEmail(email);
         Long userId = user.getId();
 
-        // Fire all 4 independent DB queries in parallel — reduces sequential latency
-        // from ~(T1 + T2 + T3 + T4) to ~max(T1, T2, T3, T4).
-        // Each CompletableFuture opens its own JPA session/connection; no shared
-        // transaction is needed because all four are read-only lookups.
-        CompletableFuture<Optional<Wallet>>  walletFuture =
-            CompletableFuture.supplyAsync(() -> walletRepository.findByUserId(userId));
-        CompletableFuture<Optional<Budget>>  activeBudgetFuture =
-            CompletableFuture.supplyAsync(() ->
-                budgetRepository.findTopByUserIdAndStatusOrderByCreatedAtDesc(userId, BudgetStatus.ACTIVE));
-        CompletableFuture<Optional<Budget>>  completedBudgetFuture =
-            CompletableFuture.supplyAsync(() ->
-                budgetRepository.findTopByUserIdAndStatusOrderByCreatedAtDesc(userId, BudgetStatus.COMPLETED));
-        CompletableFuture<List<Budget>>      budgetsWithEnvelopesFuture =
-            CompletableFuture.supplyAsync(() ->
-                budgetRepository.findByUserIdWithEnvelopes(userId));
-
-        final Optional<Wallet> walletOpt;
-        final Budget activeBudget;
-        final Budget completedBudget;
-        final List<Budget> budgetsWithEnvelopes;
-        try {
-            walletOpt             = walletFuture.get();
-            activeBudget          = activeBudgetFuture.get().orElse(null);
-            completedBudget       = completedBudgetFuture.get().orElse(null);
-            budgetsWithEnvelopes  = budgetsWithEnvelopesFuture.get();
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new RuntimeException("buildContext interrupted while fetching user data", e);
-        } catch (ExecutionException e) {
-            Throwable cause = e.getCause();
-            throw cause instanceof RuntimeException ? (RuntimeException) cause
-                    : new RuntimeException("buildContext DB query failed", cause);
-        }
+        // Keep dashboard context reads sequential so one user request cannot fan out
+        // into several concurrent database connections and starve critical paths
+        // like FCM token registration.
+        Optional<Wallet> walletOpt = walletRepository.findByUserId(userId);
+        Budget activeBudget = budgetRepository
+                .findTopByUserIdAndStatusOrderByCreatedAtDesc(userId, BudgetStatus.ACTIVE)
+                .orElse(null);
+        Budget completedBudget = budgetRepository
+                .findTopByUserIdAndStatusOrderByCreatedAtDesc(userId, BudgetStatus.COMPLETED)
+                .orElse(null);
+        List<Budget> budgetsWithEnvelopes = budgetRepository.findByUserIdWithEnvelopes(userId);
 
         List<Budget> activeBudgets = budgetsWithEnvelopes.stream()
             .filter(budget -> budget.getStatus() == BudgetStatus.ACTIVE)
