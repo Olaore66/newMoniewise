@@ -46,3 +46,4 @@ src/main/resources/.env
 /backups/
 hs_err_pid*.log
 *.class
+.env

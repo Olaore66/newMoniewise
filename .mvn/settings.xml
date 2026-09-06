@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Credentials for reading com.moniewise:monnie-sdk-* from GitHub Packages.
+
+  Committed on purpose: it contains no secret, only two environment-variable
+  placeholders. The token itself comes from the build host - a Render secret file,
+  a GitHub Actions secret, or a developer's shell.
+
+      set GH_PACKAGES_USER=<github-username>
+      set GH_PACKAGES_TOKEN=<classic PAT with read:packages>
+      mvn -s .mvn/settings.xml -U clean package
+
+  GitHub Packages only accepts a CLASSIC personal access token for Maven reads;
+  fine-grained tokens do not cover Packages. Use a machine account so a departing
+  developer does not break deploys.
+
+  This file is NOT wired into .mvn/maven.config on purpose. maven.config applies to
+  every invocation in this directory, including IntelliJ's, and `-s` there would
+  silently replace each developer's own ~/.m2/settings.xml along with its mirrors and
+  other server entries. Passing -s explicitly in Docker and CI keeps the override
+  where it belongs.
+
+  The <id> must stay exactly `github`, matching <repositories><repository><id> in
+  pom.xml. A mismatch fails with a bare 401 that does not explain itself.
+-->
+<settings xmlns="http://maven.apache.org/SETTINGS/1.0.0"
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.0.0 https://maven.apache.org/xsd/settings-1.0.0.xsd">
+  <servers>
+    <server>
+      <id>github</id>
+      <username>${env.GH_PACKAGES_USER}</username>
+      <password>${env.GH_PACKAGES_TOKEN}</password>
+    </server>
+  </servers>
+</settings>

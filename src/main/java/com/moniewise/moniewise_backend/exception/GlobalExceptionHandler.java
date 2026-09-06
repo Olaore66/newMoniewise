@@ -6,10 +6,12 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.context.request.WebRequest;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
@@ -113,6 +115,41 @@ public class GlobalExceptionHandler {
                 "code", ex.getCode(),
                 "error", ex.getUserMessage(),
                 "message", ex.getUserMessage(),
+                "timestamp", LocalDateTime.now()
+        ));
+    }
+
+    /**
+     * Errors raised with an explicit status, as the AI routes do throughout.
+     *
+     * <p>Without this they fall through to {@link #handleGeneric}, so a deliberate 404,
+     * 409 or 503 reaches the client as a 500 with a correlation id - the caller cannot
+     * tell "you already confirmed this" from "the server broke", and every one of them
+     * gets logged at error.
+     *
+     * <p>Built with a {@link LinkedHashMap} rather than {@code Map.of} because
+     * {@code getReason()} is nullable and {@code Map.of} rejects nulls.
+     */
+    @ExceptionHandler(ResponseStatusException.class)
+    public ResponseEntity<Map<String, Object>> handleResponseStatus(ResponseStatusException ex) {
+        String message = ex.getReason() == null
+                ? ex.getStatus().getReasonPhrase() : ex.getReason();
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("status", ex.getStatus().value());
+        body.put("error", ex.getStatus().getReasonPhrase());
+        body.put("message", message);
+        body.put("timestamp", LocalDateTime.now());
+        return ResponseEntity.status(ex.getStatus()).body(body);
+    }
+
+    /** Malformed or unparseable JSON. A client bug, not a server fault. */
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<Map<String, Object>> handleUnreadableBody(HttpMessageNotReadableException ex) {
+        logger.debug("Rejected an unreadable request body", ex);
+        return ResponseEntity.badRequest().body(Map.of(
+                "status", HttpStatus.BAD_REQUEST.value(),
+                "error", "Malformed request body",
+                "message", "The request body could not be read as JSON.",
                 "timestamp", LocalDateTime.now()
         ));
     }
