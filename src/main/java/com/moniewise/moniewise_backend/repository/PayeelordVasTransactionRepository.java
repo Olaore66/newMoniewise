@@ -2,6 +2,7 @@ package com.moniewise.moniewise_backend.repository;
 
 import com.moniewise.moniewise_backend.entity.PayeelordVasTransaction;
 import com.moniewise.moniewise_backend.enums.VasTransactionStatus;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -25,6 +26,18 @@ public interface PayeelordVasTransactionRepository extends JpaRepository<Payeelo
      *  used by the recovery sweeper to find deliveries that never finalized. */
     List<PayeelordVasTransaction> findByStatusAndCreatedAtBefore(VasTransactionStatus status,
                                                                  LocalDateTime cutoff);
+
+    @Query("""
+        SELECT v FROM PayeelordVasTransaction v
+        WHERE v.status = :status
+          AND v.createdAt < :cutoff
+          AND (v.failureReason IS NULL OR v.failureReason NOT LIKE %:recoveryMarker%)
+        ORDER BY v.createdAt ASC
+    """)
+    List<PayeelordVasTransaction> findStalePendingForRecovery(@Param("status") VasTransactionStatus status,
+                                                              @Param("cutoff") LocalDateTime cutoff,
+                                                              @Param("recoveryMarker") String recoveryMarker,
+                                                              Pageable pageable);
 
     @Query("SELECT SUM(v.sellingAmount) FROM PayeelordVasTransaction v " +
            "WHERE v.envelopeId = :envelopeId AND v.status = :status AND v.createdAt >= :since")

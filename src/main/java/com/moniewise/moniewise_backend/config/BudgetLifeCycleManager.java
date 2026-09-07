@@ -15,6 +15,7 @@ import com.moniewise.moniewise_backend.service.MonnieCacheInvalidationService;
 import com.moniewise.moniewise_backend.service.NotificationService;
 import com.moniewise.moniewise_backend.service.SavingsService;
 import com.moniewise.moniewise_backend.service.WalletService;
+import com.moniewise.moniewise_backend.utils.ExceptionClassifier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -36,6 +37,7 @@ import java.time.*;
 import java.time.format.DateTimeParseException;
 import java.time.temporal.TemporalAdjusters;
 import java.util.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static com.moniewise.moniewise_backend.enums.TransactionStatus.COMPLETED;
 import static com.moniewise.moniewise_backend.enums.TransactionType.BUDGET_COMPLETION_REFUND;
@@ -66,6 +68,7 @@ public class BudgetLifeCycleManager {
     private final OutboxEventRepository outboxEventRepository;
 
     private final ApplicationEventPublisher eventPublisher;
+    private final AtomicBoolean scheduledTasksRunning = new AtomicBoolean(false);
     @PersistenceContext
     private EntityManager entityManager;
     private final long GRACE_PERIOD_MINUTES = 10; // can be dynamic per envelope
@@ -117,7 +120,12 @@ public class BudgetLifeCycleManager {
         try {
             return budgetRepository.getCurrentLagosTime();
         } catch (Exception e) {
-            logger.error("Failed to fetch DB time, using system: {}", e.getMessage());
+            if (ExceptionClassifier.isDatabasePoolExhausted(e)) {
+                logger.warn("DB time unavailable because the connection pool is busy; using system Lagos time: {}",
+                        ExceptionClassifier.rootCauseMessage(e));
+            } else {
+                logger.error("Failed to fetch DB time, using system: {}", e.getMessage());
+            }
             return LocalDateTime.now(ZoneId.of("Africa/Lagos"));
         }
     }
@@ -674,79 +682,95 @@ public class BudgetLifeCycleManager {
     // ✅ NEW SAFE VERSION
     @Scheduled(fixedRateString = "${moniewise.scheduler.critical-tasks.fixed-rate-ms:30000}")
     public void processScheduledTasks() {
-        long startTime = System.nanoTime();
-        LocalDateTime now = fetchCurrentDateTimeFromDatabase();
-        logger.debug("Starting BATCH task processing at {}", now);
-
-        int batchSize = 100;
-        boolean hasNextBatch = true;
-
-        int maxLoops = 50;
-        int currentLoop = 0;
-
-        while (hasNextBatch && currentLoop < maxLoops) {
-            currentLoop++;
-
-            hasNextBatch = transactionTemplate.execute(status -> {
-                List<ScheduledTask> tasks = scheduledTaskRepository.claimDueTasks(now, batchSize);
-
-                if (tasks.isEmpty()) return false;
-
-                List<Long> tasksToComplete = new ArrayList<>();
-                List<Envelope> envelopesToUpdate = new ArrayList<>();
-                List<TransactionLog> logsToSave = new ArrayList<>();
-                List<OutboxEvent> outboxEventsToSave = new ArrayList<>();
-
-                for (ScheduledTask task : tasks) {
-                    try {
-                        processTask(
-                                task,
-                                now,
-                                envelopesToUpdate,
-                                logsToSave,
-                                tasksToComplete,
-                                outboxEventsToSave
-                        );
-                    } catch (Exception e) {
-                        logger.error("Skipping failed task {}: {}", task.getId(), e.getMessage(), e);
-                        scheduledTaskRepository.markTaskFailed(task.getId(), e.getMessage());
-                    }
-                }
-
-                if (!envelopesToUpdate.isEmpty()) {
-                    envelopeRepository.saveAll(envelopesToUpdate);
-                    Set<Long> userIdsToEvict = new HashSet<>();
-                    for (Envelope envelope : envelopesToUpdate) {
-                        if (envelope.getBudget() != null
-                                && envelope.getBudget().getUser() != null
-                                && envelope.getBudget().getUser().getId() != null) {
-                            userIdsToEvict.add(envelope.getBudget().getUser().getId());
-                        }
-                    }
-                    monnieCacheInvalidationService.evictUsersAfterCommit(userIdsToEvict);
-                }
-
-                if (!logsToSave.isEmpty()) {
-                    transactionLogRepository.saveAll(logsToSave);
-                }
-
-                if (!outboxEventsToSave.isEmpty()) {
-                    outboxEventRepository.saveAll(outboxEventsToSave);
-                }
-
-                if (!tasksToComplete.isEmpty()) {
-                    scheduledTaskRepository.markTasksCompleted(tasksToComplete, LocalDateTime.now());
-                }
-
-                entityManager.flush();
-                entityManager.clear();
-
-                return tasks.size() == batchSize;
-            });
+        if (!scheduledTasksRunning.compareAndSet(false, true)) {
+            logger.warn("Skipping scheduled-task processing because the previous run is still active");
+            return;
         }
 
-        long durationMs = (System.nanoTime() - startTime) / 1_000_000;
-        logger.debug("Batch tasks completed in {}ms", durationMs);
+        try {
+            long startTime = System.nanoTime();
+            LocalDateTime now = fetchCurrentDateTimeFromDatabase();
+            logger.debug("Starting BATCH task processing at {}", now);
+
+            int batchSize = 100;
+            boolean hasNextBatch = true;
+
+            int maxLoops = 50;
+            int currentLoop = 0;
+
+            while (hasNextBatch && currentLoop < maxLoops) {
+                currentLoop++;
+
+                hasNextBatch = transactionTemplate.execute(status -> {
+                    List<ScheduledTask> tasks = scheduledTaskRepository.claimDueTasks(now, batchSize);
+
+                    if (tasks.isEmpty()) return false;
+
+                    List<Long> tasksToComplete = new ArrayList<>();
+                    List<Envelope> envelopesToUpdate = new ArrayList<>();
+                    List<TransactionLog> logsToSave = new ArrayList<>();
+                    List<OutboxEvent> outboxEventsToSave = new ArrayList<>();
+
+                    for (ScheduledTask task : tasks) {
+                        try {
+                            processTask(
+                                    task,
+                                    now,
+                                    envelopesToUpdate,
+                                    logsToSave,
+                                    tasksToComplete,
+                                    outboxEventsToSave
+                            );
+                        } catch (Exception e) {
+                            logger.error("Skipping failed task {}: {}", task.getId(), e.getMessage(), e);
+                            scheduledTaskRepository.markTaskFailed(task.getId(), e.getMessage());
+                        }
+                    }
+
+                    if (!envelopesToUpdate.isEmpty()) {
+                        envelopeRepository.saveAll(envelopesToUpdate);
+                        Set<Long> userIdsToEvict = new HashSet<>();
+                        for (Envelope envelope : envelopesToUpdate) {
+                            if (envelope.getBudget() != null
+                                    && envelope.getBudget().getUser() != null
+                                    && envelope.getBudget().getUser().getId() != null) {
+                                userIdsToEvict.add(envelope.getBudget().getUser().getId());
+                            }
+                        }
+                        monnieCacheInvalidationService.evictUsersAfterCommit(userIdsToEvict);
+                    }
+
+                    if (!logsToSave.isEmpty()) {
+                        transactionLogRepository.saveAll(logsToSave);
+                    }
+
+                    if (!outboxEventsToSave.isEmpty()) {
+                        outboxEventRepository.saveAll(outboxEventsToSave);
+                    }
+
+                    if (!tasksToComplete.isEmpty()) {
+                        scheduledTaskRepository.markTasksCompleted(tasksToComplete, LocalDateTime.now());
+                    }
+
+                    entityManager.flush();
+                    entityManager.clear();
+
+                    return tasks.size() == batchSize;
+                });
+            }
+
+            long durationMs = (System.nanoTime() - startTime) / 1_000_000;
+            logger.debug("Batch tasks completed in {}ms", durationMs);
+        } catch (Exception e) {
+            if (ExceptionClassifier.isDatabasePoolExhausted(e)) {
+                logger.warn("DB pool busy; scheduled-task processing will retry on the next tick: {}",
+                        ExceptionClassifier.rootCauseMessage(e));
+                return;
+            }
+            logger.error("Scheduled-task processing failed", e);
+        } finally {
+            scheduledTasksRunning.set(false);
+        }
     }
     // FIX: New method to process tasks, including LIMIT_RESET
     private void processTask(

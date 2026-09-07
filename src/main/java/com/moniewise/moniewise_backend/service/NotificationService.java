@@ -12,6 +12,7 @@ import com.moniewise.moniewise_backend.enums.NotificationPriority;
 import com.moniewise.moniewise_backend.enums.NotificationType;
 import com.moniewise.moniewise_backend.repository.NotificationRepository;
 import com.moniewise.moniewise_backend.repository.UserRepository;
+import com.moniewise.moniewise_backend.utils.ExceptionClassifier;
 import com.twilio.Twilio;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -2058,6 +2059,11 @@ public class NotificationService {
         try {
             plan = self.prepareDelivery(eventId);
         } catch (Exception e) {
+            if (ExceptionClassifier.isDatabasePoolExhausted(e)) {
+                logger.warn("[OUTBOX] DB pool busy while preparing event {}; will retry later: {}",
+                        eventId, ExceptionClassifier.rootCauseMessage(e));
+                return;
+            }
             logger.error("[OUTBOX] Failed to prepare event {}", eventId, e);
             return;
         }
@@ -2087,6 +2093,11 @@ public class NotificationService {
         try {
             self.finalizeDelivery(eventId, plan.notificationId, delivered, transientError);
         } catch (Exception e) {
+            if (ExceptionClassifier.isDatabasePoolExhausted(e)) {
+                logger.warn("[OUTBOX] DB pool busy while finalizing event {}; will retry later: {}",
+                        eventId, ExceptionClassifier.rootCauseMessage(e));
+                return;
+            }
             logger.error("[OUTBOX] Failed to finalize event {}", eventId, e);
         }
     }

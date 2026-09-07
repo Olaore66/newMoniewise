@@ -2,9 +2,11 @@ package com.moniewise.moniewise_backend.service;
 
 import com.moniewise.moniewise_backend.entity.OutboxEvent;
 import com.moniewise.moniewise_backend.repository.OutboxEventRepository;
+import com.moniewise.moniewise_backend.utils.ExceptionClassifier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
@@ -31,9 +33,10 @@ public class NotificationOutboxWorker {
 
     private static final Logger logger = LoggerFactory.getLogger(NotificationOutboxWorker.class);
 
-    private static final int BATCH_SIZE = 200;
-
     private volatile String lastDeadLetterAlertSignature;
+
+    @Value("${moniewise.outbox.worker.batch-size:50}")
+    private int batchSize;
 
     private final OutboxEventRepository outboxEventRepository;
     private final NotificationService notificationService;
@@ -57,6 +60,11 @@ public class NotificationOutboxWorker {
         try {
             ids = self.claimBatch();
         } catch (Exception e) {
+            if (ExceptionClassifier.isDatabasePoolExhausted(e)) {
+                logger.warn("[OUTBOX] DB pool busy; skipping this delivery tick: {}",
+                        ExceptionClassifier.rootCauseMessage(e));
+                return;
+            }
             logger.error("[OUTBOX] Failed to claim a batch of events", e);
             return;
         }
@@ -97,6 +105,11 @@ public class NotificationOutboxWorker {
                 breakdown.append(row[0]).append('=').append(row[1]);
             }
         } catch (Exception e) {
+            if (ExceptionClassifier.isDatabasePoolExhausted(e)) {
+                logger.warn("[OUTBOX] DB pool busy; skipping dead-letter check: {}",
+                        ExceptionClassifier.rootCauseMessage(e));
+                return;
+            }
             logger.error("[OUTBOX] Dead-letter check failed", e);
             return;
         }
@@ -124,7 +137,8 @@ public class NotificationOutboxWorker {
      */
     @Transactional
     public List<Long> claimBatch() {
-        List<OutboxEvent> events = outboxEventRepository.claimPendingEvents(BATCH_SIZE);
+        int limit = Math.max(1, Math.min(batchSize, 200));
+        List<OutboxEvent> events = outboxEventRepository.claimPendingEvents(limit);
         if (events.isEmpty()) {
             return List.of();
         }

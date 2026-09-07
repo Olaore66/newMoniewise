@@ -3,6 +3,8 @@ package com.moniewise.moniewise_backend.service;
 import com.moniewise.moniewise_backend.entity.PayeelordVasTransaction;
 import com.moniewise.moniewise_backend.enums.VasTransactionStatus;
 import com.moniewise.moniewise_backend.repository.PayeelordVasTransactionRepository;
+import com.moniewise.moniewise_backend.utils.ExceptionClassifier;
+import org.springframework.data.domain.PageRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.event.ContextClosedEvent;
@@ -45,6 +47,9 @@ public class VasPurchaseRecoveryScheduler {
     /** How often the job runs, in milliseconds. */
     static final long POLL_INTERVAL_MS = 5L * 60 * 1000; // 5 minutes
 
+    private static final int RECOVERY_BATCH_SIZE = 25;
+    private static final String RECOVERY_ESCALATED_MARKER = "[RECOVERY_ESCALATED]";
+
     private final PayeelordVasTransactionRepository transactionRepository;
     private final PayeelordVasService vasService;
     private final AtomicBoolean shuttingDown = new AtomicBoolean(false);
@@ -74,12 +79,21 @@ public class VasPurchaseRecoveryScheduler {
 
         List<PayeelordVasTransaction> stale;
         try {
-            stale = transactionRepository.findByStatusAndCreatedAtBefore(VasTransactionStatus.PENDING, cutoff);
+            stale = transactionRepository.findStalePendingForRecovery(
+                    VasTransactionStatus.PENDING,
+                    cutoff,
+                    RECOVERY_ESCALATED_MARKER,
+                    PageRequest.of(0, RECOVERY_BATCH_SIZE));
         } catch (Exception e) {
             if (isShutdownRelated(e)) {
                 logger.warn("[VasRecovery] Skipping stale purchase recovery during shutdown: {}",
                         rootCauseMessage(e));
                 restoreInterruptIfNeeded(e);
+                return;
+            }
+            if (ExceptionClassifier.isDatabasePoolExhausted(e)) {
+                logger.warn("[VasRecovery] DB pool busy; skipping stale purchase recovery this round: {}",
+                        ExceptionClassifier.rootCauseMessage(e));
                 return;
             }
             throw e;
@@ -105,6 +119,11 @@ public class VasPurchaseRecoveryScheduler {
                     logger.warn("[VasRecovery] Stopped stale purchase recovery during shutdown after ref={}: {}",
                             txn.getReference(), rootCauseMessage(e));
                     restoreInterruptIfNeeded(e);
+                    return;
+                }
+                if (ExceptionClassifier.isDatabasePoolExhausted(e)) {
+                    logger.warn("[VasRecovery] DB pool busy while recovering ref={}; stopping this round: {}",
+                            txn.getReference(), ExceptionClassifier.rootCauseMessage(e));
                     return;
                 }
 
