@@ -13,7 +13,24 @@ import java.util.List;
 public interface OutboxEventRepository extends JpaRepository<OutboxEvent, Long> {
 
     @Query(value = """
-            SELECT *
+            SELECT
+                id,
+                event_type,
+                user_id,
+                budget_id,
+                envelope_id,
+                payload,
+                status,
+                retry_count,
+                last_error,
+                locked_at,
+                locked_by,
+                next_attempt_at,
+                processed_at,
+                created_at,
+                ttl_seconds,
+                inbox_saved,
+                delivered_tokens
             FROM outbox_events
             WHERE (
                 (
