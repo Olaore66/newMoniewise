@@ -51,6 +51,8 @@ public class NotificationService {
     private static final String ANDROID_PLAY_STORE_URL = "https://play.google.com/store/apps/details?id=com.wisemonie";
     private static final String ACTION_OPEN_EXTERNAL_URL = "OPEN_EXTERNAL_URL";
     private static final String ACTION_IOS_APP_COMING_SOON = "IOS_APP_COMING_SOON";
+    private static final int OUTBOX_MAX_ATTEMPTS = 5;
+    private static final long OUTBOX_MAX_RETRY_DELAY_MINUTES = 30L;
 
     private final FirebaseMessaging firebaseMessaging;
     private final UserRepository userRepository;
@@ -2133,6 +2135,9 @@ public class NotificationService {
             if (userDeleted) {
                 event.setStatus("STALE");
                 event.setProcessedAt(LocalDateTime.now());
+                event.setNextAttemptAt(null);
+                event.setLockedAt(null);
+                event.setLockedBy(null);
                 event.setLastError("Skipped: user deleted (type=" + event.getEventType() + ")");
                 outboxEventRepository.save(event);
                 logger.info("[OUTBOX] Skipping event {} for deleted user {}", event.getId(), event.getUserId());
@@ -2146,6 +2151,9 @@ public class NotificationService {
                 && LocalDateTime.now().isAfter(event.getCreatedAt().plusSeconds(ttlSeconds))) {
             event.setStatus("STALE");
             event.setProcessedAt(LocalDateTime.now());
+            event.setNextAttemptAt(null);
+            event.setLockedAt(null);
+            event.setLockedBy(null);
             event.setLastError("Skipped: expired (ttl=" + ttlSeconds + "s, type="
                     + event.getEventType() + ")");
             outboxEventRepository.save(event);
@@ -2225,6 +2233,9 @@ public class NotificationService {
             }
             event.setStatus("PROCESSED");
             event.setProcessedAt(LocalDateTime.now());
+            event.setNextAttemptAt(null);
+            event.setLockedAt(null);
+            event.setLockedBy(null);
             event.setLastError(null);
             outboxEventRepository.save(event);
             return null;
@@ -2270,6 +2281,9 @@ public class NotificationService {
         } else {
             event.setStatus("PROCESSED");
             event.setProcessedAt(LocalDateTime.now());
+            event.setNextAttemptAt(null);
+            event.setLockedAt(null);
+            event.setLockedBy(null);
             event.setLastError(null);
             logger.info("[OUTBOX] Delivered event {} type={}", event.getId(), event.getEventType());
         }
@@ -2330,17 +2344,23 @@ public class NotificationService {
             to = reconciliationAdminEmail;
         }
         if (to == null || to.isBlank()) {
-            event.setStatus("FAILED");
+            event.setStatus("STALE");
             event.setProcessedAt(LocalDateTime.now());
+            event.setNextAttemptAt(null);
+            event.setLockedAt(null);
+            event.setLockedBy(null);
             event.setLastError("moniewise.reconciliation.admin-alert-email is not configured");
             outboxEventRepository.save(event);
-            logger.error("[OUTBOX] Reconciliation alert {} cannot be sent: admin email is not configured", event.getId());
+            logger.warn("[OUTBOX] Reconciliation alert {} skipped: admin email is not configured", event.getId());
             return;
         }
 
         if ("stub".equals(activeProfile) || mailSender == null) {
             event.setStatus("PROCESSED");
             event.setProcessedAt(LocalDateTime.now());
+            event.setNextAttemptAt(null);
+            event.setLockedAt(null);
+            event.setLockedBy(null);
             event.setLastError(null);
             outboxEventRepository.save(event);
             logger.info("[STUB] Reconciliation admin alert {} would be emailed to {}", event.getId(), to);
@@ -2359,6 +2379,9 @@ public class NotificationService {
 
             event.setStatus("PROCESSED");
             event.setProcessedAt(LocalDateTime.now());
+            event.setNextAttemptAt(null);
+            event.setLockedAt(null);
+            event.setLockedBy(null);
             event.setLastError(null);
             outboxEventRepository.save(event);
             logger.info("[OUTBOX] Reconciliation admin alert {} emailed to {}", event.getId(), to);
@@ -2416,15 +2439,28 @@ public class NotificationService {
         int retryCount = event.getRetryCount() + 1;
         event.setRetryCount(retryCount);
         event.setLastError(error);
-        if (retryCount >= 5) {
+        event.setLockedAt(null);
+        event.setLockedBy(null);
+        if (retryCount >= OUTBOX_MAX_ATTEMPTS) {
             event.setStatus("FAILED");
+            event.setProcessedAt(LocalDateTime.now());
+            event.setNextAttemptAt(null);
             logger.error("[OUTBOX] Event {} type={} FAILED permanently after {} attempts: {}",
                     event.getId(), event.getEventType(), retryCount, error);
         } else {
+            long delayMinutes = retryDelayMinutes(retryCount);
             event.setStatus("PENDING");
-            logger.warn("[OUTBOX] Event {} type={} attempt {} failed — will retry: {}",
-                    event.getId(), event.getEventType(), retryCount, error);
+            event.setProcessedAt(null);
+            event.setNextAttemptAt(LocalDateTime.now().plusMinutes(delayMinutes));
+            logger.warn("[OUTBOX] Event {} type={} attempt {} failed; will retry in {} minute(s): {}",
+                    event.getId(), event.getEventType(), retryCount, delayMinutes, error);
         }
+    }
+
+    private long retryDelayMinutes(int retryCount) {
+        int exponent = Math.min(Math.max(retryCount - 1, 0), 5);
+        long delay = 1L << exponent;
+        return Math.min(delay, OUTBOX_MAX_RETRY_DELAY_MINUTES);
     }
 
     /** Prefer the caller's pre-formatted message ("__message"); else generate one from params. */

@@ -147,6 +147,8 @@ public class NotificationOutboxWorker {
         for (OutboxEvent event : events) {
             event.setStatus("PROCESSING");
             event.setLockedAt(now);
+            event.setNextAttemptAt(null);
+            event.setProcessedAt(null);
             ids.add(event.getId());
         }
         outboxEventRepository.saveAll(events);

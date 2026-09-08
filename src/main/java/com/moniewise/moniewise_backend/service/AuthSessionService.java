@@ -60,9 +60,10 @@ public class AuthSessionService {
 
     @Transactional
     public void revokeSession(String sessionId) {
-        authSessionRepository.findBySessionIdAndRevokedFalse(sessionId)
-                .ifPresent(session -> deactivateDeviceTokensForSession(
-                        session.getUser().getId(), sessionId, "SESSION_REVOKED"));
+        // Session auth and device push reachability are intentionally separate.
+        // A timed-out/login-rotated session must not make the device miss financial
+        // alerts while the app is closed. Dead tokens are removed only after Firebase
+        // rejects them in NotificationService/AuthSessionService.clearDeadFcmToken.
         authSessionRepository.revokeSession(sessionId, LocalDateTime.now());
     }
 
@@ -100,17 +101,10 @@ public class AuthSessionService {
     public void clearSessionFcmToken(String email, String sessionId) {
         AuthSession session = authSessionRepository.findByUserEmailAndSessionIdAndRevokedFalse(email, sessionId)
                 .orElseThrow(() -> new IllegalStateException("Active session not found"));
-        String tokenToDeactivate = normalizeToken(session.getFcmToken());
         session.setFcmToken(null);
         session.setDevicePlatform(null);
         session.setLastSeenAt(LocalDateTime.now());
         authSessionRepository.save(session);
-
-        if (tokenToDeactivate != null) {
-            deactivateDeviceToken(session.getUser().getId(), tokenToDeactivate, "SESSION_TOKEN_REMOVED");
-        } else {
-            deactivateDeviceTokensForSession(session.getUser().getId(), sessionId, "SESSION_TOKEN_REMOVED");
-        }
     }
 
     @Transactional
@@ -125,14 +119,7 @@ public class AuthSessionService {
             session.setDevicePlatform(null);
             session.setLastSeenAt(LocalDateTime.now());
             authSessionRepository.save(session);
-
-            String tokenToDeactivate = requestedToken != null ? requestedToken : currentToken;
-            if (tokenToDeactivate != null) {
-                deactivateDeviceToken(session.getUser().getId(), tokenToDeactivate, "CLIENT_REMOVED_TOKEN");
-            } else {
-                deactivateDeviceTokensForSession(session.getUser().getId(), sessionId, "CLIENT_REMOVED_TOKEN");
-            }
-            return tokenToDeactivate;
+            return requestedToken != null ? requestedToken : currentToken;
         }
         return null;
     }

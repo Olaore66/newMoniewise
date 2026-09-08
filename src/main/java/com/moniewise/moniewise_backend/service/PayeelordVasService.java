@@ -584,19 +584,13 @@ public class PayeelordVasService {
                 || txn.getWebhookConfirmedAt() != null;
 
         if (ambiguous || providerAcknowledged) {
-            if (hasRecoveryEscalationMarker(txn)) {
-                logger.warn("[PayeelordVAS][NEEDS-RECONCILIATION] Stale PENDING purchase still awaiting manual " +
-                                "review: ref={} userId={} type={} sellingAmount={}",
-                        txn.getReference(), txn.getUserId(), txn.getType(), txn.getSellingAmount());
-                return;
-            }
-
+            txn.setStatus(VasTransactionStatus.MANUAL_REVIEW);
             txn.setFailureReason(withRecoveryEscalationMarker(txn.getFailureReason()));
             txn.setUpdatedAt(LocalDateTime.now());
             transactionRepository.save(txn);
             upsertLedgerEntry(txn, describeVasPurchase(txn) + " | Pending manual reconciliation", TransactionStatus.PROCESSING);
 
-            logger.error("[PayeelordVAS][CRITICAL][NEEDS-RECONCILIATION] Stale PENDING purchase cannot be " +
+            logger.error("[PayeelordVAS][CRITICAL][NEEDS-RECONCILIATION] Stale purchase moved to MANUAL_REVIEW; cannot be " +
                             "safely auto-resolved (provider may have delivered): ref={} userId={} type={} " +
                             "sellingAmount={} ambiguous={} providerTxnId={} webhookConfirmedAt={} — " +
                             "manual reconciliation required.",

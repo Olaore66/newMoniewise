@@ -29,6 +29,7 @@ import java.time.LocalDateTime;
  * <pre>
  *   PENDING  → SUCCESSFUL                         (purchase confirmed by Payeelord)
  *   PENDING  → FAILED → REVERSED                  (purchase failed, debit reversed instantly — synchronous!)
+ *   PENDING  → MANUAL_REVIEW                      (provider may have delivered; ops must reconcile)
  * </pre>
  */
 @Entity
@@ -59,7 +60,7 @@ public class PayeelordVasTransaction {
     private VasTransactionType type;
 
     @Enumerated(EnumType.STRING)
-    @Column(nullable = false, length = 20)
+    @Column(nullable = false, length = 30)
     private VasTransactionStatus status;
 
     /** Our internal idempotency/tracking reference — generated before calling Payeelord. */

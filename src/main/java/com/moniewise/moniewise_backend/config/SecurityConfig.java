@@ -93,6 +93,8 @@ public class SecurityConfig {
                 .antMatchers("/blog", "/blog/**", "/blog/api/**").permitAll()
                 .antMatchers("/app/version-check", "/app/update-status", "/app/config").permitAll()
                 .antMatchers("/ws", "/ws/**", "/ws-sockjs", "/ws-sockjs/**").permitAll()
+                .antMatchers("/actuator/health", "/actuator/health/**", "/actuator/info").permitAll()
+                .antMatchers("/actuator/metrics/**", "/actuator/prometheus").hasRole("ADMIN")
                 .antMatchers("/admin/**").hasRole("ADMIN")   // URL-level guard (defence-in-depth alongside @PreAuthorize)
                 .antMatchers("/auth/logout", "/auth/refresh", "/auth/delete").authenticated()
                 .antMatchers("/users/**", "/notifications/**", "/disbursements/**", "/transactions/**", "/legal/**", "/ai/**", "/budgets/**", "/envelopes/**", "/wallets/**", "/transactions/pin/**", "/beneficiaries/**", "/savings/**", "/analytics/**", "/badges/**").authenticated()

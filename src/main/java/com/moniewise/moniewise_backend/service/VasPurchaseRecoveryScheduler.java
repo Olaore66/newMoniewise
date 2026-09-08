@@ -4,6 +4,7 @@ import com.moniewise.moniewise_backend.entity.PayeelordVasTransaction;
 import com.moniewise.moniewise_backend.enums.VasTransactionStatus;
 import com.moniewise.moniewise_backend.repository.PayeelordVasTransactionRepository;
 import com.moniewise.moniewise_backend.utils.ExceptionClassifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.PageRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -28,7 +29,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * released, leaving the user's money stuck and the row {@code PENDING} forever.
  *
  * <h3>What it does</h3>
- * <p>Every {@value #POLL_INTERVAL_MS} ms it finds purchases still {@code PENDING} more than
+ * <p>Every configured recovery tick it finds purchases still {@code PENDING} more than
  * {@value #STALE_AFTER_MINUTES} minutes after creation (far past the ~45s normal path) and
  * hands each to {@link PayeelordVasService#recoverStalePurchase}, which resolves it
  * conservatively: auto-refund only ones Payeelord clearly never registered, escalate the
@@ -44,11 +45,10 @@ public class VasPurchaseRecoveryScheduler {
     /** Normal completion is ~45s; give a wide margin before treating a PENDING as stuck. */
     static final int STALE_AFTER_MINUTES = 30;
 
-    /** How often the job runs, in milliseconds. */
-    static final long POLL_INTERVAL_MS = 5L * 60 * 1000; // 5 minutes
-
-    private static final int RECOVERY_BATCH_SIZE = 25;
     private static final String RECOVERY_ESCALATED_MARKER = "[RECOVERY_ESCALATED]";
+
+    @Value("${moniewise.vas.recovery.batch-size:25}")
+    private int recoveryBatchSize;
 
     private final PayeelordVasTransactionRepository transactionRepository;
     private final PayeelordVasService vasService;
@@ -69,7 +69,7 @@ public class VasPurchaseRecoveryScheduler {
     /**
      * {@code fixedDelay} (not {@code fixedRate}) so a slow batch never overlaps itself.
      */
-    @Scheduled(fixedDelay = POLL_INTERVAL_MS)
+    @Scheduled(fixedDelayString = "${moniewise.vas.recovery.fixed-delay-ms:300000}")
     public void recoverStalePurchases() {
         if (isShutdownInProgress()) {
             return;
@@ -83,7 +83,7 @@ public class VasPurchaseRecoveryScheduler {
                     VasTransactionStatus.PENDING,
                     cutoff,
                     RECOVERY_ESCALATED_MARKER,
-                    PageRequest.of(0, RECOVERY_BATCH_SIZE));
+                    PageRequest.of(0, boundedBatchSize(recoveryBatchSize)));
         } catch (Exception e) {
             if (isShutdownRelated(e)) {
                 logger.warn("[VasRecovery] Skipping stale purchase recovery during shutdown: {}",
@@ -136,6 +136,10 @@ public class VasPurchaseRecoveryScheduler {
 
     private boolean isShutdownInProgress() {
         return shuttingDown.get() || Thread.currentThread().isInterrupted();
+    }
+
+    private int boundedBatchSize(int configured) {
+        return Math.max(1, Math.min(configured, 100));
     }
 
     private boolean isShutdownRelated(Throwable throwable) {

@@ -16,7 +16,10 @@ public interface OutboxEventRepository extends JpaRepository<OutboxEvent, Long> 
             SELECT *
             FROM outbox_events
             WHERE (
-                status = 'PENDING'
+                (
+                    status = 'PENDING'
+                    AND (next_attempt_at IS NULL OR next_attempt_at <= CURRENT_TIMESTAMP)
+                )
                 OR (
                     status = 'PROCESSING'
                     AND locked_at IS NOT NULL
@@ -24,7 +27,7 @@ public interface OutboxEventRepository extends JpaRepository<OutboxEvent, Long> 
                 )
             )
             AND retry_count < 5
-            ORDER BY created_at ASC
+            ORDER BY COALESCE(next_attempt_at, created_at) ASC, created_at ASC
             LIMIT :limit
             FOR UPDATE SKIP LOCKED
             """, nativeQuery = true)
@@ -38,6 +41,9 @@ public interface OutboxEventRepository extends JpaRepository<OutboxEvent, Long> 
         UPDATE OutboxEvent e
         SET e.status = 'STALE',
             e.processedAt = CURRENT_TIMESTAMP,
+            e.nextAttemptAt = NULL,
+            e.lockedAt = NULL,
+            e.lockedBy = NULL,
             e.lastError = 'Cancelled: account deleted'
         WHERE e.userId = :userId
           AND e.status IN ('PENDING', 'PROCESSING')

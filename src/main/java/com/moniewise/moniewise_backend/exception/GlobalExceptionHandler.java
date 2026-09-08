@@ -1,11 +1,14 @@
 package com.moniewise.moniewise_backend.exception;
 
 import com.moniewise.moniewise_backend.dto.response.ApiErrorResponse;
+import com.moniewise.moniewise_backend.utils.ExceptionClassifier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.transaction.CannotCreateTransactionException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -117,8 +120,30 @@ public class GlobalExceptionHandler {
         ));
     }
 
+    @ExceptionHandler({DataAccessResourceFailureException.class, CannotCreateTransactionException.class})
+    public ResponseEntity<Map<String, Object>> handleDatabaseTemporarilyUnavailable(Exception ex, WebRequest request) {
+        String correlationId = UUID.randomUUID().toString();
+        logger.warn("Database temporarily unavailable [{}] on {}: {}",
+                correlationId, request.getDescription(false), ExceptionClassifier.rootCauseMessage(ex));
+        HttpHeaders headers = new HttpHeaders();
+        headers.set("Retry-After", "5");
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .headers(headers)
+                .body(Map.of(
+                        "status", HttpStatus.SERVICE_UNAVAILABLE.value(),
+                        "code", "DATABASE_TEMPORARILY_UNAVAILABLE",
+                        "error", "Service is temporarily busy. Please try again.",
+                        "message", "Service is temporarily busy. Please try again.",
+                        "correlationId", correlationId,
+                        "timestamp", LocalDateTime.now()
+                ));
+    }
+
     @ExceptionHandler(Exception.class)
     public ResponseEntity<Map<String, Object>> handleGeneric(Exception ex, WebRequest request) {
+        if (ExceptionClassifier.isDatabasePoolExhausted(ex)) {
+            return handleDatabaseTemporarilyUnavailable(ex, request);
+        }
         String correlationId = UUID.randomUUID().toString();
         logger.error("Unhandled exception [{}] on {}", correlationId, request.getDescription(false), ex);
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(Map.of("error", "An unexpected error occurred. Please try again.", "correlationId", correlationId, "timestamp", LocalDateTime.now()));

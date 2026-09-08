@@ -150,6 +150,7 @@ public class VasController {
             case "SUCCESSFUL": return "Purchase completed successfully.";
             case "PENDING":    return "Purchase is being confirmed by the provider — you'll be notified shortly.";
             case "REVERSED":   return "Purchase could not be completed — your envelope has been refunded.";
+            case "MANUAL_REVIEW": return "Purchase needs provider confirmation. Our team is reviewing it.";
             default:           return "Purchase submitted.";
         }
     }

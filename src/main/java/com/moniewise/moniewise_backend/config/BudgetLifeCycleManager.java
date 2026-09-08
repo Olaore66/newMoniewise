@@ -48,6 +48,18 @@ public class BudgetLifeCycleManager {
     private static final Logger logger = LoggerFactory.getLogger(BudgetLifeCycleManager.class);
     @Value("${moniewise.revenue.wallet.user-id}")
     private Long revenueWalletUserId;
+    @Value("${moniewise.scheduler.scheduled-budget-activation.batch-size:50}")
+    private int scheduledBudgetActivationBatchSize;
+    @Value("${moniewise.scheduler.scheduled-budget-activation.max-loops:10}")
+    private int scheduledBudgetActivationMaxLoops;
+    @Value("${moniewise.scheduler.budget-expiry.batch-size:50}")
+    private int budgetExpiryBatchSize;
+    @Value("${moniewise.scheduler.budget-expiry.max-loops:10}")
+    private int budgetExpiryMaxLoops;
+    @Value("${moniewise.scheduler.critical-tasks.batch-size:50}")
+    private int criticalTasksBatchSize;
+    @Value("${moniewise.scheduler.critical-tasks.max-loops:10}")
+    private int criticalTasksMaxLoops;
     private final BudgetRepository budgetRepository;
     private final EnvelopeRepository envelopeRepository;
     private final ScheduledTaskRepository scheduledTaskRepository;
@@ -130,6 +142,14 @@ public class BudgetLifeCycleManager {
         }
     }
 
+    private int boundedBatchSize(int configured) {
+        return Math.max(1, Math.min(configured, 200));
+    }
+
+    private int boundedLoopLimit(int configured) {
+        return Math.max(1, Math.min(configured, 50));
+    }
+
     public void scheduleDynamicTasks(Envelope envelope) {
         Budget budget = envelope.getBudget();
         LocalDateTime now = fetchCurrentDateTimeFromDatabase();
@@ -205,9 +225,9 @@ public class BudgetLifeCycleManager {
     public void activateDueScheduledBudgets() {
         LocalDate today = fetchCurrentDateTimeFromDatabase().toLocalDate();
 
-        int batchSize = 100;
+        int batchSize = boundedBatchSize(scheduledBudgetActivationBatchSize);
         int currentLoop = 0;
-        int maxLoops = 50;
+        int maxLoops = boundedLoopLimit(scheduledBudgetActivationMaxLoops);
         boolean hasMore = true;
 
         while (hasMore && currentLoop < maxLoops) {
@@ -556,9 +576,9 @@ public class BudgetLifeCycleManager {
         // We only fetch it for expiration if 'yesterday' was the end date.
         LocalDate yesterday = today.minusDays(1);
 
-        int batchSize = 100;
+        int batchSize = boundedBatchSize(budgetExpiryBatchSize);
         boolean hasMore = true;
-        int maxLoops = 50;
+        int maxLoops = boundedLoopLimit(budgetExpiryMaxLoops);
         int currentLoop = 0;
 
         while (hasMore && currentLoop < maxLoops) {
@@ -692,10 +712,10 @@ public class BudgetLifeCycleManager {
             LocalDateTime now = fetchCurrentDateTimeFromDatabase();
             logger.debug("Starting BATCH task processing at {}", now);
 
-            int batchSize = 100;
+            int batchSize = boundedBatchSize(criticalTasksBatchSize);
             boolean hasNextBatch = true;
 
-            int maxLoops = 50;
+            int maxLoops = boundedLoopLimit(criticalTasksMaxLoops);
             int currentLoop = 0;
 
             while (hasNextBatch && currentLoop < maxLoops) {

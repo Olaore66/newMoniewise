@@ -23,5 +23,7 @@ public enum VasTransactionStatus {
     /** Payeelord confirmed the purchase did not go through — the wallet debit must be reversed. */
     FAILED,
     /** The wallet debit was reversed after a failed purchase — the user was made whole. */
-    REVERSED
+    REVERSED,
+    /** Provider may have delivered, but backend cannot safely auto-confirm or auto-refund. */
+    MANUAL_REVIEW
 }

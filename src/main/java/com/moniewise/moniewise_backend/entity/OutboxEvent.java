@@ -57,6 +57,9 @@ public class OutboxEvent {
     @Column(name = "locked_by")
     private String lockedBy;
 
+    @Column(name = "next_attempt_at")
+    private LocalDateTime nextAttemptAt;
+
     @Column(name = "processed_at")
     private LocalDateTime processedAt;
 
