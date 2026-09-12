@@ -9,6 +9,9 @@ import com.moniewise.moniewise_backend.repository.UserRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -18,6 +21,10 @@ import java.util.UUID;
 
 @Service
 public class AuthSessionService {
+
+    private static final Logger logger = LoggerFactory.getLogger(AuthSessionService.class);
+
+    private static final int DEAD_TOKEN_STRIKE_THRESHOLD = 3;
 
     private final AuthSessionRepository authSessionRepository;
     private final UserRepository userRepository;
@@ -150,13 +157,41 @@ public class AuthSessionService {
 
     @Transactional
     public void clearDeadFcmToken(String token) {
+        clearDeadFcmToken(token, "UNREGISTERED");
+    }
+
+    @Transactional
+    public void clearDeadFcmToken(String token, String errorCode) {
         String normalizedToken = normalizeToken(token);
         if (normalizedToken == null) {
             return;
         }
-        userDeviceTokenRepository.deactivateByFcmToken(normalizedToken, LocalDateTime.now(), "FIREBASE_DEAD_TOKEN");
+
+        UserDeviceToken deviceToken = userDeviceTokenRepository.findByFcmToken(normalizedToken).orElse(null);
+        int failureCount = deviceToken != null ? deviceToken.getPushFailureCount() + 1 : DEAD_TOKEN_STRIKE_THRESHOLD;
+        String tokenPrefix = normalizedToken.length() > 12 ? normalizedToken.substring(0, 12) + "..." : normalizedToken;
+
+        if (failureCount < DEAD_TOKEN_STRIKE_THRESHOLD) {
+            userDeviceTokenRepository.incrementPushFailureCount(normalizedToken, LocalDateTime.now(), errorCode);
+            logger.warn("[FCM] Token {} strike {}/{} (code={}). Keeping active — will deactivate at threshold.",
+                    tokenPrefix, failureCount, DEAD_TOKEN_STRIKE_THRESHOLD, errorCode);
+            return;
+        }
+
+        logger.warn("[FCM] Token {} reached {} strikes (code={}). Deactivating from all sources.",
+                tokenPrefix, failureCount, errorCode);
+        userDeviceTokenRepository.deactivateByFcmToken(normalizedToken, LocalDateTime.now(), "FIREBASE_DEAD_TOKEN:" + errorCode);
         authSessionRepository.clearFcmTokenByToken(normalizedToken);
         userRepository.clearFcmTokenByToken(normalizedToken);
+    }
+
+    @Transactional
+    public void recordPushSuccess(String token) {
+        String normalizedToken = normalizeToken(token);
+        if (normalizedToken == null) {
+            return;
+        }
+        userDeviceTokenRepository.resetPushFailureCount(normalizedToken);
     }
 
     private void upsertDeviceToken(User user, String sessionId, String token, String devicePlatform, String deviceId) {
@@ -177,6 +212,9 @@ public class AuthSessionService {
         deviceToken.setLastSeenAt(now);
         deviceToken.setDeactivatedAt(null);
         deviceToken.setDeactivationReason(null);
+        deviceToken.setPushFailureCount(0);
+        deviceToken.setPushLastFailureAt(null);
+        deviceToken.setPushLastFailureCode(null);
         userDeviceTokenRepository.save(deviceToken);
     }
 

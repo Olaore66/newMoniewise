@@ -768,24 +768,30 @@ public class NotificationService {
             logger.info("[FCM] Delivered to user {} type={} envelope={} notificationTag={} ttlMs={} messageId={}",
                     userId, type, envelopeId, notificationTag, ttlMs, messageId);
 
+            try {
+                authSessionService.recordPushSuccess(fcmToken);
+            } catch (Exception ignored) {
+            }
+
         } catch (FirebaseMessagingException e) {
             String errorCode = e.getMessagingErrorCode() != null
                     ? e.getMessagingErrorCode().toString() : "UNKNOWN";
 
-            if (errorCode.equals("UNREGISTERED") || errorCode.equals("NOT_FOUND")
-                    || errorCode.equals("INVALID_ARGUMENT")) {
-                // Dead token — clean it up but don’t retry (retrying with a dead
-                // token will never succeed).
-                logger.warn("[FCM] Dead token for user {} (code={}). Removing from sessions.", userId, errorCode);
+            if (errorCode.equals("UNREGISTERED") || errorCode.equals("NOT_FOUND")) {
+                // Token is genuinely dead — apply the 3-strike grace period.
+                // Strike 1-2: log + increment counter, keep the token active.
+                // Strike 3:   deactivate from all sources.
+                logger.warn("[FCM] Dead token signal for user {} (code={}). Applying strike.", userId, errorCode);
                 try {
-                    authSessionService.clearDeadFcmToken(fcmToken);
+                    authSessionService.clearDeadFcmToken(fcmToken, errorCode);
                 } catch (Exception ex) {
-                    logger.error("[FCM] Failed to clear dead token for user {}", userId, ex);
+                    logger.error("[FCM] Failed to process dead token for user {}", userId, ex);
                 }
                 throw new DeadTokenException(fcmToken);
             } else {
-                // Transient error (QUOTA_EXCEEDED, INTERNAL, UNAVAILABLE, etc.)
-                // Rethrow so the outbox worker marks the event as PENDING and retries.
+                // Transient / payload error (QUOTA_EXCEEDED, INTERNAL, UNAVAILABLE,
+                // INVALID_ARGUMENT, etc.) — rethrow so the outbox worker retries.
+                // INVALID_ARGUMENT means the MESSAGE is broken, not the token.
                 logger.error("[FCM] Transient error for user {} (code={}). Will retry via outbox.", userId, errorCode, e);
                 throw new RuntimeException("FCM transient failure: " + errorCode, e);
             }

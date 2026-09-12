@@ -76,4 +76,27 @@ public interface UserDeviceTokenRepository extends JpaRepository<UserDeviceToken
                                        @Param("sessionId") String sessionId,
                                        @Param("deactivatedAt") LocalDateTime deactivatedAt,
                                        @Param("reason") String reason);
+
+    @Modifying
+    @Query("""
+            UPDATE UserDeviceToken t
+            SET t.pushFailureCount = t.pushFailureCount + 1,
+                t.pushLastFailureAt = :failedAt,
+                t.pushLastFailureCode = :errorCode
+            WHERE t.fcmToken = :token
+              AND t.active = true
+            """)
+    int incrementPushFailureCount(@Param("token") String token,
+                                  @Param("failedAt") LocalDateTime failedAt,
+                                  @Param("errorCode") String errorCode);
+
+    @Modifying
+    @Query("""
+            UPDATE UserDeviceToken t
+            SET t.pushFailureCount = 0,
+                t.pushLastFailureAt = NULL,
+                t.pushLastFailureCode = NULL
+            WHERE t.fcmToken = :token
+            """)
+    int resetPushFailureCount(@Param("token") String token);
 }

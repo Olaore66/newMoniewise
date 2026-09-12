@@ -56,4 +56,13 @@ public class UserDeviceToken {
 
     @Column(name = "deactivation_reason", length = 80)
     private String deactivationReason;
+
+    @Column(name = "push_failure_count", nullable = false)
+    private int pushFailureCount = 0;
+
+    @Column(name = "push_last_failure_at")
+    private LocalDateTime pushLastFailureAt;
+
+    @Column(name = "push_last_failure_code", length = 40)
+    private String pushLastFailureCode;
 }
